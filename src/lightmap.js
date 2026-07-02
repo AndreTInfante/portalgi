@@ -1,15 +1,15 @@
-// GPU path-traced lightmapper — the ground-truth lighting source.
+﻿// GPU path-traced lightmapper â€” the ground-truth lighting source.
 //
 // All static geometry (already in world space, with packed uv2 charts) is
 // merged into one mesh with per-vertex albedo/emissive, raytraced in-shader
 // via three-mesh-bvh. The lightmap stores "diffuse light" D (irradiance-ish),
-// rendered as albedo × D — same convention as the analytic path it replaces.
+// rendered as albedo Ã— D â€” same convention as the analytic path it replaces.
 //
 // Passes:
 //   1. G-buffer: rasterize charts in uv2 space -> world position + normal
 //   2. K shading iterations (ping-pong): direct = shadow-rayed point lights +
 //      panel AREA lights (2 samples each); indirect = RAYS cosine rays
-//      gathering albedo×D from the previous iteration -> converged bounces
+//      gathering albedoÃ—D from the previous iteration -> converged bounces
 //   3. Dilation: flood chart borders so bilinear filtering never reads void
 import * as THREE from 'three';
 import { MeshBVH, MeshBVHUniformStruct, shaderStructs, shaderIntersectFunction } from '../libs/three-mesh-bvh.module.js';
@@ -58,8 +58,8 @@ uniform sampler2D uFace;   // 3 texels/face: uv2 triplet, albedo, emissive
 uniform vec3 uLightPos[16];
 uniform vec3 uLightCol[16];
 uniform int uNLights;
-uniform vec4 uPanelA[12];  // center.xyz, half sx
-uniform vec4 uPanelB[12];  // half sz, emissive rgb
+uniform vec4 uPanelA[24];  // center.xyz, half sx
+uniform vec4 uPanelB[24];  // half sz, emissive rgb
 uniform int uNPanels;
 uniform float uSeed;
 uniform float uGather;
@@ -105,7 +105,7 @@ void main() {
     if (occluded(Po, uLightPos[i])) continue;
     direct += uLightCol[i] * (ndl / max(d2, 0.05)); // true inverse-square
   }
-  for (int i = 0; i < 12; i++) {
+  for (int i = 0; i < 24; i++) {
     if (i >= uNPanels) break;
     vec3 c = uPanelA[i].xyz;
     float hx = uPanelA[i].w, hz = uPanelB[i].x;
@@ -143,7 +143,7 @@ void main() {
       vec2 uv2h = bc.x * r0.xy + bc.y * r0.zw + bc.z * r1.xy;
       vec3 alb = vec3(r1.zw, faceFetch(fi.w, 2).x);
       // emitters aren't in the BVH at all (no shadows, no self-occlusion of
-      // their own NEE samples) — their light enters solely via the area NEE
+      // their own NEE samples) â€” their light enters solely via the area NEE
       bounce += alb * texture(uPrev, uv2h).rgb;
     }
     bounce /= float(${rays});
@@ -282,7 +282,8 @@ export class Lightmapper {
       pb.push(new THREE.Vector4(pn.sz / 2, e * c[0], e * c[1], e * c[2]));
     }
     this.nPanels = pa.length;
-    while (pa.length < 12) { pa.push(new THREE.Vector4()); pb.push(new THREE.Vector4()); }
+    if (pa.length > 24) throw new Error('too many panel lights (max 24)');
+    while (pa.length < 24) { pa.push(new THREE.Vector4()); pb.push(new THREE.Vector4()); }
 
     this.ptUniforms = {
       bvh: { value: this.bvhUniform },
@@ -320,7 +321,7 @@ export class Lightmapper {
   get texture() { return this.lmA.texture; }
 
   // scissored strip draw: path tracing the whole map in one draw risks GPU
-  // watchdog kills (TDR / context loss) — split into small strips instead
+  // watchdog kills (TDR / context loss) â€” split into small strips instead
   runFs(target, material, sy = 0, sh = 0) {
     target.viewport.set(0, 0, this.size[0], this.size[1]);
     if (sh > 0) {

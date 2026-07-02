@@ -108,8 +108,8 @@ export function buildTextures() {
       return [l * 1.05, l * 0.78, l * 0.55];
     },
     height: (u, v) => plankSeam(u, v) * 0.7 + fbm(u * 6, v * 80, 2, 80) * 0.3,
-    rough: (u, v) => 0.3 + fbm(u * 5, v * 60, 2, 60) * 0.18 + (plankSeam(u, v) < 1 ? 0.25 : 0),
-    bump: 1.2,
+    rough: (u, v) => 0.2 + fbm(u * 5, v * 60, 2, 60) * 0.1 + (plankSeam(u, v) < 1 ? 0.2 : 0),
+    bump: 0.5,
   });
 
   const veinAt = (u, v) => {

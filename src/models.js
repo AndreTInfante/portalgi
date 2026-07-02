@@ -10,13 +10,13 @@ const MODEL_DEFS = [
   { slug: 'carved_wooden_elephant', size: 0.62, cell: 10, x: 1.8, z: 21, ped: true },
   { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -1.8, z: 24, ped: true },
   { slug: 'bronze_whale_statue', size: 1.15, cell: 11, x: 6.6, z: 22.5 },
-  { slug: 'ceiling_fan', size: 1.0, cell: 10, x: 1.8, z: 24, ped: true },
-  { slug: 'CoffeeCart_01', size: 1.4, cell: 10, x: -2.2, z: 25.2 },
+  { slug: 'ceiling_fan', size: 1.0, cell: 10, x: 1.8, z: 24, hangCeil: 4.0 },
+  { slug: 'CoffeeCart_01', size: 1.4, cell: 10, x: -2.4, z: 25.6, rotY: Math.PI },
   { slug: 'BarberShopChair_01', size: 1.15, cell: 12, x: -9.3, z: 24.2 },
   { slug: 'mid_century_lounge_chair', size: 0.95, cell: 12, x: -4.8, z: 22.5 },
   { slug: 'modern_arm_chair_01', size: 0.95, cell: 12, x: -9.3, z: 20.8 },
   { slug: 'ClassicConsole_01', size: 1.35, cell: 12, x: -7.1, z: 24.55 },
-  { slug: 'ornate_mirror_01', size: 1.2, cell: 12, x: -8.5, z: 22.5, ped: true },
+  { slug: 'ornate_mirror_01', size: 1.2, cell: 12, x: -10.32, z: 22.5, rotY: Math.PI / 2, yCenter: 1.6 },
 ];
 
 export async function loadModelProps(matsys, manager) {
@@ -56,7 +56,11 @@ export async function loadModelProps(matsys, manager) {
       });
       const radius = Math.max(dim.x, dim.z) * scale * 0.5;
       const rFloor = center.y - box.min.y; // rest height of the origin above ground
-      root.position.set(def.x, (def.ped ? 1.0 : 0) + rFloor, def.z);
+      if (def.rotY) root.rotation.y = def.rotY;
+      let y = (def.ped ? 1.0 : 0) + rFloor;
+      if (def.hangCeil !== undefined) y = def.hangCeil - (box.max.y - center.y) - 0.02;
+      if (def.yCenter !== undefined) y = def.yCenter;
+      root.position.set(def.x, y, def.z);
       out.push({ root, mats, radius, rFloor, cell: def.cell });
     } catch (e) {
       console.error(`model load failed: ${def.slug}`, e);

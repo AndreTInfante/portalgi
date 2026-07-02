@@ -323,11 +323,17 @@ void main() {
   vec3 V = normalize(cameraPosition - P);
 
   // tangent-space normal mapping (specular + probe response; the flat lightmap
-  // itself is non-directional for now)
-  vec3 T = normalize(vTan.xyz - Ng * dot(Ng, vTan.xyz));
-  vec3 B = cross(Ng, T) * vTan.w;
-  vec3 nTS = texture(uNrmMap, vUv).xyz * 2.0 - 1.0;
-  vec3 N = normalize(T * nTS.x + B * nTS.y + Ng * nTS.z);
+  // itself is non-directional for now). Geometries without tangents (primitive
+  // props) read a zero attribute — guard against normalize(0) = NaN.
+  vec3 N = Ng;
+  vec3 Traw = vTan.xyz - Ng * dot(Ng, vTan.xyz);
+  float tLen = length(Traw);
+  if (tLen > 1e-4) {
+    vec3 T = Traw / tLen;
+    vec3 B = cross(Ng, T) * vTan.w;
+    vec3 nTS = texture(uNrmMap, vUv).xyz * 2.0 - 1.0;
+    N = normalize(T * nTS.x + B * nTS.y + Ng * nTS.z);
+  }
   float NoV = max(dot(N, V), 0.0);
 
   vec3 albedo = texture(uMap, vUv).rgb * uTint;

@@ -91,7 +91,17 @@ export class GeoBuilder {
   }
   // convex polygon fan sharing ONE chart (no interior lightmap seams)
   polygon(pts, n, uvFn) {
-    if (V.dot(V.cross(V.sub(pts[1], pts[0]), V.sub(pts[2], pts[0])), n) < 0) {
+    // Newell's method for the winding test: the first-three-points cross
+    // product is degenerate when a footprint starts with collinear vertices
+    // (e.g. L1's split south edge), which flipped its floor into a backface.
+    let nx = 0, ny = 0, nz = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      nx += (a[1] - b[1]) * (a[2] + b[2]);
+      ny += (a[2] - b[2]) * (a[0] + b[0]);
+      nz += (a[0] - b[0]) * (a[1] + b[1]);
+    }
+    if (V.dot([nx, ny, nz], n) < 0) {
       pts = pts.slice().reverse(); // wind the fan to face the normal
     }
     const u = V.norm(V.sub(pts[1], pts[0]));

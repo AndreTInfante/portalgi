@@ -15,6 +15,8 @@ import { Props } from './props.js';
 import { buildGUI, buildPortalWires } from './debug.js';
 import { fetchManifest, loadHalfTexture, saveBaked } from './bakedio.js';
 import { loadModelProps, addStaticModels } from './models.js';
+import { findCell } from './level.js';
+import { VRButton } from '../libs/webxr-VRButton.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -59,6 +61,10 @@ renderer.domElement.addEventListener('webglcontextlost', () => {
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(SHOT ? 70 : 75, innerWidth / innerHeight, 0.05, 120);
 camera.layers.enable(1); // dynamic props live on layer 1 (hidden from bake captures)
+// XR rig: in-VR the headset drives the camera locally; locomotion moves the rig
+const rig = new THREE.Group();
+rig.add(camera);
+scene.add(rig);
 
 boot();
 

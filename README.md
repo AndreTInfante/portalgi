@@ -145,3 +145,20 @@ ignores the artifacts, and L/B re-enter the live pipeline in-session.
   share their light lists to stay continuous (see level.js).
 - No WebXR yet — the shader is deliberately mobile-friendly (≤4 hops, one
   texture array-style atlas, no derivatives in the loop).
+
+## Quest / WebXR
+
+The renderer is XR-enabled: an Enter VR button appears when WebXR is
+available. Left stick = smooth move (head-relative, hull collision), right
+stick = 30 degree snap turn, trigger = grab/carry with either controller
+(release drops). Run a high-quality offline bake first so the headset loads
+baked artifacts instead of baking.
+
+Easiest way onto a Quest for development (no HTTPS needed - localhost is a
+secure context):
+
+    adb reverse tcp:8123 tcp:8123
+    # then open http://localhost:8123 in the Quest browser
+
+For standalone hosting, serve the folder (including baked/) over HTTPS.
+

@@ -106,6 +106,7 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       const mesh = new THREE.Mesh(b.geo.buildGeometry(), matsys.makeMaterial(cell.id, {
         map: set.map, nrm: set.normalMap, orm: set.ormMap,
         roughFactor: o.paintingIndex !== undefined ? 0.4 : (o.roughFactor !== undefined ? o.roughFactor : 1),
+        metalFactor: o.metalFactor !== undefined ? o.metalFactor : (o.texMap ? 1 : 0),
         tint: o.tint, emissive: o.emissive,
       }));
       mesh.name = `${cell.name}:${key}`;

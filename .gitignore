@@ -1,5 +1,6 @@
-# offline bake artifacts — regenerate with ?bake=1 (see README)
-baked/
+# offline bake CI debris (the .bin artifacts + manifest ARE committed for GitHub Pages)
+baked/shot-*.png
+baked/status-*.txt
 
 # OS noise
 Thumbs.db
@@ -7,4 +8,3 @@ Thumbs.db
 
 # original Poly Haven downloads (huge; the 1k gltf conversions are committed)
 assets/models/*.blend.zip
-

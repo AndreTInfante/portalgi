@@ -100,7 +100,7 @@ export async function loadModelProps(matsys, manager) {
       const mats = [];
       root.traverse(o => {
         if (!o.isMesh) return;
-        o.layers.set(1); // dynamic: never in cubemap captures
+        o.layers.set(3); // dynamic: never in cubemap captures (1/2 = XR eyes)
         const g = o.geometry;
         if (!g.getAttribute('tangent')) {
           try { g.computeTangents(); } catch (e) { /* non-indexed or no uv - flat tangent */ }

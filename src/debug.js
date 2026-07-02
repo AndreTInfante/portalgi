@@ -24,7 +24,7 @@ export function buildPortalWires(scene, level) {
     if (pts.length) {
       const geo = new THREE.BufferGeometry().setFromPoints(pts);
       const ls = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, depthTest: true }));
-      ls.layers.set(1); // debug-only: keep out of cubemap captures
+      ls.layers.set(3); // debug-only: keep out of cubemap captures
       group.add(ls);
     }
   }

@@ -60,7 +60,7 @@ renderer.domElement.addEventListener('webglcontextlost', () => {
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(SHOT ? 70 : 75, innerWidth / innerHeight, 0.05, 120);
-camera.layers.enable(1); // dynamic props live on layer 1 (hidden from bake captures)
+camera.layers.enable(3); // dynamic props live on layer 3 (hidden from bake captures; layers 1/2 are three's XR eye layers)
 // XR rig: in-VR the headset drives the camera locally; locomotion moves the rig
 const rig = new THREE.Group();
 rig.add(camera);
@@ -367,8 +367,12 @@ async function boot() {
     const inXR = renderer.xr.isPresenting;
     if (!state.baking) {
       if (inXR) {
-        xrUpdate(dt);
-        props.update(dt, xrCarrier);
+        try {
+          xrUpdate(dt);
+          props.update(dt, xrCarrier);
+        } catch (e) { // surface XR-path crashes on the page (visible after exit)
+          errEl.textContent += `XR loop error: ${e.message}\n`;
+        }
       } else {
         player.update(dt, level.colliders);
         props.update(dt, player);
@@ -378,14 +382,18 @@ async function boot() {
       player.applyToCamera(camera);
       const aimed = !props.held && props.aim(player.pos, player.viewDir);
       document.getElementById('crosshair').classList.toggle('grab', !!(aimed || props.held));
+      renderer.setRenderTarget(null); // a mid-frame bake step may have left an RT bound
+      // NEVER do this while presenting: the XR manager binds the headset
+      // framebuffer before each frame; resetting to null draws to the hidden
+      // canvas and the headset shows black
     }
-    renderer.setRenderTarget(null); // a mid-frame bake step may have left an RT bound
     renderer.render(scene, camera);
     fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
     fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cell: ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}`;
   });
 
   addEventListener('resize', () => {
+    if (renderer.xr.isPresenting) return; // entering VR fires a resize; XR owns the size
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);

@@ -39,7 +39,7 @@ export class Props {
         metalFactor: def.metalFactor,
       });
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.layers.set(1); // excluded from cubemap captures: props are dynamic
+      mesh.layers.set(3); // excluded from cubemap captures (layers 1/2 = XR eyes)
       mesh.position.set(def.x, def.y !== undefined ? def.y : 1.0 + r, def.z);
       scene.add(mesh);
       return {

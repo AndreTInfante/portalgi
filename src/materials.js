@@ -15,7 +15,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   const flatNrm = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
   flatNrm.needsUpdate = true;
   const flatOrm = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
-  flatOrm.needsUpdate = true; // AO=1, rough=1×factor, metal=1×factor
+  flatOrm.needsUpdate = true; // AO=1, rough=1-factor, metal=1-factor
 
   const globals = {
     uAtlas: { value: atlasTex },
@@ -25,7 +25,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uMaxSteps: { value: 3 },
     uBlendOn: { value: 1.0 },
     uBlendBase: { value: 0.04 },
-    uBlendRough: { value: 1.0 }, // ~cone footprint radius per (roughness · meter); silhouette edges only
+    uBlendRough: { value: 1.0 }, // ~cone footprint radius per (roughness - meter); silhouette edges only
     uDistRough: { value: 0.12 },
     uIrrBlend: { value: 3.0 },
     uBake: { value: 0.0 },
@@ -54,7 +54,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
       fragmentShader: frag,
       side: THREE.DoubleSide,
       uniforms: {
-        ...globals, // shared identity — do not clone
+        ...globals, // shared identity - do not clone
         uMap: { value: opts.map || textures.white.map },
         uNrmMap: { value: opts.nrm || flatNrm },
         uOrmMap: { value: opts.orm || flatOrm },
@@ -91,7 +91,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
 }
 
 // Instantiate all static level meshes into the scene (layer 0 = baked/static).
-// Everything static — including paintings, frames, and emissive panels — comes
+// Everything static - including paintings, frames, and emissive panels - comes
 // through the chart-aware builders, so it all has lightmap UVs and one path.
 export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) {
   const group = new THREE.Group();

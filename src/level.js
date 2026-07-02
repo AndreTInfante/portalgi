@@ -1,11 +1,11 @@
-﻿// Level authoring + convex hull / portal graph construction + mesh building.
+// Level authoring + convex hull / portal graph construction + mesh building.
 //
 // Conventions:
 //  - y is up. Cell footprints are convex polygons in the xz plane, extruded floorY..ceilY.
 //  - Hull planes: inside test is dot(n, p) + d > 0 (n points into the cell).
 //  - Portals are rectangles lying on a hull plane; each side cell gets its own record.
 //  - Rooms connected by doorways are separated by WALL_T of wall thickness; the door
-//    jamb geometry lives in that gap (outside both hulls â€” deliberately, to test
+//    jamb geometry lives in that gap (outside both hulls -- deliberately, to test
 //    robustness of traversal entry from slightly-outside points).
 import * as THREE from 'three';
 import { PAINTINGS } from './textures.js';
@@ -218,7 +218,7 @@ const CELL_DEFS = [
   { name: 'L2', fp: [[12.3, -17.6], [16.3, -17.6], [16.3, -11.6], [12.3, -11.6]], h: 3.6,
     edges: [{}, {}, { open: true }, {}],
     floor: { key: 'wood', roughFactor: 1.4 } },
-  // lights-off room: one small saturated lamp in a corner â€” stress test for
+  // lights-off room: one small saturated lamp in a corner -- stress test for
   // diffuse props and irradiance quality in a strongly colored environment
   { name: 'darkroom', fp: rect(12.3, -23.9, 17.3, -17.9), h: 3.2,
     floor: { key: 'concrete', roughFactor: 1.5 } },
@@ -258,7 +258,7 @@ const LIGHT_DEFS = [
   [{ p: [8.8, 3.2, 0], c: NEUT, i: 8 }, { p: [13.8, 3.2, 0], c: NEUT, i: 8 }],
   [{ p: [8.8, 3.2, 0], c: NEUT, i: 8 }, { p: [13.8, 3.2, 0], c: NEUT, i: 8 }],
   [{ p: [8.8, 3.2, 0], c: NEUT, i: 8 }, { p: [13.8, 3.2, 0], c: NEUT, i: 8 }],
-  // L1/L2 share an open portal, so they share the union of their lights â€”
+  // L1/L2 share an open portal, so they share the union of their lights --
   // per-cell direct lighting must be continuous across virtual portals.
   [{ p: [8.5, 3.2, -8.5], c: WARM, i: 7 }, { p: [13.5, 3.2, -8.5], c: WARM, i: 7 }, { p: [14.3, 3.2, -14.5], c: WARM, i: 7 }],
   [{ p: [8.5, 3.2, -8.5], c: WARM, i: 7 }, { p: [13.5, 3.2, -8.5], c: WARM, i: 7 }, { p: [14.3, 3.2, -14.5], c: WARM, i: 7 }],
@@ -376,7 +376,7 @@ export function buildLevel() {
     const probeGrid = {
       min: [minX, floorY, minZ],
       size: [maxX - minX, ceilY - floorY, maxZ - minZ],
-      dims: [dimFor(maxX - minX), 2, dimFor(maxZ - minZ)], // â‰¤ 4Â·2Â·4 = 32 probes
+      dims: [dimFor(maxX - minX), 2, dimFor(maxZ - minZ)], // <= 4*2*4 = 32 probes
     };
     return {
       id, name: def.name, fp, floorY, ceilY, planes, edges,
@@ -412,10 +412,10 @@ export function buildLevel() {
       { n: up.clone().negate(), d: y1 },                          // top
     ];
     // Classify each edge for specular blending. SILHOUETTE edge: real geometry
-    // beyond it breaks the portal plane (pillar corner, doorframe) â€” blend for
+    // beyond it breaks the portal plane (pillar corner, doorframe) -- blend for
     // cone-footprint AA of the partition. CONTINUATION edge: the neighbor has a
     // coplanar plane continuing the local surface across the edge (floor under
-    // a cut, the L-rooms' shared east wall) â€” never blend; recursion is already
+    // a cut, the L-rooms' shared east wall) -- never blend; recursion is already
     // seamless and blending would ghost far-behind-plane content.
     const cornerPairs = [[0, 3], [1, 2], [0, 1], [2, 3]]; // matches edgePlanes order
     let blendMask = 0;
@@ -456,7 +456,7 @@ export function buildLevel() {
   // Doored hull planes are pulled to the shared wall MID-plane so both sides'
   // portals are the same rectangle on the same plane and the two hulls tile
   // space with no dead gap in the doorway (cell flips happen exactly at the
-  // shared plane â€” no hull-clamp jumps for objects mid-crossing). The visible
+  // shared plane -- no hull-clamp jumps for objects mid-crossing). The visible
   // wall meshes stay at the room surface; those walls' reflections pick up a
   // WALL_T/2 parallax error, which is classic-PCCM scale and acceptable.
   const doors = DOOR_DEFS.map(def => {
@@ -472,7 +472,7 @@ export function buildLevel() {
         edge.doorShifted = true;
       }
       const portal = makePortal(cell, edge, otherId, s0, s1, cell.floorY, cell.floorY + def.h, false, WALL_T / 2);
-      // rim rect at the visible wall surface (unshifted) â€” used for jamb geometry
+      // rim rect at the visible wall surface (unshifted) -- used for jamb geometry
       const u = new THREE.Vector3(edge.b[0] - edge.a[0], 0, edge.b[1] - edge.a[1]).normalize();
       const R = (ss, y) => new THREE.Vector3(edge.a[0] + u.x * ss, y, edge.a[1] + u.z * ss);
       const rim = [R(s0, cell.floorY), R(s1, cell.floorY), R(s1, cell.floorY + def.h), R(s0, cell.floorY + def.h)];

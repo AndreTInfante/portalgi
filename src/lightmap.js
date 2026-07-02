@@ -1,15 +1,15 @@
-﻿// GPU path-traced lightmapper â€” the ground-truth lighting source.
+// GPU path-traced lightmapper -- the ground-truth lighting source.
 //
 // All static geometry (already in world space, with packed uv2 charts) is
 // merged into one mesh with per-vertex albedo/emissive, raytraced in-shader
 // via three-mesh-bvh. The lightmap stores "diffuse light" D (irradiance-ish),
-// rendered as albedo Ã— D â€” same convention as the analytic path it replaces.
+// rendered as albedo x D -- same convention as the analytic path it replaces.
 //
 // Passes:
 //   1. G-buffer: rasterize charts in uv2 space -> world position + normal
 //   2. K shading iterations (ping-pong): direct = shadow-rayed point lights +
 //      panel AREA lights (2 samples each); indirect = RAYS cosine rays
-//      gathering albedoÃ—D from the previous iteration -> converged bounces
+//      gathering albedoxD from the previous iteration -> converged bounces
 //   3. Dilation: flood chart borders so bilinear filtering never reads void
 import * as THREE from 'three';
 import { MeshBVH, MeshBVHUniformStruct, shaderStructs, shaderIntersectFunction } from '../libs/three-mesh-bvh.module.js';
@@ -63,6 +63,8 @@ uniform vec4 uPanelB[24];  // half sz, emissive rgb
 uniform int uNPanels;
 uniform float uSeed;
 uniform float uGather;
+uniform sampler2D uAccum; // running average during final-gather accumulation
+uniform float uAccumW;    // weight of the accumulated result (a/(a+1))
 out vec4 fragColor;
 
 vec4 faceFetch(uint f, int k) {
@@ -143,13 +145,14 @@ void main() {
       vec2 uv2h = bc.x * r0.xy + bc.y * r0.zw + bc.z * r1.xy;
       vec3 alb = vec3(r1.zw, faceFetch(fi.w, 2).x);
       // emitters aren't in the BVH at all (no shadows, no self-occlusion of
-      // their own NEE samples) â€” their light enters solely via the area NEE
+      // their own NEE samples) -- their light enters solely via the area NEE
       bounce += alb * texture(uPrev, uv2h).rgb;
     }
     bounce /= float(${rays});
   }
 
-  fragColor = vec4(direct + bounce, 1.0);
+  vec3 fresh = direct + bounce;
+  fragColor = vec4(mix(fresh, texelFetch(uAccum, tx, 0).rgb, uAccumW), 1.0);
 }
 `;
 }
@@ -181,6 +184,7 @@ export class Lightmapper {
     this.rays = opts.rays || 64;
     this.iterations = opts.iterations || 3;
     this.panelSamples = opts.panelSamples || 2;
+    this.finalPasses = opts.finalPasses || 1; // independent final gathers, averaged
     const [W, H] = level.lightmapSize;
     this.size = [W, H];
 
@@ -250,6 +254,7 @@ export class Lightmapper {
     this.nrmRT = rt(THREE.FloatType, THREE.NearestFilter);
     this.lmA = rt(THREE.HalfFloatType, THREE.LinearFilter);
     this.lmB = rt(THREE.HalfFloatType, THREE.LinearFilter);
+    this.lmC = rt(THREE.HalfFloatType, THREE.LinearFilter); // frozen gather source
 
     // ---- pass materials
     this.gbufMat = new THREE.RawShaderMaterial({
@@ -299,6 +304,8 @@ export class Lightmapper {
       uNPanels: { value: this.nPanels },
       uSeed: { value: 0.37 },
       uGather: { value: 0 },
+      uAccum: { value: this.lmC.texture },
+      uAccumW: { value: 0 },
     };
     const fsGeo = new THREE.BufferGeometry();
     fsGeo.setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 3, -1, -1, 3], 2));
@@ -321,7 +328,7 @@ export class Lightmapper {
   get texture() { return this.lmA.texture; }
 
   // scissored strip draw: path tracing the whole map in one draw risks GPU
-  // watchdog kills (TDR / context loss) â€” split into small strips instead
+  // watchdog kills (TDR / context loss) -- split into small strips instead
   runFs(target, material, sy = 0, sh = 0) {
     target.viewport.set(0, 0, this.size[0], this.size[1]);
     if (sh > 0) {
@@ -337,7 +344,10 @@ export class Lightmapper {
 
   get strips() { return Math.ceil(this.size[1] / 64); }
 
-  totalSteps() { return 2 + this.iterations * this.strips + 2; }
+  totalSteps() {
+    const acc = this.finalPasses > 1 ? 1 + this.finalPasses * this.strips : 0;
+    return 2 + this.iterations * this.strips + acc + 2;
+  }
 
   *bakeSteps() {
     const { renderer } = this;
@@ -368,6 +378,27 @@ export class Lightmapper {
     }
     // after the loop the newest data sits in lmB; one more swap puts it in lmA
     const t = this.lmA; this.lmA = this.lmB; this.lmB = t;
+    // final-gather accumulation: freeze the converged map as the gather source,
+    // then average N INDEPENDENT re-gathers of it (true variance reduction;
+    // this is what makes offline bakes noise-free)
+    if (this.finalPasses > 1) {
+      this.dilateMat.uniforms.uSrc.value = this.lmA.texture;
+      this.runFs(this.lmC, this.dilateMat);
+      yield;
+      for (let a = 0; a < this.finalPasses; a++) {
+        this.ptUniforms.uPrev.value = this.lmC.texture;
+        this.ptUniforms.uGather.value = 1;
+        this.ptUniforms.uSeed.value = 0.311 + a * 0.777;
+        this.ptUniforms.uAccum.value = this.lmA.texture;
+        this.ptUniforms.uAccumW.value = a / (a + 1);
+        for (let s = 0; s < this.strips; s++) {
+          this.runFs(this.lmB, this.ptMat, s * 64, 64);
+          yield;
+        }
+        const u = this.lmA; this.lmA = this.lmB; this.lmB = u; // accum -> lmA
+      }
+      this.ptUniforms.uAccumW.value = 0;
+    }
     // dilation ping-pong (2 passes)
     for (let d = 0; d < 2; d++) {
       this.dilateMat.uniforms.uSrc.value = this.lmA.texture;

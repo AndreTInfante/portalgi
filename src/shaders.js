@@ -1,4 +1,4 @@
-﻿// All GLSL for the POC. Scene materials use THREE.ShaderMaterial with GLSL3;
+// All GLSL for the POC. Scene materials use THREE.ShaderMaterial with GLSL3;
 // bake passes use RawShaderMaterial, also GLSL3 (three prepends the version line).
 import { atlasGLSL } from './atlas.js';
 import { PLANES_OFF, PORTALS_OFF, PORTAL_STRIDE, PROBE_META_OFF } from './hulldata.js';
@@ -111,11 +111,11 @@ vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
         vec4 ph = hfetch(cell, base);
         if (int(ph.x) != bestPlane) continue;
         // ph.w is a per-edge bitmask: bit e set = SILHOUETTE edge (geometry
-        // beyond it breaks the portal plane — pillar corner, doorframe). There
+        // beyond it breaks the portal plane - pillar corner, doorframe). There
         // the actual content sits at the plane, so the local flat sample is
         // parallax-exact and blending gives cone-footprint anti-aliasing of
         // the partition. Unset = CONTINUATION edge (the neighbor has a
-        // coplanar surface crossing the edge — floor under a cut, a shared
+        // coplanar surface crossing the edge - floor under a cut, a shared
         // wall): pure recursion is already seamless there and blending would
         // ghost far-behind-plane content into a wedge.
         int silMask = int(ph.w + 0.5);
@@ -159,10 +159,10 @@ uniform float uIrrBlend;   // meters; 0 disables cross-portal diffuse blending
 // center, so adjacent cells disagree slightly at a shared boundary and the cut
 // shows as a seam. Near a portal, blend toward the neighbor's irradiance.
 // The neighbor weight must reach 1.0 (not 0.5) at the plane: normalized, that
-// is a true 50/50, identical no matter which side shades the point — C0 in
+// is a true 50/50, identical no matter which side shades the point - C0 in
 // space for static seams AND in time when a prop's cell assignment flips.
 // (A 0.5 weight normalizes to 2/3 self + 1/3 neighbor, which pops by
-// (A-B)/3 at the flip — the classic asymmetric-blend mistake.)
+// (A-B)/3 at the flip - the classic asymmetric-blend mistake.)
 vec3 blendedIrr(int cell, vec3 P, vec3 N) {
   vec3 acc = sampleIrr(cell, N);
   if (uIrrBlend < 0.001) return acc;
@@ -264,7 +264,7 @@ ${TONEMAP_GLSL}
 
 // Diffuse for dynamic objects: per-cell irradiance PROBE GRID, trilinear over
 // 8 probes. Each probe was convolved at bake time from its own position with
-// the parallax warp applied to the radiance BEFORE the cosine convolution —
+// the parallax warp applied to the radiance BEFORE the cosine convolution -
 // the correct operation order, so none of the warp-after-convolve artifacts
 // (kernel skew, hull-edge creases) can appear. Convexity guarantees probes
 // see their whole cell: no visibility term needed, no leaking within a cell.
@@ -324,7 +324,7 @@ void main() {
 
   // tangent-space normal mapping (specular + probe response; the flat lightmap
   // itself is non-directional for now). Geometries without tangents (primitive
-  // props) read a zero attribute — guard against normalize(0) = NaN.
+  // props) read a zero attribute - guard against normalize(0) = NaN.
   vec3 N = Ng;
   vec3 Traw = vTan.xyz - Ng * dot(Ng, vTan.xyz);
   float tLen = length(Traw);
@@ -355,7 +355,7 @@ void main() {
     vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, s2) * vec3(0.90, 0.97, 0.93);
     color = mix(thru, refl, F);
   } else if (uMode == 3) {               // debug pane: continue the eye ray straight
-    // through with zero roughness — a direct, unrefracted window into the hull
+    // through with zero roughness - a direct, unrefracted window into the hull
     // cubemap structure (a -R trick here would mirror the lateral ray component
     // and act like an inverting lens). Faint green cast marks the glass.
     color = traceSpec(uCell, P, -V, 0.0, steps) * vec3(0.93, 1.0, 0.96);
@@ -375,7 +375,7 @@ void main() {
     }
     vec3 F0 = mix(vec3(0.04), albedo, metal);
     color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
-    if (uBake < 0.5) {                   // split-sum: prefiltered radiance × env BRDF
+    if (uBake < 0.5) {                   // split-sum: prefiltered radiance - env BRDF
       vec3 R = reflect(-V, N);
       vec3 pre = traceSpec(uCell, P, R, rough, steps);
       color += pre * envBRDF(F0, rough, NoV) * ao;
@@ -500,7 +500,7 @@ void main() {
 // Probe positions come from the grid metadata in the hull texture (clamped
 // into the hull); each texel's normal direction is cosine-integrated over the
 // hemisphere with the parallax warp applied PER SAMPLE from the probe position
-// before lookup — warp-then-convolve, the correct order.
+// before lookup - warp-then-convolve, the correct order.
 export function probeFrag(numCells) {
   return /* glsl */`precision highp float;
 uniform sampler2D uAtlas;    // source atlas (radiance lods complete)

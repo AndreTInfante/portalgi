@@ -16,7 +16,7 @@ const PROP_DEFS = [
   { shape: 'cube', mode: 4, x: -2.5, z: -1.4, tint: [0.85, 0.4, 0.3], roughFactor: 0.8, metalFactor: 0 },
   { shape: 'cube', mode: 4, x: 0, z: -1.4, tint: [0.95, 0.96, 0.97], roughFactor: 0.04, metalFactor: 1 },
   { shape: 'cube', mode: 2, x: 2.5, z: -1.4 },
-  // debug pane: near-clear glass, billboards to the camera while held —
+  // debug pane: near-clear glass, billboards to the camera while held -
   // hold it over scene geometry to see the hull approximation error directly.
   { shape: 'pane', mode: 3, x: 0.45, z: -2.8, y: 0.965, debugPane: true },
 ];
@@ -50,7 +50,7 @@ export class Props {
         debugPane: !!def.debugPane,
       };
     });
-    // imported glTF exhibits — same physics, multiple materials per prop
+    // imported glTF exhibits - same physics, multiple materials per prop
     for (const mp of modelProps) {
       scene.add(mp.root);
       this.list.push({

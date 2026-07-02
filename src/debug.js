@@ -51,7 +51,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight) {
   f1.add(proxy, 'steps', 0, 6, 1).name('portal hops (0=PCCM)');
   f1.add(proxy, 'edgeBlend').name('edge blend');
   f1.add(proxy, 'blendBase', 0, 0.4, 0.01).name('blend width base');
-  f1.add(proxy, 'blendRough', 0, 3, 0.05).name('blend × rough·dist');
+  f1.add(proxy, 'blendRough', 0, 3, 0.05).name('blend - rough-dist');
   f1.add(proxy, 'distRough', 0, 1, 0.01).name('rough growth /m');
   f1.add(proxy, 'irrBlend', 0, 6, 0.05).name('irr portal blend (m)');
   const f2 = gui.addFolder('Display');
@@ -64,6 +64,6 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight) {
   if (onRelight) f3.add({ relight: onRelight }, 'relight').name('re-trace lightmap (L)');
   f3.add({ rebake: onRebake }, 'rebake').name('re-bake cubemaps (B)');
   f3.add({ offline: () => { location.search = '?bake=1'; } }, 'offline')
-    .name('offline bake → baked/ (slow)');
+    .name('offline bake - baked/ (slow)');
   return gui;
 }

@@ -1,6 +1,6 @@
 // Offline-bake persistence: read HDR render targets back, encode as raw
 // float16 RGBA binaries + a manifest, PUT them to the dev server (/baked/),
-// and load them back as DataTextures on startup — skipping all baking.
+// and load them back as DataTextures on startup - skipping all baking.
 import * as THREE from 'three';
 
 const f32 = new Float32Array(1);

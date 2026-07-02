@@ -41,7 +41,7 @@ export async function loadModelProps(matsys, manager) {
         o.layers.set(1); // dynamic: never in cubemap captures
         const g = o.geometry;
         if (!g.getAttribute('tangent')) {
-          try { g.computeTangents(); } catch (e) { /* non-indexed or no uv — flat tangent */ }
+          try { g.computeTangents(); } catch (e) { /* non-indexed or no uv - flat tangent */ }
         }
         const t = g.getAttribute('tangent');
         if (t) g.setAttribute('tang4', t);

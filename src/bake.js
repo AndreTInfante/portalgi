@@ -2,7 +2,7 @@
 // progressive angular prefilter for the mip column -> cosine-convolved
 // irradiance tile. Runs as a generator so the caller can spread work across
 // frames and show progress. Repeat iterations = light bounces (the scene is
-// re-captured while sampling the previous atlas — the structure relights itself).
+// re-captured while sampling the previous atlas - the structure relights itself).
 import * as THREE from 'three';
 import {
   LOD_SIZES, LOD_X, N_LODS, IRR_X, IRR_SIZE, ROW_H, BORDER, ATLAS_W, atlasHeight,

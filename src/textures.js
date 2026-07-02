@@ -1,4 +1,4 @@
-﻿// Procedural surface textures (canvas-generated) + public-domain painting loads.
+// Procedural surface textures (canvas-generated) + public-domain painting loads.
 import * as THREE from 'three';
 
 function hash2(x, y) {

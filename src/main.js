@@ -1,4 +1,4 @@
-﻿// PortalGI POC entry point.
+// PortalGI POC entry point.
 // Boot order: manifest probe (baked artifacts?) -> level/hull -> baker ->
 // materials -> meshes/props/player -> lighting (load baked OR path-trace +
 // capture) -> loop. `?bake=1` runs a high-quality bake and PUTs the textures
@@ -71,7 +71,7 @@ async function boot() {
       }).catch(() => {});
     }, 10000);
   }
-  // baked artifacts dictate the lightmap packing parameters â€” uv2 layout must
+  // baked artifacts dictate the lightmap packing parameters -- uv2 layout must
   // match the distributed lightmap exactly
   const manifest = (!BAKE && params.get('baked') !== '0') ? await fetchManifest() : null;
   const lmSettings = manifest ? manifest.settings : {
@@ -80,6 +80,7 @@ async function boot() {
     lmrays: parseInt(params.get('lmrays')) || (BAKE ? 256 : 64),
     lmit: parseInt(params.get('lmit')) || (BAKE ? 4 : 3),
     lmps: parseInt(params.get('lmps')) || (BAKE ? 24 : 8),
+    lmfp: parseInt(params.get('lmfp')) || (BAKE ? 8 : 1),
   };
 
   const textures = buildTextures();
@@ -90,7 +91,8 @@ async function boot() {
   const matsys = createMaterialSystem(level, textures, hullTex, baker.texture);
   const useLightmap = BAKE || params.get('lm') !== '0';
   const lightmapper = useLightmap ? new Lightmapper(renderer, level, textures, {
-    rays: lmSettings.lmrays, iterations: lmSettings.lmit, panelSamples: lmSettings.lmps,
+    rays: lmSettings.lmrays, iterations: lmSettings.lmit,
+    panelSamples: lmSettings.lmps, finalPasses: lmSettings.lmfp,
   }) : null;
 
   // optional URL overrides for comparison screenshots
@@ -103,7 +105,7 @@ async function boot() {
   const paintingTexs = loadPaintingTextures(manager);
   buildStaticMeshes(scene, level, matsys, textures, paintingTexs);
 
-  overlayMsg.textContent = 'Loading modelsâ€¦';
+  overlayMsg.textContent = 'Loading models...';
   const modelProps = await loadModelProps(matsys, manager);
 
   const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
@@ -141,7 +143,7 @@ async function boot() {
     const total = baker.totalSteps(state.bounces);
     let done = 0;
     overlay.classList.remove('hidden');
-    overlayMsg.textContent = 'Baking hull cubemapsâ€¦';
+    overlayMsg.textContent = 'Baking hull cubemaps...';
     return new Promise(resolve => {
       const tick = () => {
         const budget = (SHOT || BAKE) ? Infinity : 6;
@@ -166,7 +168,7 @@ async function boot() {
     if (!lightmapper || state.baking) return Promise.resolve();
     state.baking = true;
     overlay.classList.remove('hidden');
-    overlayMsg.textContent = 'Path tracing lightmapâ€¦';
+    overlayMsg.textContent = 'Path tracing lightmap...';
     const steps = lightmapper.bakeSteps();
     let done = 0;
     const total = lightmapper.totalSteps();
@@ -186,22 +188,22 @@ async function boot() {
     });
   }
 
-  overlayMsg.textContent = 'Loading paintingsâ€¦';
+  overlayMsg.textContent = 'Loading paintings...';
   await new Promise((res) => {
     manager.onLoad = res;
     manager.onError = url => { errEl.textContent += 'load failed: ' + url + '\n'; };
     setTimeout(res, 8000); // don't hang forever if a texture is missing
   });
 
-  // fast path: distributed baked textures â€” no baking at all
+  // fast path: distributed baked textures -- no baking at all
   let usedBaked = false;
   if (manifest) {
     try {
       if (manifest.atlas.w !== baker.atlasA.width || manifest.atlas.h !== baker.atlasA.height ||
           manifest.lightmap.w !== level.lightmapSize[0] || manifest.lightmap.h !== level.lightmapSize[1]) {
-        throw new Error('baked artifact dimensions do not match the current level â€” rebake with ?bake=1');
+        throw new Error('baked artifact dimensions do not match the current level -- rebake with ?bake=1');
       }
-      overlayMsg.textContent = 'Loading baked lightingâ€¦';
+      overlayMsg.textContent = 'Loading baked lighting...';
       const [atlasTex, lmTex] = await Promise.all([
         loadHalfTexture('./baked/atlas.bin', manifest.atlas.w, manifest.atlas.h),
         loadHalfTexture('./baked/lightmap.bin', manifest.lightmap.w, manifest.lightmap.h),
@@ -221,11 +223,11 @@ async function boot() {
 
   if (BAKE) {
     overlay.classList.remove('hidden');
-    overlayMsg.textContent = 'Saving offline bakeâ€¦';
+    overlayMsg.textContent = 'Saving offline bake...';
     overlaySub.textContent = '';
     try {
       const mb = await saveBaked(renderer, baker.atlasA, lightmapper.lmA, lmSettings);
-      overlayMsg.textContent = `Offline bake saved (${mb.toFixed(1)} MB) â€” reloading`;
+      overlayMsg.textContent = `Offline bake saved (${mb.toFixed(1)} MB) -- reloading`;
       document.title = 'BAKE_SAVED';
       setTimeout(() => { location.href = location.pathname; }, 1500);
     } catch (e) {
@@ -286,7 +288,7 @@ async function boot() {
     renderer.setRenderTarget(null); // a mid-frame bake step may have left an RT bound
     renderer.render(scene, camera);
     fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
-    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps Â· cell: ${level.cells[player.cell].name}${usedBaked ? ' Â· baked' : ''}`;
+    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cell: ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}`;
   }
   loop();
 

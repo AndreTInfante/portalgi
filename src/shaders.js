@@ -343,7 +343,10 @@ void main() {
   float metal = clamp(orm.b * uMetalFactor, 0.0, 1.0);
   float ao = orm.r;
 
-  vec3 irr = blendedIrr(uCell, P, N);
+  // blendedIrr costs ~25 fetches: only the lightmap-off fallback and the
+  // irradiance debug view actually consume it - skip it otherwise (Tier 1)
+  vec3 irr = vec3(0.0);
+  if (uDebugMode == 3 || (uMode == 0 && uUseLightmap < 0.5)) irr = blendedIrr(uCell, P, N);
   float steps = 0.0;
   vec3 color;
 
@@ -377,7 +380,11 @@ void main() {
     color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
     if (uBake < 0.5) {                   // split-sum: prefiltered radiance - env BRDF
       vec3 R = reflect(-V, N);
-      vec3 pre = traceSpec(uCell, P, R, rough, steps);
+      // very rough surfaces (most wall/ceiling area): the traversal's max-lod
+      // result is indistinguishable from one cosine-convolved irradiance tap
+      // along R - skip the whole hull walk (Tier 1)
+      vec3 pre = (rough > 0.65) ? sampleIrr(uCell, R)
+                                : traceSpec(uCell, P, R, rough, steps);
       color += pre * envBRDF(F0, rough, NoV) * ao;
     }
   }

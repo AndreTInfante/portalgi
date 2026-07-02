@@ -32,7 +32,7 @@ export function buildPortalWires(scene, level) {
   return group;
 }
 
-export function buildGUI(matsys, state, wires, onRebake, onRelight) {
+export function buildGUI(matsys, state, wires, onRebake, onRelight, culler) {
   const gui = new GUI({ title: 'PortalGI' });
   const g = matsys.globals;
   const proxy = {
@@ -58,6 +58,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight) {
   f2.add(proxy, 'exposure', -5, 2, 0.1).name('exposure (EV)');
   f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5 });
   f2.add(proxy, 'portals').name('show portals');
+  if (culler) f2.add(culler, 'enabled').name('portal culling');
   const f3 = gui.addFolder('Bake');
   f3.add(proxy, 'lightmap').name('use lightmap');
   f3.add(state, 'bounces', 1, 3, 1);

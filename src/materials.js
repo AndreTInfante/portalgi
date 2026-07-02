@@ -52,7 +52,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
       glslVersion: THREE.GLSL3,
       vertexShader: SCENE_VERT,
       fragmentShader: frag,
-      side: THREE.DoubleSide,
+      // FrontSide: winding is normal-oriented at emit time; DoubleSide was a
+      // crutch that doubled binning/hidden-surface work on tiled GPUs (Tier 1)
+      side: THREE.FrontSide,
       uniforms: {
         ...globals, // shared identity - do not clone
         uMap: { value: opts.map || textures.white.map },
@@ -110,6 +112,7 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
         tint: o.tint, emissive: o.emissive,
       }));
       mesh.name = `${cell.name}:${key}`;
+      mesh.userData.cell = cell.id; // portal-visibility culling key
       group.add(mesh);
     }
   }

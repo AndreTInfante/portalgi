@@ -17,6 +17,7 @@ import { fetchManifest, loadHalfTexture, saveBaked } from './bakedio.js';
 import { loadModelProps, addStaticModels } from './models.js';
 import { findCell } from './level.js';
 import { VRButton } from '../libs/webxr-VRButton.js';
+import { PortalCuller } from './culling.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -110,7 +111,9 @@ async function boot() {
 
   const manager = new THREE.LoadingManager();
   const paintingTexs = loadPaintingTextures(manager);
-  buildStaticMeshes(scene, level, matsys, textures, paintingTexs);
+  const staticGroup = buildStaticMeshes(scene, level, matsys, textures, paintingTexs);
+  const culler = new PortalCuller(level);
+  if (params.get('cull') === '0') culler.enabled = false;
 
   overlayMsg.textContent = 'Loading models...';
   const modelProps = await loadModelProps(matsys, manager);
@@ -119,7 +122,7 @@ async function boot() {
   const props = new Props(scene, level, matsys, modelProps);
   const wires = buildPortalWires(scene, level);
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  buildGUI(matsys, state, wires, () => rebake(), () => relight());
+  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler);
 
   if (!SHOT && !BAKE) {
     renderer.domElement.addEventListener('mousedown', e => {
@@ -291,6 +294,30 @@ async function boot() {
       vel: new THREE.Vector3(),
     };
   };
+  // in-VR frame-rate cap toggle (A/X button on either controller)
+  const rateState = { target: 90, ready: true };
+  const rateCanvas = document.createElement('canvas');
+  rateCanvas.width = 128; rateCanvas.height = 64;
+  const rateTex = new THREE.CanvasTexture(rateCanvas);
+  const rateLabel = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.04),
+    new THREE.MeshBasicMaterial({ map: rateTex, transparent: true, depthTest: false }));
+  function drawRate() {
+    const ctx = rateCanvas.getContext('2d');
+    ctx.clearRect(0, 0, 128, 64);
+    ctx.fillStyle = '#9fd4ff';
+    ctx.font = 'bold 38px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(rateState.target + 'Hz', 64, 44);
+    rateTex.needsUpdate = true;
+  }
+  drawRate();
+  function applyRate(session) {
+    if (session && session.updateTargetFrameRate) {
+      session.updateTargetFrameRate(rateState.target).catch(() => {});
+    }
+  }
+  if (navigator.xr) renderer.xr.addEventListener('sessionstart', () => applyRate(renderer.xr.getSession()));
+
   if (!navigator.xr) errEl.textContent += 'XR: navigator.xr missing (no WebXR in this browser)\n';
   if (navigator.xr && !SHOT && !BAKE) {
     renderer.xr.enabled = true;
@@ -319,6 +346,12 @@ async function boot() {
         new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.35 }));
       laser.layers.set(3);
       c.add(laser);
+      if (i === 0) { // 72/90 target-rate label above the first controller
+        rateLabel.position.set(0, 0.055, -0.03);
+        rateLabel.rotation.x = -0.7;
+        rateLabel.layers.set(3);
+        c.add(rateLabel);
+      }
       c.addEventListener('selectstart', () => {
         const car = ctrlCarrier(c);
         const p = props.aim(car.pos, car.viewDir, 3.0);
@@ -363,6 +396,19 @@ async function boot() {
         if (Math.abs(x) < 0.3) snapReady = true;
       }
     }
+    // A/X button: toggle the target frame-rate cap between 72 and 90
+    let ratePressed = false;
+    for (const src of session.inputSources) {
+      const b = src.gamepad && src.gamepad.buttons;
+      if (b && b[4] && b[4].pressed) ratePressed = true;
+    }
+    if (ratePressed && rateState.ready) {
+      rateState.ready = false;
+      rateState.target = rateState.target === 90 ? 72 : 90;
+      drawRate();
+      applyRate(session);
+    }
+    if (!ratePressed) rateState.ready = true;
     // hull collision on the head position; apply the correction to the rig
     camera.getWorldPosition(headPos);
     player.pos.set(headPos.x, 1.7, headPos.z);
@@ -394,6 +440,12 @@ async function boot() {
         props.update(dt, player);
       }
     }
+    // portal-frustum culling: only cells reachable through on-screen portals
+    // draw (reflections are atlas-based and immune). All-visible during bakes.
+    if (culler.enabled && !state.baking) {
+      culler.compute(inXR ? renderer.xr.getCamera() : camera, inXR ? headPos : player.pos);
+    }
+    culler.apply(staticGroup, props, state.baking);
     if (!inXR) {
       player.applyToCamera(camera);
       const aimed = !props.held && props.aim(player.pos, player.viewDir);
@@ -405,7 +457,7 @@ async function boot() {
     }
     renderer.render(scene, camera);
     fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
-    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cell: ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}`;
+    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cells ${culler.enabled ? culler.visible.size : 'all'} * ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}`;
   });
 
   addEventListener('resize', () => {

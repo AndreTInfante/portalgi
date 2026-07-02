@@ -63,6 +63,10 @@ export class GeoBuilder {
     for (let k = 0; k < 3; k++) this.tan.push(T[0], T[1], T[2], w);
   }
   tri(a, b, c, n, ua, ub, uc) {
+    if (V.dot(V.cross(V.sub(b, a), V.sub(c, a)), n) < 0) { // wind to face the normal
+      const tb = b; b = c; c = tb;
+      const tu = ub; ub = uc; uc = tu;
+    }
     const e1 = V.sub(b, a), e2 = V.sub(c, a);
     const u = V.norm(e1), v = V.norm(V.cross(n, u));
     const lb = [V.dot(e1, u), V.dot(e1, v)], lcc = [V.dot(e2, u), V.dot(e2, v)];
@@ -87,6 +91,9 @@ export class GeoBuilder {
   }
   // convex polygon fan sharing ONE chart (no interior lightmap seams)
   polygon(pts, n, uvFn) {
+    if (V.dot(V.cross(V.sub(pts[1], pts[0]), V.sub(pts[2], pts[0])), n) < 0) {
+      pts = pts.slice().reverse(); // wind the fan to face the normal
+    }
     const u = V.norm(V.sub(pts[1], pts[0]));
     const v = V.norm(V.cross(n, u));
     const loc = pts.map(p => [V.dot(V.sub(p, pts[0]), u), V.dot(V.sub(p, pts[0]), v)]);

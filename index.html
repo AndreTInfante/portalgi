@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PortalGI POC — portal-linked convex-hull cubemaps</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; height: 100%; }
+  canvas { display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; font-family: system-ui, sans-serif; }
+  #crosshair {
+    position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;
+    margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(255,255,255,0.8);
+    transition: background 80ms;
+  }
+  #crosshair.grab { background: #7fd4ff; box-shadow: 0 0 6px #7fd4ff; }
+  #help {
+    position: absolute; left: 12px; bottom: 12px; color: rgba(255,255,255,0.75);
+    font-size: 12px; line-height: 1.5; text-shadow: 0 1px 2px #000;
+  }
+  #fps {
+    position: absolute; left: 12px; top: 10px; color: rgba(255,255,255,0.8);
+    font-size: 12px; text-shadow: 0 1px 2px #000; white-space: pre;
+  }
+  #overlay {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.75); color: #eee; font-size: 18px; pointer-events: auto;
+    flex-direction: column; gap: 10px; text-align: center;
+  }
+  #overlay small { color: #999; font-size: 13px; line-height: 1.6; }
+  #err {
+    position: absolute; left: 12px; top: 40px; right: 12px; color: #ff7070;
+    font: 12px/1.4 monospace; white-space: pre-wrap; text-shadow: 0 1px 2px #000;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div id="crosshair" class="hidden"></div>
+  <div id="fps"></div>
+  <div id="err"></div>
+  <div id="help" class="hidden">WASD move &nbsp;·&nbsp; mouse look &nbsp;·&nbsp; click / E grab &nbsp;·&nbsp; click throw &nbsp;·&nbsp; RMB drop &nbsp;·&nbsp; V noclip &nbsp;·&nbsp; B re-bake &nbsp;·&nbsp; Esc release mouse</div>
+  <div id="overlay"><div id="overlay-msg">Loading…</div><small id="overlay-sub"></small></div>
+</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./libs/three.module.js",
+    "lil-gui": "./libs/lil-gui.esm.js"
+  }
+}
+</script>
+<script>
+  // surface console errors on the page (headless screenshots can't see devtools)
+  const rawErr = console.error.bind(console);
+  console.error = (...a) => {
+    document.getElementById('err').textContent +=
+      a.map(x => String(x && x.message || x)).join(' ').slice(0, 1500) + '\n';
+    rawErr(...a);
+  };
+  window.addEventListener('error', (e) => {
+    const el = document.getElementById('err');
+    el.textContent += (e.message || String(e)) + (e.filename ? '  @ ' + e.filename + ':' + e.lineno : '') + '\n';
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    document.getElementById('err').textContent += 'Promise rejection: ' + (e.reason && e.reason.stack || e.reason) + '\n';
+  });
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

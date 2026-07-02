@@ -1,0 +1,7 @@
+{
+  "name": "portalgi-poc",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Portal-linked convex-hull cubemap reflections/GI proof of concept"
+}

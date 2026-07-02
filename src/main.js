@@ -1,0 +1,278 @@
+// PortalGI POC entry point.
+// Boot order: manifest probe (baked artifacts?) -> level/hull -> baker ->
+// materials -> meshes/props/player -> lighting (load baked OR path-trace +
+// capture) -> loop. `?bake=1` runs a high-quality bake and PUTs the textures
+// to the dev server under baked/ for distribution.
+import * as THREE from 'three';
+import { buildTextures, loadPaintingTextures } from './textures.js';
+import { buildLevel, packLightmapCharts } from './level.js';
+import { buildHullTexture } from './hulldata.js';
+import { Baker } from './bake.js';
+import { Lightmapper } from './lightmap.js';
+import { createMaterialSystem, buildStaticMeshes } from './materials.js';
+import { Player } from './player.js';
+import { Props } from './props.js';
+import { buildGUI, buildPortalWires } from './debug.js';
+import { fetchManifest, loadHalfTexture, saveBaked } from './bakedio.js';
+
+const params = new URLSearchParams(location.search);
+const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
+const BAKE = params.has('bake');
+
+const SHOT_POSES = {
+  1: { pos: [-4.4, 1.6, 2.8], look: [1.5, 0.9, -0.5] },   // gallery: props + gloss floor
+  2: { pos: [1.5, 1.3, 0.2], look: [6.3, 0.6, 0] },       // gallery floor reflecting the pillar hall
+  3: { pos: [0, 1.7, 10.4], look: [0, 1.6, 14] },          // rotunda marble + emissive ring
+  4: { pos: [7.2, 1.7, 3.4], look: [11.3, 0.9, 0] },       // pillar hall: cuts on glossy floor
+  5: { pos: [2.5, 1.5, 3.0], look: [2.5, 1.22, 1.4] },     // glass sphere closeup
+  6: { pos: [9.6, 1.7, -7.4], look: [14.5, 0.1, -13.8] },  // L-room: floor across the virtual portal
+  7: { pos: [1.2, 1.5, 0.8], look: [1.2, 1.35, -1.2] },    // debug pane held up mid-room
+  8: { pos: [13.3, 1.6, -18.7], look: [16.4, 0.6, -23.0] },// darkroom: colored corner lamp
+};
+
+const overlay = document.getElementById('overlay');
+const overlayMsg = document.getElementById('overlay-msg');
+const overlaySub = document.getElementById('overlay-sub');
+const fpsEl = document.getElementById('fps');
+const errEl = document.getElementById('err');
+
+function fail(msg) {
+  overlayMsg.textContent = msg;
+  overlaySub.textContent = '';
+  throw new Error(msg);
+}
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: SHOT > 0 });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+if (!renderer.capabilities.isWebGL2) fail('WebGL2 is required.');
+if (!renderer.extensions.get('EXT_color_buffer_float')) fail('EXT_color_buffer_float is required (HDR render targets).');
+renderer.domElement.addEventListener('webglcontextlost', () => {
+  errEl.textContent += 'WEBGL CONTEXT LOST\n';
+});
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(SHOT ? 70 : 75, innerWidth / innerHeight, 0.05, 120);
+camera.layers.enable(1); // dynamic props live on layer 1 (hidden from bake captures)
+
+boot();
+
+async function boot() {
+  // baked artifacts dictate the lightmap packing parameters — uv2 layout must
+  // match the distributed lightmap exactly
+  const manifest = (!BAKE && params.get('baked') !== '0') ? await fetchManifest() : null;
+  const lmSettings = manifest ? manifest.settings : {
+    lmden: parseFloat(params.get('lmden')) || (BAKE ? 32 : 16),
+    lmw: parseInt(params.get('lmw')) || (BAKE ? 2048 : 1024),
+    lmrays: parseInt(params.get('lmrays')) || (BAKE ? 256 : 64),
+    lmit: parseInt(params.get('lmit')) || (BAKE ? 4 : 3),
+    lmps: parseInt(params.get('lmps')) || (BAKE ? 12 : 2),
+  };
+
+  const textures = buildTextures();
+  const level = buildLevel();
+  packLightmapCharts(level, lmSettings.lmden, lmSettings.lmw);
+  const hullTex = buildHullTexture(level.cells);
+  const baker = new Baker(renderer, level, hullTex);
+  const matsys = createMaterialSystem(level, textures, hullTex, baker.texture);
+  const useLightmap = BAKE || params.get('lm') !== '0';
+  const lightmapper = useLightmap ? new Lightmapper(renderer, level, textures, {
+    rays: lmSettings.lmrays, iterations: lmSettings.lmit, panelSamples: lmSettings.lmps,
+  }) : null;
+
+  // optional URL overrides for comparison screenshots
+  if (params.has('steps')) matsys.globals.uMaxSteps.value = parseInt(params.get('steps'));
+  if (params.has('blend')) matsys.globals.uBlendOn.value = parseFloat(params.get('blend'));
+  if (params.has('debug')) matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
+  if (params.has('irr')) matsys.globals.uIrrBlend.value = parseFloat(params.get('irr'));
+
+  const manager = new THREE.LoadingManager();
+  const paintingTexs = loadPaintingTextures(manager);
+  buildStaticMeshes(scene, level, matsys, textures, paintingTexs);
+
+  const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
+  const props = new Props(scene, level, matsys);
+  const wires = buildPortalWires(scene, level);
+  const state = { bounces: useLightmap ? 1 : 3, baking: false };
+  buildGUI(matsys, state, wires, () => rebake(), () => relight());
+
+  if (!SHOT && !BAKE) {
+    renderer.domElement.addEventListener('mousedown', e => {
+      if (!player.locked) return;
+      if (e.button === 0) {
+        if (props.held) props.throwHeld(player.viewDir, player.vel);
+        else { const p = props.aim(player.pos, player.viewDir); if (p) props.grab(p); }
+      } else if (e.button === 2) {
+        props.dropHeld();
+      }
+    });
+    renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+    document.addEventListener('keydown', e => {
+      if (e.code === 'KeyE' && player.locked) {
+        if (props.held) props.dropHeld();
+        else { const p = props.aim(player.pos, player.viewDir); if (p) props.grab(p); }
+      }
+      if (e.code === 'KeyB' && !state.baking) rebake();
+      if (e.code === 'KeyL' && !state.baking) relight();
+    });
+  }
+
+  function rebake() {
+    if (state.baking) return Promise.resolve();
+    state.baking = true;
+    matsys.globals.uAtlas.value = baker.texture; // leave baked artifacts, go live
+    const steps = baker.bakeSteps(scene, matsys, state.bounces);
+    const total = baker.totalSteps(state.bounces);
+    let done = 0;
+    overlay.classList.remove('hidden');
+    overlayMsg.textContent = 'Baking hull cubemaps…';
+    return new Promise(resolve => {
+      const tick = () => {
+        const budget = (SHOT || BAKE) ? Infinity : 6;
+        for (let i = 0; i < budget; i++) {
+          if (steps.next().done) {
+            state.baking = false;
+            overlay.classList.add('hidden');
+            resolve();
+            return;
+          }
+          done++;
+        }
+        overlaySub.textContent = `${done} / ${total}`;
+        requestAnimationFrame(tick);
+      };
+      tick();
+    });
+  }
+
+  // path-trace the lightmap, then rebuild the cubemap cache from it
+  function relight() {
+    if (!lightmapper || state.baking) return Promise.resolve();
+    state.baking = true;
+    overlay.classList.remove('hidden');
+    overlayMsg.textContent = 'Path tracing lightmap…';
+    const steps = lightmapper.bakeSteps();
+    let done = 0;
+    const total = lightmapper.totalSteps();
+    return new Promise(resolve => {
+      const tick = () => {
+        if (steps.next().done) {
+          matsys.globals.uLightmap.value = lightmapper.texture;
+          matsys.globals.uUseLightmap.value = 1.0;
+          state.baking = false;
+          resolve(rebake());
+          return;
+        }
+        overlaySub.textContent = `${++done} / ${total}`;
+        requestAnimationFrame(tick);
+      };
+      tick();
+    });
+  }
+
+  overlayMsg.textContent = 'Loading paintings…';
+  await new Promise((res) => {
+    manager.onLoad = res;
+    manager.onError = url => { errEl.textContent += 'load failed: ' + url + '\n'; };
+    setTimeout(res, 8000); // don't hang forever if a texture is missing
+  });
+
+  // fast path: distributed baked textures — no baking at all
+  let usedBaked = false;
+  if (manifest) {
+    try {
+      if (manifest.atlas.w !== baker.atlasA.width || manifest.atlas.h !== baker.atlasA.height ||
+          manifest.lightmap.w !== level.lightmapSize[0] || manifest.lightmap.h !== level.lightmapSize[1]) {
+        throw new Error('baked artifact dimensions do not match the current level — rebake with ?bake=1');
+      }
+      overlayMsg.textContent = 'Loading baked lighting…';
+      const [atlasTex, lmTex] = await Promise.all([
+        loadHalfTexture('./baked/atlas.bin', manifest.atlas.w, manifest.atlas.h),
+        loadHalfTexture('./baked/lightmap.bin', manifest.lightmap.w, manifest.lightmap.h),
+      ]);
+      matsys.globals.uAtlas.value = atlasTex;
+      matsys.globals.uLightmap.value = lmTex;
+      matsys.globals.uUseLightmap.value = 1.0;
+      usedBaked = true;
+    } catch (e) {
+      errEl.textContent += `baked load failed (${e.message}); baking live\n`;
+    }
+  }
+  if (!usedBaked) {
+    if (lightmapper) await relight();
+    else await rebake();
+  }
+
+  if (BAKE) {
+    overlay.classList.remove('hidden');
+    overlayMsg.textContent = 'Saving offline bake…';
+    overlaySub.textContent = '';
+    try {
+      const mb = await saveBaked(renderer, baker.atlasA, lightmapper.lmA, lmSettings);
+      overlayMsg.textContent = `Offline bake saved (${mb.toFixed(1)} MB) — reloading`;
+      document.title = 'BAKE_SAVED';
+      setTimeout(() => { location.href = location.pathname; }, 1500);
+    } catch (e) {
+      overlayMsg.textContent = 'Bake save failed';
+      errEl.textContent += e.message + '\n';
+    }
+    return;
+  }
+
+  if (SHOT) {
+    const pose = SHOT_POSES[SHOT] || SHOT_POSES[1];
+    camera.position.set(...pose.pos);
+    camera.lookAt(...pose.look);
+    if (SHOT === 7) { // pose the debug pane as if held up in front of the camera
+      const pane = props.list.find(p => p.debugPane);
+      pane.mesh.position.set(1.2, 1.35, -1.2);
+      pane.mesh.lookAt(camera.position);
+    }
+    props.update(0.016, player);
+    renderer.setRenderTarget(null);
+    renderer.render(scene, camera);
+    const gl = renderer.getContext();
+    const px = new Uint8Array(4);
+    gl.readPixels(gl.drawingBufferWidth >> 1, gl.drawingBufferHeight >> 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    errEl.textContent +=
+      `shot ${SHOT}${usedBaked ? ' (baked)' : ''}: ${renderer.info.render.calls} calls, ${renderer.info.render.triangles} tris, center px ${px.join(',')}\n`;
+    window.__shotReady = true;
+    document.title = 'SHOT_READY';
+    overlay.classList.add('hidden');
+    (function shotLoop() {
+      renderer.setRenderTarget(null);
+      renderer.render(scene, camera);
+      requestAnimationFrame(shotLoop);
+    })();
+    return;
+  }
+
+  overlay.classList.add('hidden');
+
+  let last = performance.now(), fpsAvg = 0;
+  function loop() {
+    requestAnimationFrame(loop);
+    const now = performance.now();
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    if (!state.baking) {
+      player.update(dt, level.colliders);
+      props.update(dt, player);
+    }
+    player.applyToCamera(camera);
+    const aimed = !props.held && props.aim(player.pos, player.viewDir);
+    document.getElementById('crosshair').classList.toggle('grab', !!(aimed || props.held));
+    renderer.setRenderTarget(null); // a mid-frame bake step may have left an RT bound
+    renderer.render(scene, camera);
+    fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
+    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps · cell: ${level.cells[player.cell].name}${usedBaked ? ' · baked' : ''}`;
+  }
+  loop();
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+}

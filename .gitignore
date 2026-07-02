@@ -1,0 +1,6 @@
+# offline bake artifacts — regenerate with ?bake=1 (see README)
+baked/
+
+# OS noise
+Thumbs.db
+.DS_Store

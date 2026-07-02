@@ -279,25 +279,111 @@ async function boot() {
 
   overlay.classList.add('hidden');
 
+  // ---- WebXR (Quest): VR button, controller grab, stick locomotion
+  let xrCarrier = null; // {pos, viewDir, vel} driving the held prop in VR
+  const tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), headPos = new THREE.Vector3();
+  const ctrlCarrier = c => {
+    c.getWorldPosition(tmpV);
+    c.getWorldQuaternion(tmpQ);
+    return {
+      pos: tmpV.clone(),
+      viewDir: new THREE.Vector3(0, 0, -1).applyQuaternion(tmpQ),
+      vel: new THREE.Vector3(),
+    };
+  };
+  if (!navigator.xr) errEl.textContent += 'XR: navigator.xr missing (no WebXR in this browser)\n';
+  if (navigator.xr && !SHOT && !BAKE) {
+    renderer.xr.enabled = true;
+    renderer.xr.setFoveation(1.0);
+    document.body.appendChild(VRButton.createButton(renderer));
+    navigator.xr.isSessionSupported('immersive-vr')
+      .then(ok => { errEl.textContent += `XR: api ok, immersive-vr ${ok ? 'supported' : 'NOT SUPPORTED'}\n`; })
+      .catch(e => { errEl.textContent += `XR: isSessionSupported threw: ${e.message || e}\n`; });
+    renderer.xr.addEventListener('sessionstart', () => { errEl.textContent += 'XR: session started\n'; });
+    renderer.xr.addEventListener('sessionend', () => { // desktop camera owns the rig again
+      errEl.textContent += 'XR: session ended\n';
+      rig.position.set(0, 0, 0);
+      rig.rotation.set(0, 0, 0);
+    });
+    for (const i of [0, 1]) {
+      const c = renderer.xr.getController(i);
+      rig.add(c);
+      c.addEventListener('selectstart', () => {
+        const car = ctrlCarrier(c);
+        const p = props.aim(car.pos, car.viewDir, 3.0);
+        if (p) { props.grab(p); c.userData.holding = true; }
+      });
+      c.addEventListener('selectend', () => {
+        if (c.userData.holding) { props.dropHeld(); c.userData.holding = false; }
+      });
+    }
+  }
+  let snapReady = true;
+  function xrUpdate(dt) {
+    camera.getWorldPosition(headPos);
+    const session = renderer.xr.getSession();
+    const heading = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(tmpQ));
+    heading.y = 0;
+    heading.normalize();
+    const right = new THREE.Vector3(-heading.z, 0, heading.x);
+    for (const src of session.inputSources) {
+      const a = src.gamepad && src.gamepad.axes;
+      if (!a || a.length < 4) continue;
+      const x = a[2], y = a[3];
+      if (src.handedness === 'left' && (Math.abs(x) > 0.15 || Math.abs(y) > 0.15)) {
+        rig.position.addScaledVector(heading, -y * 2.5 * dt);
+        rig.position.addScaledVector(right, x * 2.5 * dt);
+      }
+      if (src.handedness === 'right') {
+        if (Math.abs(x) > 0.7 && snapReady) {
+          snapReady = false;
+          const ang = x > 0 ? -Math.PI / 6 : Math.PI / 6;
+          const pivot = new THREE.Vector3(headPos.x, rig.position.y, headPos.z);
+          const off = rig.position.clone().sub(pivot);
+          off.applyAxisAngle(new THREE.Vector3(0, 1, 0), ang);
+          rig.position.copy(pivot).add(off);
+          rig.rotateY(ang);
+        }
+        if (Math.abs(x) < 0.3) snapReady = true;
+      }
+    }
+    // hull collision on the head position; apply the correction to the rig
+    camera.getWorldPosition(headPos);
+    player.pos.set(headPos.x, 1.7, headPos.z);
+    player.cell = findCell(level.cells, player.pos, player.cell);
+    player.collide(level.colliders);
+    rig.position.x += player.pos.x - headPos.x;
+    rig.position.z += player.pos.z - headPos.z;
+    const holder = [0, 1].map(i => renderer.xr.getController(i)).find(c => c.userData.holding);
+    xrCarrier = holder ? ctrlCarrier(holder)
+      : { pos: player.pos, viewDir: heading, vel: new THREE.Vector3() };
+  }
+
   let last = performance.now(), fpsAvg = 0;
-  function loop() {
-    requestAnimationFrame(loop);
+  renderer.setAnimationLoop(() => {
     const now = performance.now();
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
+    const inXR = renderer.xr.isPresenting;
     if (!state.baking) {
-      player.update(dt, level.colliders);
-      props.update(dt, player);
+      if (inXR) {
+        xrUpdate(dt);
+        props.update(dt, xrCarrier);
+      } else {
+        player.update(dt, level.colliders);
+        props.update(dt, player);
+      }
     }
-    player.applyToCamera(camera);
-    const aimed = !props.held && props.aim(player.pos, player.viewDir);
-    document.getElementById('crosshair').classList.toggle('grab', !!(aimed || props.held));
+    if (!inXR) {
+      player.applyToCamera(camera);
+      const aimed = !props.held && props.aim(player.pos, player.viewDir);
+      document.getElementById('crosshair').classList.toggle('grab', !!(aimed || props.held));
+    }
     renderer.setRenderTarget(null); // a mid-frame bake step may have left an RT bound
     renderer.render(scene, camera);
     fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
     fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cell: ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}`;
-  }
-  loop();
+  });
 
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;

@@ -99,9 +99,10 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
     for (const [key, b] of cell.builders) {
       if (b.geo.empty) continue;
       const o = b.opts || {};
-      const set = o.paintingIndex !== undefined
-        ? { map: paintingTexs[o.paintingIndex] } // varnished canvas: flat maps, glossy factor
-        : textures[o.mapKey || 'white'];
+      const set = o.texMap ? { map: o.texMap, normalMap: o.texNrm, ormMap: o.texOrm }
+        : o.paintingIndex !== undefined
+          ? { map: paintingTexs[o.paintingIndex] } // varnished canvas: flat maps, glossy factor
+          : textures[o.mapKey || 'white'];
       const mesh = new THREE.Mesh(b.geo.buildGeometry(), matsys.makeMaterial(cell.id, {
         map: set.map, nrm: set.normalMap, orm: set.ormMap,
         roughFactor: o.paintingIndex !== undefined ? 0.4 : (o.roughFactor !== undefined ? o.roughFactor : 1),

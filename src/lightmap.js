@@ -200,7 +200,8 @@ export class Lightmapper {
         const o = b.opts || {};
         if (o.emissive && (o.emissive[0] > 0 || o.emissive[1] > 0 || o.emissive[2] > 0)) continue;
         let a = [0.5, 0.5, 0.5];
-        if (o.paintingIndex !== undefined) a = [0.35, 0.3, 0.28];
+        if (o.avg) a = o.avg;
+        else if (o.paintingIndex !== undefined) a = [0.35, 0.3, 0.28];
         else if (o.mapKey && textures[o.mapKey]) a = textures[o.mapKey].map.userData.avg;
         const tint = o.tint || [1, 1, 1];
         a = [a[0] * tint[0], a[1] * tint[1], a[2] * tint[2]];

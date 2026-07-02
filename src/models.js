@@ -4,6 +4,68 @@
 // lightmap) so carrying them around can never cause a mismatch.
 import * as THREE from 'three';
 import { GLTFLoader } from '../libs/loaders/GLTFLoader.js';
+import { GeoBuilder } from './level.js';
+
+// Scaled-up STATIC (non-carryable) exhibit copies: full members of the baked
+// world - lightmap charts (their photoscan UVs are unique, so the whole mesh
+// is one chart), the path tracer BVH (shadows + bounce), and the cubemap
+// captures (reflections). This is the lightmapped-prop path.
+const STATIC_MODEL_DEFS = [
+  { slug: 'horse_statue_01', size: 2.2, cell: 2, x: 0, z: 13.3, rotY: Math.PI },
+  { slug: 'bronze_whale_statue', size: 2.4, cell: 8, x: 13.4, z: -15.8, rotY: Math.PI / 5 },
+];
+
+export async function addStaticModels(level) {
+  const loader = new GLTFLoader();
+  let idx = 0;
+  await Promise.all(STATIC_MODEL_DEFS.map(async def => {
+    try {
+      const gltf = await loader.loadAsync(`./assets/models/gltf/${def.slug}/${def.slug}_1k.gltf`);
+      const box = new THREE.Box3().setFromObject(gltf.scene);
+      const dim = box.getSize(new THREE.Vector3());
+      const scale = def.size / Math.max(dim.x, dim.y, dim.z);
+      const center = box.getCenter(new THREE.Vector3());
+      const M = new THREE.Matrix4()
+        .makeTranslation(def.x, 0, def.z)
+        .multiply(new THREE.Matrix4().makeRotationY(def.rotY || 0))
+        .multiply(new THREE.Matrix4().makeScale(scale, scale, scale))
+        .multiply(new THREE.Matrix4().makeTranslation(-center.x, -box.min.y, -center.z));
+      gltf.scene.updateMatrixWorld(true);
+      gltf.scene.traverse(o => {
+        if (!o.isMesh) return;
+        if (!o.geometry.getAttribute('tangent')) {
+          try { o.geometry.computeTangents(); } catch (e) {}
+        }
+        let g = o.geometry.clone();
+        g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(M, o.matrixWorld));
+        if (g.index) g = g.toNonIndexed();
+        const gb = new GeoBuilder();
+        gb.pos = Array.from(g.getAttribute('position').array);
+        gb.nrm = Array.from(g.getAttribute('normal').array);
+        gb.uv = Array.from(g.getAttribute('uv').array);
+        const t = g.getAttribute('tangent');
+        gb.tan = t ? Array.from(t.array) : new Array((gb.pos.length / 3) * 4).fill(0);
+        const chartS = def.size * 1.6; // lightmap footprint in meters (density scaling)
+        gb.lc = [];
+        for (let k = 0; k < gb.uv.length; k += 2) {
+          gb.lc.push(Math.min(Math.max(gb.uv[k], 0), 1) * chartS, Math.min(Math.max(gb.uv[k + 1], 0), 1) * chartS);
+        }
+        gb.charts = [{ w: chartS, h: chartS, start: 0, count: gb.pos.length / 3 }];
+        const src = o.material;
+        level.cells[def.cell].builders.set(`smodel${idx++}`, {
+          geo: gb,
+          opts: {
+            texMap: src.map, texNrm: src.normalMap, texOrm: src.roughnessMap || src.metalnessMap,
+            avg: [0.42, 0.4, 0.36], roughFactor: 1,
+          },
+        });
+      });
+      level.colliders.push({ x: def.x, z: def.z, r: def.size * 0.42 });
+    } catch (e) {
+      console.error(`static model failed: ${def.slug}`, e);
+    }
+  }));
+}
 
 const MODEL_DEFS = [
   { slug: 'horse_statue_01', size: 0.85, cell: 10, x: -1.8, z: 21, ped: true },

@@ -14,7 +14,7 @@ import { Player } from './player.js';
 import { Props } from './props.js';
 import { buildGUI, buildPortalWires } from './debug.js';
 import { fetchManifest, loadHalfTexture, saveBaked } from './bakedio.js';
-import { loadModelProps } from './models.js';
+import { loadModelProps, addStaticModels } from './models.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -77,14 +77,15 @@ async function boot() {
   const lmSettings = manifest ? manifest.settings : {
     lmden: parseFloat(params.get('lmden')) || (BAKE ? 32 : 16),
     lmw: parseInt(params.get('lmw')) || (BAKE ? 2048 : 1024),
-    lmrays: parseInt(params.get('lmrays')) || (BAKE ? 256 : 64),
+    lmrays: parseInt(params.get('lmrays')) || (BAKE ? 384 : 64),
     lmit: parseInt(params.get('lmit')) || (BAKE ? 4 : 3),
-    lmps: parseInt(params.get('lmps')) || (BAKE ? 24 : 8),
-    lmfp: parseInt(params.get('lmfp')) || (BAKE ? 8 : 1),
+    lmps: parseInt(params.get('lmps')) || (BAKE ? 32 : 8),
+    lmfp: parseInt(params.get('lmfp')) || (BAKE ? 12 : 1),
   };
 
   const textures = buildTextures();
   const level = buildLevel();
+  await addStaticModels(level); // static exhibits join the builders BEFORE chart packing
   packLightmapCharts(level, lmSettings.lmden, lmSettings.lmw);
   const hullTex = buildHullTexture(level.cells);
   const baker = new Baker(renderer, level, hullTex);

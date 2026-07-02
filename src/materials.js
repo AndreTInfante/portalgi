@@ -113,6 +113,15 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       }));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key
+      if (key === 'floor' && (o.roughFactor === undefined || o.roughFactor <= 0.75)) {
+        // reflective floors mark stencil bit 1 where they are the visible
+        // surface; prop reflection imposters render only on those pixels
+        const m = mesh.material;
+        m.stencilWrite = true;
+        m.stencilRef = 1;
+        m.stencilFunc = THREE.AlwaysStencilFunc;
+        m.stencilZPass = THREE.ReplaceStencilOp;
+      }
       group.add(mesh);
     }
   }

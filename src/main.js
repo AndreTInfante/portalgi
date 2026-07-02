@@ -18,6 +18,7 @@ import { loadModelProps, addStaticModels } from './models.js';
 import { findCell } from './level.js';
 import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
+import { ReflectionSystem } from './reflections.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -121,8 +122,19 @@ async function boot() {
   const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
   const props = new Props(scene, level, matsys, modelProps);
   const wires = buildPortalWires(scene, level);
+  const reflections = new ReflectionSystem(scene, level, props, matsys.globals);
+  const floorSets = level.cells.map(c => ({ ormMap: textures[c.floor.key].ormMap }));
+  const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
+  for (const mm of staticModelMeshes) reflections.addStatic(mm);
+  const onStaticImposters = v => {
+    // A/B: statics either keep their baked (capture-point-smeared) reflection,
+    // or leave the captures and get mirrored imposters instead
+    for (const mm of staticModelMeshes) mm.layers.set(v ? 3 : 0);
+    reflections.staticImposters = v;
+    rebake();
+  };
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler);
+  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, reflections, onStaticImposters);
 
   if (!SHOT && !BAKE) {
     renderer.domElement.addEventListener('mousedown', e => {
@@ -446,6 +458,7 @@ async function boot() {
       culler.compute(inXR ? renderer.xr.getCamera() : camera, inXR ? headPos : player.pos);
     }
     culler.apply(staticGroup, props, state.baking);
+    reflections.update(floorSets, culler.enabled && !state.baking ? culler.visible : null);
     if (!inXR) {
       player.applyToCamera(camera);
       const aimed = !props.held && props.aim(player.pos, player.viewDir);

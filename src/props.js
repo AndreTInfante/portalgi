@@ -7,6 +7,8 @@ import { findCell } from './level.js';
 
 const GRAVITY = 9.8;
 const REST = 0.35;
+const HOLD_DIST = 0.12;  // rigid-attach rest offset in front of the hand (VR)
+const CARRY_DIST = 1.9;  // ray-carry distance in front of the eye (desktop)
 
 const PROP_DEFS = [
   // mode 4 = dynamic PBR prop: probe-grid diffuse + traversal specular
@@ -26,6 +28,7 @@ export class Props {
     this.level = level;
     this.matsys = matsys;
     this.held = null;
+    this.hold = null; // attach state for the held prop: hand-space offsets + beam progress
     this.list = PROP_DEFS.map(def => {
       const r = def.shape === 'sphere' ? 0.22 : def.shape === 'pane' ? 0.3 : 0.18;
       const geo = def.shape === 'sphere' ? new THREE.SphereGeometry(0.22, 48, 32)
@@ -63,17 +66,14 @@ export class Props {
     }
   }
 
-  update(dt, player) {
+  // carrier: { pos, quat (Quaternion|null), viewDir, vel, eye?, mode? }.
+  // mode 'attach' = rigid follow via hand-space offsets (VR controllers);
+  // anything else = the desktop ray-carry spring. The desktop Player instance
+  // itself is a valid carrier (no quat/mode -> ray path).
+  update(dt, carrier) {
     for (const p of this.list) {
       if (p === this.held) {
-        // no hull clamp on the target: clamping pops ~0.6m when the best-containing
-        // hull flips mid-doorway. collide() already keeps the prop out of walls.
-        const target = player.pos.clone().addScaledVector(player.viewDir, 1.9);
-        p.vel.copy(target.sub(p.mesh.position).multiplyScalar(14));
-        const step = Math.min(dt, 0.05);
-        p.mesh.position.addScaledVector(p.vel, step);
-        this.collide(p);
-        if (p.debugPane) p.mesh.lookAt(player.pos);
+        this.updateHeld(p, dt, carrier);
       } else if (!p.asleep) {
         p.vel.y -= GRAVITY * dt;
         p.mesh.position.addScaledVector(p.vel, dt);
@@ -92,6 +92,36 @@ export class Props {
         if (u.uPrevMix.value > 0) u.uPrevMix.value = Math.max(0, u.uPrevMix.value - dt / 0.2);
       }
     }
+  }
+
+  // gravity is off while held, but collide() still runs so held props can't
+  // clip walls. p.vel tracks the carry displacement so wall response works.
+  updateHeld(p, dt, carrier) {
+    const step = Math.min(dt, 0.05);
+    const h = this.hold;
+    if (carrier.mode === 'attach' && carrier.quat && h) {
+      const target = h.offPos.clone().applyQuaternion(carrier.quat).add(carrier.pos);
+      if (h.beamT < 1) {
+        // tractor beam: cubic ease-out toward the (moving) hand anchor; on
+        // landing, latch the rotation offset so the rigid attach is seamless
+        h.beamT = Math.min(1, h.beamT + dt / h.beamDur);
+        const k = 1 - Math.pow(1 - h.beamT, 3);
+        target.lerpVectors(h.beamFrom, target, k);
+        if (h.beamT >= 1) h.offQuat.copy(carrier.quat).invert().multiply(p.mesh.quaternion);
+      } else if (!p.debugPane) {
+        p.mesh.quaternion.copy(carrier.quat).multiply(h.offQuat);
+      }
+      p.vel.copy(target).sub(p.mesh.position).divideScalar(Math.max(step, 1e-4));
+      p.mesh.position.copy(target);
+    } else {
+      // no hull clamp on the target: clamping pops ~0.6m when the best-containing
+      // hull flips mid-doorway. collide() already keeps the prop out of walls.
+      const target = carrier.pos.clone().addScaledVector(carrier.viewDir, CARRY_DIST);
+      p.vel.copy(target.sub(p.mesh.position).multiplyScalar(14));
+      p.mesh.position.addScaledVector(p.vel, step);
+    }
+    this.collide(p);
+    if (p.debugPane) p.mesh.lookAt(carrier.eye || carrier.pos);
   }
 
   collide(p) {
@@ -134,13 +164,55 @@ export class Props {
     return best;
   }
 
-  grab(p) { this.held = p; p.asleep = false; }
+  // nearest prop whose padded bounding sphere contains the point, if any
+  touch(pos, pad = 0.06) {
+    let best = null, bestD = pad;
+    for (const p of this.list) {
+      const d = p.mesh.position.distanceTo(pos) - p.radius;
+      if (d < bestD) { best = p; bestD = d; }
+    }
+    return best;
+  }
+
+  grab(p) { this.held = p; this.hold = null; p.asleep = false; }
+
+  // rigid attach preserving the current hand-relative pose (direct VR grab,
+  // hand-to-hand transfer): no snap-to-center
+  grabAttach(p, carrier) {
+    if (!carrier || !carrier.quat) return this.grab(p);
+    this.held = p;
+    p.asleep = false;
+    const inv = carrier.quat.clone().invert();
+    this.hold = {
+      offPos: p.mesh.position.clone().sub(carrier.pos).applyQuaternion(inv),
+      offQuat: inv.clone().multiply(p.mesh.quaternion),
+      beamT: 1, beamDur: 1,
+      beamFrom: new THREE.Vector3(),
+    };
+  }
+
+  // tractor beam: timed pull to HOLD_DIST in front of the hand, ending in a
+  // rigid attach (offQuat is latched when the beam lands)
+  grabBeam(p, carrier) {
+    if (!carrier || !carrier.quat) return this.grab(p);
+    this.held = p;
+    p.asleep = false;
+    const dist = p.mesh.position.distanceTo(carrier.pos);
+    this.hold = {
+      offPos: new THREE.Vector3(0, 0, -HOLD_DIST),
+      offQuat: new THREE.Quaternion(),
+      beamT: 0,
+      beamDur: THREE.MathUtils.clamp(0.25 + dist * 0.07, 0.3, 0.5),
+      beamFrom: p.mesh.position.clone(),
+    };
+  }
 
   throwHeld(dir, playerVel) {
     if (!this.held) return;
     this.held.vel.copy(dir).multiplyScalar(9).add(playerVel);
     this.held.asleep = false;
     this.held = null;
+    this.hold = null;
   }
 
   dropHeld() {
@@ -148,5 +220,15 @@ export class Props {
     this.held.vel.multiplyScalar(0.2);
     this.held.asleep = false;
     this.held = null;
+    this.hold = null;
+  }
+
+  // VR release: the hand's tracked world velocity carries the throw
+  release(vel) {
+    if (!this.held) return;
+    this.held.vel.copy(vel);
+    this.held.asleep = false;
+    this.held = null;
+    this.hold = null;
   }
 }

@@ -147,13 +147,44 @@ async function boot() {
       }
     });
     renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+    // hold-E + mouse rotates the held prop (look is suppressed); a quick tap
+    // (<250ms, <6px) keeps tap-to-drop. Rotation persists after release.
+    const UP = new THREE.Vector3(0, 1, 0);
+    const eRot = { down: false, active: false, t0: 0, moved: 0 };
     document.addEventListener('keydown', e => {
-      if (e.code === 'KeyE' && player.locked) {
-        if (props.held) props.dropHeld();
-        else { const p = props.aim(player.pos, player.viewDir); if (p) props.grab(p); }
+      if (e.code === 'KeyE' && player.locked && !e.repeat) {
+        if (props.held) {
+          eRot.down = true; eRot.active = false;
+          eRot.t0 = performance.now(); eRot.moved = 0;
+        } else {
+          const p = props.aim(player.pos, player.viewDir);
+          if (p) props.grab(p);
+        }
       }
       if (e.code === 'KeyB' && !state.baking) rebake();
       if (e.code === 'KeyL' && !state.baking) relight();
+    });
+    document.addEventListener('keyup', e => {
+      if (e.code !== 'KeyE' || !eRot.down) return;
+      if (!eRot.active && performance.now() - eRot.t0 < 250) props.dropHeld();
+      eRot.down = false; eRot.active = false;
+      player.lookLocked = false;
+    });
+    document.addEventListener('mousemove', e => {
+      if (!eRot.down || !player.locked || !props.held) return;
+      eRot.moved += Math.abs(e.movementX) + Math.abs(e.movementY);
+      if (!eRot.active) {
+        // under both thresholds this may still resolve to a tap-to-drop
+        if (eRot.moved < 6 && performance.now() - eRot.t0 < 250) return;
+        eRot.active = true;
+        player.lookLocked = true;
+      }
+      // camera-relative: yaw about world up, pitch about the camera's right
+      const q = new THREE.Quaternion();
+      const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
+      const held = props.held;
+      held.mesh.quaternion.premultiply(q.setFromAxisAngle(UP, -e.movementX * 0.005));
+      held.mesh.quaternion.premultiply(q.setFromAxisAngle(right, -e.movementY * 0.005));
     });
   }
 
@@ -295,15 +326,27 @@ async function boot() {
   overlay.classList.add('hidden');
 
   // ---- WebXR (Quest): VR button, controller grab, stick locomotion
-  let xrCarrier = null; // {pos, viewDir, vel} driving the held prop in VR
+  let xrCarrier = null; // carrier driving the held prop in VR (see props.update)
   const tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), headPos = new THREE.Vector3();
+  // controller world velocity over the last ~120ms of samples: swing throws
+  // need more than a single-frame delta
+  const ctrlVel = c => {
+    const h = c && c.userData.hist;
+    if (!h || h.length < 2) return new THREE.Vector3();
+    const a = h[0], b = h[h.length - 1];
+    const span = b.t - a.t;
+    return span > 1e-3 ? b.p.clone().sub(a.p).divideScalar(span) : new THREE.Vector3();
+  };
   const ctrlCarrier = c => {
     c.getWorldPosition(tmpV);
     c.getWorldQuaternion(tmpQ);
     return {
       pos: tmpV.clone(),
+      quat: tmpQ.clone(),
       viewDir: new THREE.Vector3(0, 0, -1).applyQuaternion(tmpQ),
-      vel: new THREE.Vector3(),
+      vel: ctrlVel(c),
+      eye: headPos.clone(),
+      mode: 'attach',
     };
   };
   // in-VR frame-rate cap toggle (A/X button on either controller)
@@ -343,6 +386,11 @@ async function boot() {
       errEl.textContent += 'XR: session ended\n';
       rig.position.set(0, 0, 0);
       rig.rotation.set(0, 0, 0);
+      for (const j of [0, 1]) { // controllers vanish: drop the prop in place
+        const cc = renderer.xr.getController(j);
+        if (cc) { cc.userData.holding = false; cc.userData.hist = []; }
+      }
+      props.dropHeld();
     });
     for (const i of [0, 1]) {
       const c = renderer.xr.getController(i);
@@ -366,11 +414,25 @@ async function boot() {
       }
       c.addEventListener('selectstart', () => {
         const car = ctrlCarrier(c);
+        const held = props.held;
+        if (held) { // hand-to-hand: take the held prop when this hand is inside it
+          if (!c.userData.holding && held.mesh.position.distanceTo(car.pos) < held.radius + 0.06) {
+            const other = renderer.xr.getController(1 - i);
+            if (other) other.userData.holding = false;
+            props.grabAttach(held, car);
+            c.userData.holding = true;
+          }
+          return;
+        }
+        const near = props.touch(car.pos, 0.06); // hand inside a prop: attach in place
+        if (near) { props.grabAttach(near, car); c.userData.holding = true; return; }
         const p = props.aim(car.pos, car.viewDir, 3.0);
-        if (p) { props.grab(p); c.userData.holding = true; }
+        if (p) { props.grabBeam(p, car); c.userData.holding = true; }
       });
       c.addEventListener('selectend', () => {
-        if (c.userData.holding) { props.dropHeld(); c.userData.holding = false; }
+        if (!c.userData.holding) return;
+        c.userData.holding = false;
+        props.release(ctrlVel(c));
       });
     }
   }
@@ -404,6 +466,10 @@ async function boot() {
           off.applyAxisAngle(new THREE.Vector3(0, 1, 0), ang);
           rig.position.copy(pivot).add(off);
           rig.rotateY(ang);
+          for (const j of [0, 1]) { // snap turn teleports the hands: stale velocity
+            const cc = renderer.xr.getController(j);
+            if (cc) cc.userData.hist = [];
+          }
         }
         if (Math.abs(x) < 0.3) snapReady = true;
       }
@@ -428,9 +494,19 @@ async function boot() {
     player.collide(level.colliders);
     rig.position.x += player.pos.x - headPos.x;
     rig.position.z += player.pos.z - headPos.z;
-    const holder = [0, 1].map(i => renderer.xr.getController(i)).find(c => c.userData.holding);
+    // per-controller position history (post-locomotion) feeds swing-release throws
+    const now = performance.now() * 0.001;
+    for (const j of [0, 1]) {
+      const cc = renderer.xr.getController(j);
+      if (!cc) continue;
+      cc.getWorldPosition(tmpV);
+      const hist = cc.userData.hist || (cc.userData.hist = []);
+      hist.push({ p: tmpV.clone(), t: now });
+      while (hist.length > 2 && now - hist[0].t > 0.12) hist.shift();
+    }
+    const holder = [0, 1].map(i => renderer.xr.getController(i)).find(c => c && c.userData.holding);
     xrCarrier = holder ? ctrlCarrier(holder)
-      : { pos: player.pos, viewDir: heading, vel: new THREE.Vector3() };
+      : { pos: player.pos, quat: null, viewDir: heading, vel: new THREE.Vector3(), eye: headPos.clone(), mode: 'ray' };
   }
 
   let last = performance.now(), fpsAvg = 0;

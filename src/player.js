@@ -19,6 +19,7 @@ export class Player {
     this.noclip = false;
     this.keys = new Set();
     this.locked = false;
+    this.lookLocked = false; // hold-E prop rotation owns the mouse while set
     this.interactive = !opts.headless;
     if (this.interactive) this.bind(dom);
   }
@@ -33,7 +34,7 @@ export class Player {
       document.getElementById('help').classList.toggle('hidden', !this.locked);
     });
     document.addEventListener('mousemove', e => {
-      if (!this.locked) return;
+      if (!this.locked || this.lookLocked) return;
       this.yaw -= e.movementX * 0.0022;
       this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - e.movementY * 0.0022));
     });

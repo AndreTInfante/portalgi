@@ -308,6 +308,17 @@ async function boot() {
     for (const i of [0, 1]) {
       const c = renderer.xr.getController(i);
       rig.add(c);
+      // visible hand: emissive puck + aim laser (layer 3: XR-only, never captured)
+      const puck = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12),
+        matsys.makeMaterial(0, { tint: [0.02, 0.02, 0.02], emissive: [1.5, 1.6, 1.8] }));
+      puck.layers.set(3);
+      c.add(puck);
+      const laserGeo = new THREE.BufferGeometry().setFromPoints(
+        [new THREE.Vector3(), new THREE.Vector3(0, 0, -3)]);
+      const laser = new THREE.Line(laserGeo,
+        new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.35 }));
+      laser.layers.set(3);
+      c.add(laser);
       c.addEventListener('selectstart', () => {
         const car = ctrlCarrier(c);
         const p = props.aim(car.pos, car.viewDir, 3.0);
@@ -320,6 +331,11 @@ async function boot() {
   }
   let snapReady = true;
   function xrUpdate(dt) {
+    // three's XR eye cameras have their OWN layer masks (0|1 and 0|2) - our
+    // dynamic layer 3 must be enabled on them or props vanish in-session
+    const xrCam = renderer.xr.getCamera();
+    xrCam.layers.enable(3);
+    for (const c of xrCam.cameras) c.layers.enable(3);
     camera.getWorldPosition(headPos);
     const session = renderer.xr.getSession();
     const heading = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(tmpQ));

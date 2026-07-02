@@ -10,8 +10,6 @@ import {
 } from './atlas.js';
 import { FS_TRI_VERT, cubeToOctFrag, filterFrag, irrFrag, probeFrag, COPY_FRAG } from './shaders.js';
 
-// per-lod gaussian cone half-angle (radians); progressive, so each stage is small
-const LOD_ANGLES = [0, 0.04, 0.08, 0.16, 0.30, 0.55, 0.9];
 
 export class Baker {
   constructor(renderer, level, hullTex) {
@@ -64,7 +62,7 @@ export class Baker {
       uTileSize: { value: 0 },
       uSrcLod: { value: 0 },
       uCell: { value: 0 },
-      uAngle: { value: 0 },
+      uRough: { value: 0 },
     });
     this.matIrr = raw(irrFrag(n), {
       uAtlas: { value: this.atlasA.texture },
@@ -119,9 +117,10 @@ export class Baker {
           const fu = this.matFilter.uniforms;
           fu.uTileOrigin.value.set(LOD_X[k], row);
           fu.uTileSize.value = LOD_SIZES[k];
-          fu.uSrcLod.value = k - 1;
+          fu.uSrcLod.value = Math.max(k - 2, 0); // slightly-blurred source: variance reduction
           fu.uCell.value = cell.id;
-          fu.uAngle.value = LOD_ANGLES[k];
+          fu.uRough.value = k / (N_LODS - 1);
+
           this.runPass(this.atlasB, this.matFilter, LOD_X[k], row, w, w);
           this.runPass(this.atlasA, this.matCopy, LOD_X[k], row, w, w);
         }

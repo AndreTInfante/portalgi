@@ -42,7 +42,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight) {
     get blendRough() { return g.uBlendRough.value; }, set blendRough(v) { g.uBlendRough.value = v; },
     get distRough() { return g.uDistRough.value; }, set distRough(v) { g.uDistRough.value = v; },
     get irrBlend() { return g.uIrrBlend.value; }, set irrBlend(v) { g.uIrrBlend.value = v; },
-    get exposure() { return g.uExposure.value; }, set exposure(v) { g.uExposure.value = v; },
+    get exposure() { return Math.log2(g.uExposure.value); }, set exposure(v) { g.uExposure.value = Math.pow(2, v); },
     get view() { return g.uDebugMode.value; }, set view(v) { g.uDebugMode.value = v; },
     get portals() { return wires.visible; }, set portals(v) { wires.visible = v; },
     get lightmap() { return g.uUseLightmap.value > 0.5; }, set lightmap(v) { g.uUseLightmap.value = v ? 1 : 0; },
@@ -55,7 +55,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight) {
   f1.add(proxy, 'distRough', 0, 1, 0.01).name('rough growth /m');
   f1.add(proxy, 'irrBlend', 0, 6, 0.05).name('irr portal blend (m)');
   const f2 = gui.addFolder('Display');
-  f2.add(proxy, 'exposure', 0.2, 3, 0.05);
+  f2.add(proxy, 'exposure', -5, 2, 0.1).name('exposure (EV)');
   f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5 });
   f2.add(proxy, 'portals').name('show portals');
   const f3 = gui.addFolder('Bake');

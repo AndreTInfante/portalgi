@@ -47,8 +47,9 @@ vec3 sampleIrr(int cell, vec3 n) {
   vec2 base = vec2(IRR_X + BORDER_PX, float(cell) * ROW_H + BORDER_PX);
   return texture(uAtlas, (base + o * IRR_S) / ATLAS_SIZE).rgb;
 }
+// the atlas mips are GGX-prefiltered with roughness linear in mip
 float roughToLod(float r) {
-  return clamp(6.5 * pow(max(r, 0.0), 0.65) - 0.4, 0.0, MAX_SPEC_LOD);
+  return clamp(r, 0.0, 1.0) * MAX_SPEC_LOD;
 }
 `;
 
@@ -205,15 +206,18 @@ vec3 heatmap(float t) {
 // ------------------------------------------------------------------ scene shaders
 
 export const SCENE_VERT = /* glsl */`
-attribute vec2 lmuv;  // lightmap charts; absent on props (disabled attr reads 0)
+attribute vec2 lmuv;   // lightmap charts; absent on props (disabled attr reads 0)
+attribute vec4 tang4;  // tangent xyz + handedness w (custom name: see lmuv note)
 varying vec3 vWorldPos;
 varying vec3 vNormal;
+varying vec4 vTan;
 varying vec2 vUv;
 varying vec2 vUv2;
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vWorldPos = wp.xyz;
   vNormal = normalize(mat3(modelMatrix) * normal);
+  vTan = vec4(normalize(mat3(modelMatrix) * tang4.xyz), tang4.w);
   vUv = uv;
   vUv2 = lmuv;
   gl_Position = projectionMatrix * viewMatrix * wp;
@@ -226,11 +230,16 @@ precision highp float;
 layout(location = 0) out vec4 fragOut;
 varying vec3 vWorldPos;
 varying vec3 vNormal;
+varying vec4 vTan;
 varying vec2 vUv;
 varying vec2 vUv2;
 
 uniform sampler2D uAtlas;
 uniform sampler2D uMap;
+uniform sampler2D uNrmMap;
+uniform sampler2D uOrmMap;   // AO / roughness / metallic
+uniform float uRoughFactor;
+uniform float uMetalFactor;
 uniform sampler2D uLightmap;
 uniform float uUseLightmap;
 uniform int uCell;
@@ -239,7 +248,6 @@ uniform float uPrevMix;   // crossfade weight of the previous cell, decays over 
 uniform int uMode;        // 0 = surface, 1 = chrome, 2 = glass, 3 = debug pane, 4 = dynamic diffuse (parallax-corrected irradiance)
 uniform vec3 uTint;
 uniform vec3 uEmissive;
-uniform float uGloss;
 uniform float uRough;
 uniform vec3 uLightPos[8];
 uniform vec3 uLightColor[8]; // premultiplied by intensity (and crossing weight, for props)
@@ -293,31 +301,47 @@ vec3 directLight(vec3 P, vec3 N) {
     vec3 L = uLightPos[i] - P;
     float d2 = dot(L, L);
     L *= inversesqrt(d2);
-    sum += uLightColor[i] * (max(dot(N, L), 0.0) / (1.0 + d2));
+    sum += uLightColor[i] * (max(dot(N, L), 0.0) / max(d2, 0.05)); // true inverse-square
   }
   return sum;
 }
 
+// Karis' analytic environment BRDF approximation (mobile split-sum)
+vec3 envBRDF(vec3 F0, float rough, float NoV) {
+  const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+  const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+  vec4 r = rough * c0 + c1;
+  float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+  vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
+  return F0 * AB.x + AB.y;
+}
+
 void main() {
   vec3 P = vWorldPos;
-  vec3 N = normalize(vNormal);
-  if (!gl_FrontFacing) N = -N;
+  vec3 Ng = normalize(vNormal);
+  if (!gl_FrontFacing) Ng = -Ng;
   vec3 V = normalize(cameraPosition - P);
+
+  // tangent-space normal mapping (specular + probe response; the flat lightmap
+  // itself is non-directional for now)
+  vec3 T = normalize(vTan.xyz - Ng * dot(Ng, vTan.xyz));
+  vec3 B = cross(Ng, T) * vTan.w;
+  vec3 nTS = texture(uNrmMap, vUv).xyz * 2.0 - 1.0;
+  vec3 N = normalize(T * nTS.x + B * nTS.y + Ng * nTS.z);
   float NoV = max(dot(N, V), 0.0);
 
   vec3 albedo = texture(uMap, vUv).rgb * uTint;
   if (uDebugMode == 4) albedo = vec3(0.75);
+  vec3 orm = texture(uOrmMap, vUv).rgb;
+  float rough = clamp(orm.g * uRoughFactor, 0.03, 1.0);
+  float metal = clamp(orm.b * uMetalFactor, 0.0, 1.0);
+  float ao = orm.r;
 
   vec3 irr = blendedIrr(uCell, P, N);
   float steps = 0.0;
   vec3 color;
 
-  if (uMode == 1) {                      // chrome
-    vec3 R = reflect(-V, N);
-    vec3 F0 = vec3(0.94, 0.95, 0.96);
-    vec3 F = F0 + (1.0 - F0) * pow(1.0 - NoV, 5.0);
-    color = traceSpec(uCell, P, R, uRough, steps) * F;
-  } else if (uMode == 2) {               // glass: chrome sampled the opposite way
+  if (uMode == 2) {                      // glass: chrome sampled the opposite way
     vec3 R = reflect(-V, N);
     float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
     vec3 refl = traceSpec(uCell, P, R, uRough, steps);
@@ -329,23 +353,26 @@ void main() {
     // cubemap structure (a -R trick here would mirror the lateral ray component
     // and act like an inverting lens). Faint green cast marks the glass.
     color = traceSpec(uCell, P, -V, 0.0, steps) * vec3(0.93, 1.0, 0.96);
-  } else if (uMode == 4) {               // dynamic diffuse: probe-grid irradiance,
-    // crossfaded over ~0.2s at cell handoff
-    vec3 g = probeDiffuse(uCell, P, N);
-    if (uPrevMix > 0.001 && uCellPrev >= 0) {
-      g = mix(g, probeDiffuse(uCellPrev, P, N), uPrevMix);
+  } else {                               // metallic-roughness PBR, diffuse source by mode:
+    // mode 0 (static): path-traced lightmap (shadows/AO/global lights), or the
+    //   analytic + blended-irradiance fallback when the lightmap is off
+    // mode 4 (dynamic): probe-grid irradiance with the 0.2s handoff crossfade
+    vec3 diffuseL;
+    if (uMode == 4) {
+      diffuseL = probeDiffuse(uCell, P, N);
+      if (uPrevMix > 0.001 && uCellPrev >= 0) {
+        diffuseL = mix(diffuseL, probeDiffuse(uCellPrev, P, N), uPrevMix);
+      }
+    } else {
+      diffuseL = uUseLightmap > 0.5 ? texture(uLightmap, vUv2).rgb
+                                    : (directLight(P, N) + irr);
     }
-    color = albedo * g;
-  } else {                               // lit surface: path-traced lightmap when
-    // available (shadows/AO/global lights, no per-cell seams), else the
-    // analytic per-cell lights + blended irradiance fallback
-    vec3 diffuseL = uUseLightmap > 0.5 ? texture(uLightmap, vUv2).rgb
-                                       : (directLight(P, N) + irr);
-    color = albedo * diffuseL + uEmissive;
-    if (uGloss > 0.001 && uBake < 0.5) {
+    vec3 F0 = mix(vec3(0.04), albedo, metal);
+    color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
+    if (uBake < 0.5) {                   // split-sum: prefiltered radiance × env BRDF
       vec3 R = reflect(-V, N);
-      float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
-      color += traceSpec(uCell, P, R, uRough, steps) * F * uGloss;
+      vec3 pre = traceSpec(uCell, P, R, rough, steps);
+      color += pre * envBRDF(F0, rough, NoV) * ao;
     }
   }
 
@@ -355,7 +382,7 @@ void main() {
   }
 
   if (uDebugMode == 1) color = mix(color, hsv2rgb(vec3(fract(float(uCell) * 0.618), 0.6, 0.9)), 0.45);
-  if (uDebugMode == 2) color = (uMode != 0 || uGloss > 0.001) ? heatmap(steps / 5.0) : vec3(dot(color, vec3(0.2)));
+  if (uDebugMode == 2) color = heatmap(steps / 5.0);
   if (uDebugMode == 3) color = irr;
   if (uDebugMode == 5) color = texture(uLightmap, vUv2).rgb;
 
@@ -388,38 +415,45 @@ void main() {
 `;
 }
 
-// progressive gaussian-in-angle prefilter: dst lod k reads lod k-1 of uSrc
+// GGX-prefiltered specular mips (split-sum convention): each mip k targets
+// roughness k/maxLod, importance-sampling GGX around N=V=R with NoL weighting
+// (Karis). Reads a slightly-blurred lower mip as variance reduction (filtered
+// importance sampling).
 export function filterFrag(numCells) {
   return /* glsl */`precision highp float;
-uniform sampler2D uAtlas;   // source atlas (previous lod complete)
+uniform sampler2D uAtlas;   // source atlas (lower lods complete)
 uniform vec2 uTileOrigin;
 uniform float uTileSize;
 uniform int uSrcLod;
 uniform int uCell;
-uniform float uAngle;       // filter cone half-angle, radians
+uniform float uRough;       // target roughness for this mip
 out vec4 fragColor;
 ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
 void main() {
   vec2 f = ((gl_FragCoord.xy - uTileOrigin - BORDER_PX) / uTileSize) * 2.0 - 1.0;
-  vec3 dir = octDecode(f);
-  vec3 up = abs(dir.y) < 0.98 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-  vec3 T = normalize(cross(up, dir));
-  vec3 B = cross(dir, T);
-  float ta = tan(uAngle);
+  vec3 N = octDecode(f);
+  vec3 up = abs(N.y) < 0.98 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  vec3 T = normalize(cross(up, N));
+  vec3 B = cross(N, T);
+  float a = max(uRough * uRough, 2e-3);
   vec3 sum = vec3(0.0);
   float wsum = 0.0;
-  for (int s = 0; s < 16; s++) {
-    float r = sqrt((float(s) + 0.5) / 16.0);
-    float a = float(s) * 2.39996;
-    vec2 o = vec2(cos(a), sin(a)) * r * ta;
-    vec3 sd = normalize(dir + T * o.x + B * o.y);
-    float w = exp(-2.0 * r * r);
-    sum += w * sampleTile(uCell, uSrcLod, octEncode(sd));
-    wsum += w;
+  for (int s = 0; s < 40; s++) {
+    float x1 = (float(s) + 0.5) / 40.0;
+    float x2 = fract(float(s) * 0.618034);
+    float phi = 6.2831853 * x2;
+    float ct = sqrt((1.0 - x1) / (1.0 + (a * a - 1.0) * x1));
+    float st = sqrt(max(1.0 - ct * ct, 0.0));
+    vec3 H = T * (st * cos(phi)) + B * (st * sin(phi)) + N * ct;
+    vec3 L = 2.0 * dot(N, H) * H - N;
+    float NoL = dot(N, L);
+    if (NoL <= 0.0) continue;
+    sum += sampleTile(uCell, uSrcLod, octEncode(L)) * NoL;
+    wsum += NoL;
   }
-  fragColor = vec4(sum / wsum, 1.0);
+  fragColor = vec4(wsum > 0.0 ? sum / wsum : sampleTile(uCell, uSrcLod, octEncode(N)), 1.0);
 }
 `;
 }

@@ -14,6 +14,7 @@ import { Player } from './player.js';
 import { Props } from './props.js';
 import { buildGUI, buildPortalWires } from './debug.js';
 import { fetchManifest, loadHalfTexture, saveBaked } from './bakedio.js';
+import { loadModelProps } from './models.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -28,6 +29,9 @@ const SHOT_POSES = {
   6: { pos: [9.6, 1.7, -7.4], look: [14.5, 0.1, -13.8] },  // L-room: floor across the virtual portal
   7: { pos: [1.2, 1.5, 0.8], look: [1.2, 1.35, -1.2] },    // debug pane held up mid-room
   8: { pos: [13.3, 1.6, -18.7], look: [16.4, 0.6, -23.0] },// darkroom: colored corner lamp
+  9: { pos: [0, 1.7, 19.2], look: [-0.9, 1.2, 23.5] },     // exhibit hall A: PBR models
+  10: { pos: [4.4, 1.7, 22.5], look: [7.5, 1.2, 22.5] },   // cornell box
+  11: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.1, 22.5] }, // exhibit hall B
 };
 
 const overlay = document.getElementById('overlay');
@@ -59,6 +63,14 @@ camera.layers.enable(1); // dynamic props live on layer 1 (hidden from bake capt
 boot();
 
 async function boot() {
+  if (params.has('mark')) { // headless heartbeat: upload progress/errors for CI polling
+    setInterval(() => {
+      fetch(`./baked/status-${SHOT}.txt`, {
+        method: 'PUT',
+        body: `${document.title}\n${overlayMsg.textContent} ${overlaySub.textContent}\n${errEl.textContent}`,
+      }).catch(() => {});
+    }, 10000);
+  }
   // baked artifacts dictate the lightmap packing parameters — uv2 layout must
   // match the distributed lightmap exactly
   const manifest = (!BAKE && params.get('baked') !== '0') ? await fetchManifest() : null;
@@ -91,8 +103,11 @@ async function boot() {
   const paintingTexs = loadPaintingTextures(manager);
   buildStaticMeshes(scene, level, matsys, textures, paintingTexs);
 
+  overlayMsg.textContent = 'Loading models…';
+  const modelProps = await loadModelProps(matsys, manager);
+
   const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
-  const props = new Props(scene, level, matsys);
+  const props = new Props(scene, level, matsys, modelProps);
   const wires = buildPortalWires(scene, level);
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
   buildGUI(matsys, state, wires, () => rebake(), () => relight());
@@ -240,6 +255,11 @@ async function boot() {
     window.__shotReady = true;
     document.title = 'SHOT_READY';
     overlay.classList.add('hidden');
+    if (params.has('mark')) { // self-upload the screenshot: robust headless verification
+      renderer.domElement.toBlob(b => {
+        fetch(`./baked/shot-${SHOT}.png`, { method: 'PUT', body: b }).catch(() => {});
+      }, 'image/png');
+    }
     (function shotLoop() {
       renderer.setRenderTarget(null);
       renderer.render(scene, camera);

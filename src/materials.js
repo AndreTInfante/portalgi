@@ -12,6 +12,10 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   // the shader, so modest blend widths here only affect doorways
   const blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
   blackTex.needsUpdate = true;
+  const flatNrm = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
+  flatNrm.needsUpdate = true;
+  const flatOrm = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  flatOrm.needsUpdate = true; // AO=1, rough=1×factor, metal=1×factor
 
   const globals = {
     uAtlas: { value: atlasTex },
@@ -51,15 +55,18 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
       side: THREE.DoubleSide,
       uniforms: {
         ...globals, // shared identity — do not clone
-        uMap: { value: opts.map || textures.white },
+        uMap: { value: opts.map || textures.white.map },
+        uNrmMap: { value: opts.nrm || flatNrm },
+        uOrmMap: { value: opts.orm || flatOrm },
         uCell: { value: cellId },
         uCellPrev: { value: -1 },
         uPrevMix: { value: 0.0 },
         uMode: { value: opts.mode || 0 },
         uTint: { value: new THREE.Vector3(...(opts.tint || [1, 1, 1])) },
         uEmissive: { value: new THREE.Vector3(...(opts.emissive || [0, 0, 0])) },
-        uGloss: { value: opts.gloss || 0 },
-        uRough: { value: opts.rough !== undefined ? opts.rough : 0.5 },
+        uRough: { value: opts.rough !== undefined ? opts.rough : 0.04 }, // glass/pane only
+        uRoughFactor: { value: opts.roughFactor !== undefined ? opts.roughFactor : 1 },
+        uMetalFactor: { value: opts.metalFactor !== undefined ? opts.metalFactor : 0 },
         uLightPos: { value: lp },
         uLightColor: { value: lc },
         uLightCount: { value: n },
@@ -92,10 +99,13 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
     for (const [key, b] of cell.builders) {
       if (b.geo.empty) continue;
       const o = b.opts || {};
-      const map = o.paintingIndex !== undefined ? paintingTexs[o.paintingIndex]
+      const set = o.paintingIndex !== undefined
+        ? { map: paintingTexs[o.paintingIndex] } // varnished canvas: flat maps, glossy factor
         : textures[o.mapKey || 'white'];
       const mesh = new THREE.Mesh(b.geo.buildGeometry(), matsys.makeMaterial(cell.id, {
-        map, gloss: o.gloss, rough: o.rough, tint: o.tint, emissive: o.emissive,
+        map: set.map, nrm: set.normalMap, orm: set.ormMap,
+        roughFactor: o.paintingIndex !== undefined ? 0.4 : (o.roughFactor !== undefined ? o.roughFactor : 1),
+        tint: o.tint, emissive: o.emissive,
       }));
       mesh.name = `${cell.name}:${key}`;
       group.add(mesh);

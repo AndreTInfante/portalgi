@@ -4,3 +4,7 @@ baked/
 # OS noise
 Thumbs.db
 .DS_Store
+
+# original Poly Haven downloads (huge; the 1k gltf conversions are committed)
+assets/models/*.blend.zip
+

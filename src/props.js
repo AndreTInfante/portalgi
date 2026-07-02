@@ -9,12 +9,12 @@ const GRAVITY = 9.8;
 const REST = 0.35;
 
 const PROP_DEFS = [
-  // mode 4 = dynamic diffuse: light field read from the hull cubemaps, no analytic lights
-  { shape: 'sphere', mode: 4, x: -2.5, z: 1.4, tint: [0.85, 0.83, 0.8] },
-  { shape: 'sphere', mode: 1, x: 0, z: 1.4 },
+  // mode 4 = dynamic PBR prop: probe-grid diffuse + traversal specular
+  { shape: 'sphere', mode: 4, x: -2.5, z: 1.4, tint: [0.85, 0.83, 0.8], roughFactor: 0.8, metalFactor: 0 },
+  { shape: 'sphere', mode: 4, x: 0, z: 1.4, tint: [0.95, 0.96, 0.97], roughFactor: 0.04, metalFactor: 1 }, // chrome
   { shape: 'sphere', mode: 2, x: 2.5, z: 1.4 },
-  { shape: 'cube', mode: 4, x: -2.5, z: -1.4, tint: [0.85, 0.4, 0.3] },
-  { shape: 'cube', mode: 1, x: 0, z: -1.4 },
+  { shape: 'cube', mode: 4, x: -2.5, z: -1.4, tint: [0.85, 0.4, 0.3], roughFactor: 0.8, metalFactor: 0 },
+  { shape: 'cube', mode: 4, x: 0, z: -1.4, tint: [0.95, 0.96, 0.97], roughFactor: 0.04, metalFactor: 1 },
   { shape: 'cube', mode: 2, x: 2.5, z: -1.4 },
   // debug pane: near-clear glass, billboards to the camera while held —
   // hold it over scene geometry to see the hull approximation error directly.
@@ -22,7 +22,7 @@ const PROP_DEFS = [
 ];
 
 export class Props {
-  constructor(scene, level, matsys) {
+  constructor(scene, level, matsys, modelProps = []) {
     this.level = level;
     this.matsys = matsys;
     this.held = null;
@@ -35,19 +35,32 @@ export class Props {
         mode: def.mode,
         tint: def.tint || [1, 1, 1],
         rough: 0.04,
+        roughFactor: def.roughFactor,
+        metalFactor: def.metalFactor,
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.layers.set(1); // excluded from cubemap captures: props are dynamic
       mesh.position.set(def.x, def.y !== undefined ? def.y : 1.0 + r, def.z);
       scene.add(mesh);
       return {
-        mesh, mat, radius: r,
+        mesh, mats: [mat], radius: r, rFloor: r,
         vel: new THREE.Vector3(),
         cell: 0,
         asleep: true,
         debugPane: !!def.debugPane,
       };
     });
+    // imported glTF exhibits — same physics, multiple materials per prop
+    for (const mp of modelProps) {
+      scene.add(mp.root);
+      this.list.push({
+        mesh: mp.root, mats: mp.mats, radius: mp.radius, rFloor: mp.rFloor,
+        vel: new THREE.Vector3(),
+        cell: mp.cell,
+        asleep: true,
+        debugPane: false,
+      });
+    }
   }
 
   update(dt, player) {
@@ -73,9 +86,11 @@ export class Props {
       }
       const pos = p.mesh.position;
       p.cell = findCell(this.level.cells, pos, p.cell);
-      this.matsys.setMaterialCell(p.mat, p.cell); // arms a 0.2s diffuse crossfade on change
-      const u = p.mat.uniforms;
-      if (u.uPrevMix.value > 0) u.uPrevMix.value = Math.max(0, u.uPrevMix.value - dt / 0.2);
+      for (const m of p.mats) {
+        this.matsys.setMaterialCell(m, p.cell); // arms a 0.2s diffuse crossfade on change
+        const u = m.uniforms;
+        if (u.uPrevMix.value > 0) u.uPrevMix.value = Math.max(0, u.uPrevMix.value - dt / 0.2);
+      }
     }
   }
 
@@ -85,8 +100,10 @@ export class Props {
     let onFloor = false;
     for (let idx = 0; idx < cell.planes.length; idx++) {
       const pl = cell.planes[idx];
+      // floor rests at the model's true base height; walls use the sphere bound
+      const rad = pl.n.y > 0.5 ? p.rFloor : p.radius;
       const d = pl.n.dot(pos) + pl.d;
-      if (d >= p.radius) continue;
+      if (d >= rad) continue;
       let passable = false;
       for (const po of cell.portals) {
         if (po.planeIndex !== idx) continue;
@@ -95,7 +112,7 @@ export class Props {
         if (edgeDist > p.radius * 0.5) { passable = true; break; }
       }
       if (passable) continue;
-      pos.addScaledVector(pl.n, p.radius - d);
+      pos.addScaledVector(pl.n, rad - d);
       const vn = pl.n.dot(p.vel);
       if (vn < 0) p.vel.addScaledVector(pl.n, -vn * (1 + REST));
       if (pl.n.y > 0.5) onFloor = true;

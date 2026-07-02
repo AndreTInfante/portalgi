@@ -1,11 +1,11 @@
-// Level authoring + convex hull / portal graph construction + mesh building.
+﻿// Level authoring + convex hull / portal graph construction + mesh building.
 //
 // Conventions:
 //  - y is up. Cell footprints are convex polygons in the xz plane, extruded floorY..ceilY.
 //  - Hull planes: inside test is dot(n, p) + d > 0 (n points into the cell).
 //  - Portals are rectangles lying on a hull plane; each side cell gets its own record.
 //  - Rooms connected by doorways are separated by WALL_T of wall thickness; the door
-//    jamb geometry lives in that gap (outside both hulls — deliberately, to test
+//    jamb geometry lives in that gap (outside both hulls â€” deliberately, to test
 //    robustness of traversal entry from slightly-outside points).
 import * as THREE from 'three';
 import { PAINTINGS } from './textures.js';
@@ -28,7 +28,7 @@ const V = {
 // writes the uv2 attribute.
 export class GeoBuilder {
   constructor() {
-    this.pos = []; this.nrm = []; this.uv = []; this.lc = [];
+    this.pos = []; this.nrm = []; this.uv = []; this.lc = []; this.tan = [];
     this.charts = []; // { w, h (meters), start (vertex index), count }
     this.uv2 = null;  // Float32Array, filled by packLightmapCharts
   }
@@ -48,6 +48,19 @@ export class GeoBuilder {
     this._vert(ch, a, n, ua, la);
     this._vert(ch, b, n, ub, lb);
     this._vert(ch, c, n, uc, lcc);
+    // flat tangent from uv gradients (three normal-map convention, w=handedness)
+    const e1 = V.sub(b, a), e2 = V.sub(c, a);
+    const x1 = ub[0] - ua[0], y1 = ub[1] - ua[1];
+    const x2 = uc[0] - ua[0], y2 = uc[1] - ua[1];
+    const det = x1 * y2 - y1 * x2;
+    let T = [1, 0, 0], w = 1;
+    if (Math.abs(det) > 1e-9) {
+      const r = 1 / det;
+      T = V.norm([(e1[0] * y2 - e2[0] * y1) * r, (e1[1] * y2 - e2[1] * y1) * r, (e1[2] * y2 - e2[2] * y1) * r]);
+      const B = [(e2[0] * x1 - e1[0] * x2) * r, (e2[1] * x1 - e1[1] * x2) * r, (e2[2] * x1 - e1[2] * x2) * r];
+      w = V.dot(V.cross(n, T), B) < 0 ? -1 : 1;
+    }
+    for (let k = 0; k < 3; k++) this.tan.push(T[0], T[1], T[2], w);
   }
   tri(a, b, c, n, ua, ub, uc) {
     const e1 = V.sub(b, a), e2 = V.sub(c, a);
@@ -115,6 +128,7 @@ export class GeoBuilder {
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.pos, 3));
     g.setAttribute('normal', new THREE.Float32BufferAttribute(this.nrm, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
+    g.setAttribute('tang4', new THREE.Float32BufferAttribute(this.tan, 4));
     // custom name: three treats 'uv2' specially per-geometry, which breaks
     // shared-shader compilation between charted meshes and chartless props
     if (this.uv2) g.setAttribute('lmuv', new THREE.BufferAttribute(this.uv2, 2));
@@ -181,33 +195,43 @@ const PX0 = 10.5, PX1 = 12.1, PZ0 = -0.8, PZ1 = 0.8;
 
 const CELL_DEFS = [
   { name: 'gallery', fp: rect(-6, -4, 6, 4), h: 3.6,
-    floor: { key: 'wood', gloss: 0.75, rough: 0.11 } },
+    floor: { key: 'wood', roughFactor: 0.5 } },
   { name: 'corridor', fp: rect(-1.2, 4.3, 1.2, 9.3), h: 3.0,
-    floor: { key: 'concrete', gloss: 0.0, rough: 0.5 } },
+    floor: { key: 'concrete', roughFactor: 1.3 } },
   { name: 'rotunda', fp: decagon(ROT_C[0], ROT_C[1], ROT_R), h: 5.0,
-    floor: { key: 'marble', gloss: 0.7, rough: 0.09 } },
+    floor: { key: 'marble', roughFactor: 0.6 } },
   { name: 'hallN', fp: [[HX0, HZ1], [HX1, HZ1], [PX1, PZ1], [PX0, PZ1]], h: 3.6,
     edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
-    floor: { key: 'concrete', gloss: 0.55, rough: 0.16 } },
+    floor: { key: 'concrete', roughFactor: 0.6 } },
   { name: 'hallE', fp: [[HX1, HZ1], [HX1, HZ0], [PX1, PZ0], [PX1, PZ1]], h: 3.6,
     edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
-    floor: { key: 'concrete', gloss: 0.55, rough: 0.16 } },
+    floor: { key: 'concrete', roughFactor: 0.6 } },
   { name: 'hallS', fp: [[HX1, HZ0], [HX0, HZ0], [PX0, PZ0], [PX1, PZ0]], h: 3.6,
     edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
-    floor: { key: 'concrete', gloss: 0.55, rough: 0.16 } },
+    floor: { key: 'concrete', roughFactor: 0.6 } },
   { name: 'hallW', fp: [[HX0, HZ0], [HX0, HZ1], [PX0, PZ1], [PX0, PZ0]], h: 3.6,
     edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
-    floor: { key: 'concrete', gloss: 0.55, rough: 0.16 } },
+    floor: { key: 'concrete', roughFactor: 0.6 } },
   { name: 'L1', fp: [[6.3, -11.6], [12.3, -11.6], [16.3, -11.6], [16.3, -5.3], [6.3, -5.3]], h: 3.6,
     edges: [{}, { open: true }, {}, {}, {}],
-    floor: { key: 'wood', gloss: 0.25, rough: 0.35 } },
+    floor: { key: 'wood', roughFactor: 1.4 } },
   { name: 'L2', fp: [[12.3, -17.6], [16.3, -17.6], [16.3, -11.6], [12.3, -11.6]], h: 3.6,
     edges: [{}, {}, { open: true }, {}],
-    floor: { key: 'wood', gloss: 0.25, rough: 0.35 } },
-  // lights-off room: one small saturated lamp in a corner — stress test for
+    floor: { key: 'wood', roughFactor: 1.4 } },
+  // lights-off room: one small saturated lamp in a corner â€” stress test for
   // diffuse props and irradiance quality in a strongly colored environment
   { name: 'darkroom', fp: rect(12.3, -23.9, 17.3, -17.9), h: 3.2,
-    floor: { key: 'concrete', gloss: 0.3, rough: 0.35 } },
+    floor: { key: 'concrete', roughFactor: 1.5 } },
+  // exhibit wing north of the rotunda: two halls for the PBR models, plus a
+  // Cornell box cell (red/green side walls, single ceiling area light) as the
+  // canonical end-to-end GI/PBR validator
+  { name: 'hallA', fp: rect(-3.5, 18.46, 3.5, 26.46), h: 4.0,
+    floor: { key: 'wood', roughFactor: 0.55 } },
+  { name: 'cornell', fp: rect(3.8, 19.9, 9.0, 25.1), h: 5.2,
+    edges: [{ mat: 'cornellGreen' }, { mat: 'cornellWhite' }, { mat: 'cornellRed' }, { mat: 'cornellWhite' }],
+    floor: { key: 'cornellWhite', roughFactor: 1 } },
+  { name: 'hallB', fp: rect(-10.5, 19.9, -3.8, 25.1), h: 4.0,
+    floor: { key: 'marble', roughFactor: 0.7 } },
 ];
 
 // doorways: c = point between the two parallel walls; w/h = opening size
@@ -217,6 +241,9 @@ const DOOR_DEFS = [
   { a: 0, b: 6, c: [6.15, 0], w: 1.8, h: 2.6 },
   { a: 5, b: 7, c: [11.3, -5.15], w: 1.6, h: 2.4 },
   { a: 8, b: 9, c: [14.3, -17.75], w: 1.4, h: 2.2 },
+  { a: 2, b: 10, c: [0, 18.31], w: 1.4, h: 2.4 },
+  { a: 10, b: 11, c: [3.65, 22.5], w: 1.3, h: 2.2 },
+  { a: 10, b: 12, c: [-3.65, 22.5], w: 1.4, h: 2.4 },
 ];
 
 // analytic point lights per cell (no shadow maps; per-cell light lists keep light
@@ -231,12 +258,15 @@ const LIGHT_DEFS = [
   [{ p: [8.8, 3.2, 0], c: NEUT, i: 8 }, { p: [13.8, 3.2, 0], c: NEUT, i: 8 }],
   [{ p: [8.8, 3.2, 0], c: NEUT, i: 8 }, { p: [13.8, 3.2, 0], c: NEUT, i: 8 }],
   [{ p: [8.8, 3.2, 0], c: NEUT, i: 8 }, { p: [13.8, 3.2, 0], c: NEUT, i: 8 }],
-  // L1/L2 share an open portal, so they share the union of their lights —
+  // L1/L2 share an open portal, so they share the union of their lights â€”
   // per-cell direct lighting must be continuous across virtual portals.
   [{ p: [8.5, 3.2, -8.5], c: WARM, i: 7 }, { p: [13.5, 3.2, -8.5], c: WARM, i: 7 }, { p: [14.3, 3.2, -14.5], c: WARM, i: 7 }],
   [{ p: [8.5, 3.2, -8.5], c: WARM, i: 7 }, { p: [13.5, 3.2, -8.5], c: WARM, i: 7 }, { p: [14.3, 3.2, -14.5], c: WARM, i: 7 }],
   // darkroom: only the corner lamp
   [{ p: [16.6, 0.6, -23.2], c: [1.0, 0.22, 0.05], i: 6 }],
+  [{ p: [0, 3.6, 20.6], c: NEUT, i: 8 }, { p: [0, 3.6, 24.3], c: NEUT, i: 8 }],
+  [], // cornell: lit purely by its ceiling area light (the point of the test)
+  [{ p: [-7.15, 3.6, 20.9], c: NEUT, i: 8 }, { p: [-7.15, 3.6, 24.1], c: NEUT, i: 8 }],
 ];
 
 const PANEL_DEFS = [
@@ -253,6 +283,11 @@ const PANEL_DEFS = [
   { cell: 8, x: 14.3, z: -14.5, sx: 1.5, sz: 1.0, i: 5 },
   // darkroom floor lamp: small, low, strongly colored (drives all GI in there)
   { cell: 9, x: 16.6, z: -23.2, sx: 0.3, sz: 0.3, y: 0.55, i: 9, color: [1.0, 0.22, 0.05] },
+  { cell: 10, x: 0, z: 20.6, sx: 1.6, sz: 1.2, i: 5 },
+  { cell: 10, x: 0, z: 24.3, sx: 1.6, sz: 1.2, i: 5 },
+  { cell: 11, x: 6.4, z: 22.5, sx: 1.4, sz: 1.4, i: 110 }, // cornell area light
+  { cell: 12, x: -7.15, z: 20.9, sx: 1.6, sz: 1.2, i: 5 },
+  { cell: 12, x: -7.15, z: 24.1, sx: 1.6, sz: 1.2, i: 5 },
 ];
 
 // paintings: index into PAINTINGS, wall-mounted (pos on wall surface, normal into room)
@@ -286,6 +321,9 @@ const BENCH_DEFS = [
 const PEDESTAL_DEFS = [
   { cell: 0, x: -2.5, z: 1.4 }, { cell: 0, x: 0, z: 1.4 }, { cell: 0, x: 2.5, z: 1.4 },
   { cell: 0, x: -2.5, z: -1.4 }, { cell: 0, x: 0, z: -1.4 }, { cell: 0, x: 2.5, z: -1.4 },
+  { cell: 10, x: -1.8, z: 21 }, { cell: 10, x: 1.8, z: 21 },
+  { cell: 10, x: -1.8, z: 24 }, { cell: 10, x: 1.8, z: 24 },
+  { cell: 12, x: -8.5, z: 22.5 }, { cell: 12, x: -5.8, z: 21 }, { cell: 12, x: -5.8, z: 24 },
 ];
 
 // rotunda paintings get placed on decagon edges by index
@@ -338,7 +376,7 @@ export function buildLevel() {
     const probeGrid = {
       min: [minX, floorY, minZ],
       size: [maxX - minX, ceilY - floorY, maxZ - minZ],
-      dims: [dimFor(maxX - minX), 2, dimFor(maxZ - minZ)], // ≤ 4·2·4 = 32 probes
+      dims: [dimFor(maxX - minX), 2, dimFor(maxZ - minZ)], // â‰¤ 4Â·2Â·4 = 32 probes
     };
     return {
       id, name: def.name, fp, floorY, ceilY, planes, edges,
@@ -374,10 +412,10 @@ export function buildLevel() {
       { n: up.clone().negate(), d: y1 },                          // top
     ];
     // Classify each edge for specular blending. SILHOUETTE edge: real geometry
-    // beyond it breaks the portal plane (pillar corner, doorframe) — blend for
+    // beyond it breaks the portal plane (pillar corner, doorframe) â€” blend for
     // cone-footprint AA of the partition. CONTINUATION edge: the neighbor has a
     // coplanar plane continuing the local surface across the edge (floor under
-    // a cut, the L-rooms' shared east wall) — never blend; recursion is already
+    // a cut, the L-rooms' shared east wall) â€” never blend; recursion is already
     // seamless and blending would ghost far-behind-plane content.
     const cornerPairs = [[0, 3], [1, 2], [0, 1], [2, 3]]; // matches edgePlanes order
     let blendMask = 0;
@@ -418,7 +456,7 @@ export function buildLevel() {
   // Doored hull planes are pulled to the shared wall MID-plane so both sides'
   // portals are the same rectangle on the same plane and the two hulls tile
   // space with no dead gap in the doorway (cell flips happen exactly at the
-  // shared plane — no hull-clamp jumps for objects mid-crossing). The visible
+  // shared plane â€” no hull-clamp jumps for objects mid-crossing). The visible
   // wall meshes stay at the room surface; those walls' reflections pick up a
   // WALL_T/2 parallax error, which is classic-PCCM scale and acceptable.
   const doors = DOOR_DEFS.map(def => {
@@ -434,7 +472,7 @@ export function buildLevel() {
         edge.doorShifted = true;
       }
       const portal = makePortal(cell, edge, otherId, s0, s1, cell.floorY, cell.floorY + def.h, false, WALL_T / 2);
-      // rim rect at the visible wall surface (unshifted) — used for jamb geometry
+      // rim rect at the visible wall surface (unshifted) â€” used for jamb geometry
       const u = new THREE.Vector3(edge.b[0] - edge.a[0], 0, edge.b[1] - edge.a[1]).normalize();
       const R = (ss, y) => new THREE.Vector3(edge.a[0] + u.x * ss, y, edge.a[1] + u.z * ss);
       const rim = [R(s0, cell.floorY), R(s1, cell.floorY), R(s1, cell.floorY + def.h), R(s0, cell.floorY + def.h)];
@@ -473,7 +511,7 @@ export function buildLevel() {
   // ---- meshes: floors, ceilings, walls (with holes)
   for (const cell of cells) {
     const fb = getBuilder(cell, 'floor',
-      { mapKey: cell.floor.key, gloss: cell.floor.gloss, rough: cell.floor.rough });
+      { mapKey: cell.floor.key, roughFactor: cell.floor.roughFactor });
     const cb = getBuilder(cell, 'plasterPlain', { mapKey: 'plasterPlain' });
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
     const floorPts = cell.fp.map(p => [p[0], cell.floorY, p[1]]);

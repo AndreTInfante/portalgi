@@ -103,7 +103,7 @@ void main() {
     float ndl = dot(N, normalize(L));
     if (ndl <= 0.0) continue;
     if (occluded(Po, uLightPos[i])) continue;
-    direct += uLightCol[i] * (ndl / (1.0 + d2));
+    direct += uLightCol[i] * (ndl / max(d2, 0.05)); // true inverse-square
   }
   for (int i = 0; i < 12; i++) {
     if (i >= uNPanels) break;
@@ -121,7 +121,7 @@ void main() {
       float cosL = abs(Ln.y); // horizontal emitters
       if (cosS <= 0.0) continue;
       if (occluded(Po, rp)) continue;
-      acc += Le * (cosS * cosL * area / (3.14159 * (0.25 + d2)));
+      acc += Le * (cosS * cosL * area / (3.14159 * max(d2, 0.25)));
     }
     direct += acc / float(${panelSamples});
   }
@@ -197,7 +197,7 @@ export class Lightmapper {
         if (o.emissive && (o.emissive[0] > 0 || o.emissive[1] > 0 || o.emissive[2] > 0)) continue;
         let a = [0.5, 0.5, 0.5];
         if (o.paintingIndex !== undefined) a = [0.35, 0.3, 0.28];
-        else if (o.mapKey && textures[o.mapKey] && textures[o.mapKey].userData.avg) a = textures[o.mapKey].userData.avg;
+        else if (o.mapKey && textures[o.mapKey]) a = textures[o.mapKey].map.userData.avg;
         const tint = o.tint || [1, 1, 1];
         a = [a[0] * tint[0], a[1] * tint[1], a[2] * tint[2]];
         const e = o.emissive || [0, 0, 0];

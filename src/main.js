@@ -163,6 +163,12 @@ async function boot() {
   const occluders = matsys.occ ? new OccluderSystem(matsys.occ, props) : null;
   if (occluders) {
     const walnutAvg = textures.walnut.map.userData.avg;
+    // the walnut material of a cell = the surfaces its furniture pieces
+    // approximate (own-group skip); floors/walls carry no group
+    const walnutMat = cid => {
+      const mm = staticGroup.children.find(m => m.userData.cell === cid && m.name.endsWith(':walnut'));
+      return mm ? mm.material : null;
+    };
     for (const cc of level.colliders) {
       if (cc.h === undefined) continue; // statics register from their meshes below
       const cellId = findCell(level.cells, new THREE.Vector3(cc.x, 0.5, cc.z));
@@ -176,14 +182,15 @@ async function boot() {
           [P(-(cc.rx - rs), cc.h * 0.84, 0), P(cc.rx - rs, cc.h * 0.84, 0), rs],
           [P(-cc.rx * 0.86, 0.16, 0), P(-cc.rx * 0.86, cc.h * 0.6, 0), cc.rz * 0.8],
           [P(cc.rx * 0.86, 0.16, 0), P(cc.rx * 0.86, cc.h * 0.6, 0), cc.rz * 0.8],
-        ], cellId, walnutAvg);
+        ], cellId, walnutAvg, walnutMat(cellId));
       } else {
         // pedestal: a single stretched vertical capsule (tight - the blob
-        // overlays the pedestal's own baked reflection, fat reads as fringe)
+        // overlays the pedestal's own baked reflection, fat reads as fringe;
+        // top ends at h so props resting on it start outside the capsule)
         const r = cc.rx;
         occluders.addPiece([
-          [[cc.x, r * 0.9, cc.z], [cc.x, cc.h - r * 0.5, cc.z], r],
-        ], cellId, walnutAvg);
+          [[cc.x, r * 0.9, cc.z], [cc.x, cc.h - r, cc.z], r],
+        ], cellId, walnutAvg, walnutMat(cellId));
       }
     }
     for (const mm of staticModelMeshes) {

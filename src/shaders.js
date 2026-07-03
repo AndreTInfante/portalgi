@@ -78,7 +78,8 @@ uniform float uOccHops;    // LOD: occluders evaluated for the first N cells of 
 uniform float uOccDensity;
 uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
-uniform int uOccSelf;      // this prop's occluder id: rays start inside it - skip
+uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shades:
+                           // an occluder never occludes the surfaces it approximates
 
 // transmittance through this cell's occluders (CAPSULES: two vec4 slots,
 // (a,r)+(b,-); a==b is a sphere) along ray segment [0, tMax].
@@ -96,7 +97,7 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
   int cnt = int(uOccCell[cell].y);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
-    if (int(uOccMeta[first + pi].z) == uOccSelf) continue; // self-occlusion skip
+    if (int(uOccMeta[first + pi].z) == uOccSelf) continue; // own-group skip
     vec4 b = uOccBound[first + pi];
     vec3 oc = b.xyz - o;
     float tc = clamp(dot(oc, d), 0.0, tMax);
@@ -115,14 +116,6 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       float cc = dot(u, u);
       float dw = dot(d, w0);
       float e = dot(u, w0);
-      // surfaces inside a capsule ARE that occluder (bench seat over its own
-      // seat capsule, prop resting on a pedestal capsule): fade occlusion in
-      // smoothly just outside the capsule surface instead of a binary skip -
-      // contact regions still darken, and there is no crisp onset edge
-      float s0 = cc > 1e-6 ? clamp(e / cc, 0.0, 1.0) : 0.0;
-      vec3 p0 = w0 - u * s0;
-      float selfF = smoothstep(0.81, 1.21, dot(p0, p0) / (A.w * A.w));
-      if (selfF <= 0.0) continue;
       float sg = cc > 1e-6 ? clamp((e - dw * bb) / max(cc - bb * bb, 1e-5), 0.0, 1.0) : 0.0;
       float ts = clamp(sg * bb - dw, 0.0, tMax);
       if (cc > 1e-6) sg = clamp((e + ts * bb) / cc, 0.0, 1.0);
@@ -131,7 +124,7 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       float q = 1.0 - dot(ps, ps) / (rw * rw);    // 0 at the widened silhouette
       if (q <= 0.0) continue;
       float cover = (A.w * A.w) / (rw * rw);      // blur spreads, peak dims
-      float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0) * selfF;
+      float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0);
       trans -= taken;
       col += taken * uOccColor[first + pi].rgb;
     }

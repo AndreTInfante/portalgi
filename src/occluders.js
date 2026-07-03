@@ -124,6 +124,7 @@ export class OccluderSystem {
     this.occ = occ;
     this.entries = [];
     this.sv = new THREE.Vector3();
+    this._nextGroup = 1;
     for (const p of props.list) {
       if (p.debugPane) continue; // clear glass occludes nothing
       const spheres = fitCapsules(p.mesh);
@@ -135,20 +136,31 @@ export class OccluderSystem {
           p.mats[0].uniforms.uMap.value && p.mats[0].uniforms.uMap.value.userData.avg;
         const col = avg && t ? [avg[0] * t.x, avg[1] * t.y, avg[2] * t.z]
           : t ? [t.x * 0.5, t.y * 0.5, t.z * 0.5] : [0.35, 0.33, 0.3];
-        const id = this.entries.length;
+        // occlusion group: "an occluder never occludes the surfaces it
+        // approximates". All of a prop's materials share one group
+        const group = this._nextGroup++;
+        for (const m of p.mats) {
+          if (m.uniforms && m.uniforms.uOccSelf) m.uniforms.uOccSelf.value = group;
+        }
         this.entries.push({
-          p, id, spheres, col,
+          p, group, spheres, col,
           // two vec4 slots per capsule: (a, r) and (b, spare)
           world: spheres.map(() => [new THREE.Vector4(), new THREE.Vector4()]),
         });
-        // a prop's own reflection rays start inside its occluder set: tag its
-        // materials so the shader skips self (uOccMeta.z carries the id)
-        for (const m of p.mats) {
-          if (m.uniforms && m.uniforms.uOccSelf) m.uniforms.uOccSelf.value = id;
-        }
       }
     }
     this.statics = []; // furniture/statues: world-space, packed as-is
+  }
+
+  // group id for a material (assigning one on first sight); entries carrying
+  // this group are skipped for pixels shaded by this material. Shared
+  // materials (all walnut furniture in a cell) share one group - a bench
+  // seat skips every walnut piece, which costs only furniture-on-furniture
+  // reflections. Materials without groups (floors, walls) skip nothing.
+  _groupOf(mat) {
+    if (!mat || !mat.uniforms || !mat.uniforms.uOccSelf) return 0;
+    if (mat.uniforms.uOccSelf.value < 1) mat.uniforms.uOccSelf.value = this._nextGroup++;
+    return mat.uniforms.uOccSelf.value;
   }
 
   // static exhibit mesh (world-space geometry): vertex-band fit
@@ -156,7 +168,7 @@ export class OccluderSystem {
     const caps = fitCapsulesVerts(mesh);
     if (!caps.length) return;
     this.statics.push({
-      cell: cellId, col,
+      cell: cellId, col, group: this._groupOf(mesh.material),
       world: caps.map(s => [
         new THREE.Vector4(s.a.x, s.a.y, s.a.z, s.r),
         new THREE.Vector4(s.b.x, s.b.y, s.b.z, 0),
@@ -165,10 +177,11 @@ export class OccluderSystem {
   }
 
   // authored furniture piece: a list of world-space capsules [a, b, r] that
-  // stays ONE entry (tight bounding sphere keeps the reject test effective)
-  addPiece(capsules, cellId, col) {
+  // stays ONE entry (tight bounding sphere keeps the reject test effective);
+  // mat = the material whose surfaces this piece approximates
+  addPiece(capsules, cellId, col, mat) {
     this.statics.push({
-      cell: cellId, col,
+      cell: cellId, col, group: this._groupOf(mat),
       world: capsules.slice(0, MAX_SPH_PER_PROP).map(([a, b, r]) => [
         new THREE.Vector4(a[0], a[1], a[2], r),
         new THREE.Vector4(b[0], b[1], b[2], 0),
@@ -196,13 +209,10 @@ export class OccluderSystem {
         this.sv.copy(s.b).applyMatrix4(mw);
         e.world[i][1].set(this.sv.x, this.sv.y, this.sv.z, 0);
       }
-      push(e.p.cell, { world: e.world, col: e.col, id: e.id });
+      push(e.p.cell, { world: e.world, col: e.col, group: e.group });
     }
-    // statics: ids from 1000 so no prop material's uOccSelf (or the static
-    // materials' -1 default) can ever match one
-    for (let i = 0; i < this.statics.length; i++) {
-      const s = this.statics[i];
-      push(s.cell, { world: s.world, col: s.col, id: 1000 + i });
+    for (const s of this.statics) {
+      push(s.cell, { world: s.world, col: s.col, group: s.group });
     }
     let pi = 0, si = 0;
     for (let c = 0; c < occ.numCells; c++) {
@@ -227,7 +237,7 @@ export class OccluderSystem {
               Math.hypot(wb.x - cx, wb.y - cy, wb.z - cz) + wa.w);
           }
           occ.bound[pi].value.set(cx, cy, cz, rb);
-          occ.meta[pi].value.set(si, n, e.id, 0);
+          occ.meta[pi].value.set(si, n, e.group, 0);
           occ.color[pi].value.set(e.col[0], e.col[1], e.col[2], 0);
           for (const [wa, wb] of e.world) {
             occ.sph[si++].value.copy(wa);

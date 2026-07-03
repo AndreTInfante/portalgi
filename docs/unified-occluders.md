@@ -163,6 +163,16 @@ auto-exclude anything carrying an occluder imposter from the CAPTURES
 (statics are currently represented twice - smeared in the atlas AND as an
 occluder blob).
 
+Self-occlusion is IDENTITY, not geometry (learned the hard way): a flat
+object's capsule must bulge past it, so nearby foreign surfaces (the floor
+under a pan) are GENUINELY inside it - no interior-distance margin can
+separate "floor in the bulge" (must occlude: contact shadow) from "bench
+seat in its own capsule" (must not). Occlusion GROUPS solve it exactly:
+every entry records the group of the material(s) it approximates (one group
+per prop; shared per cell-builder material for furniture; per statue mesh),
+a pixel skips only its own group, and floors/walls carry no group so they
+are occluded by everything. Cheaper than the geometric test it replaced.
+
 Shipped since the plan was written: capsule primitive (sphere swept along a
 segment - two vec4 slots, a==b degenerates to a sphere; rotation is just
 transforming two endpoints); tinted re-emission (blocked light re-emits

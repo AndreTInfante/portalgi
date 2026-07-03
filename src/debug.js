@@ -99,14 +99,12 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
   }
   {
     const fo = gui.addFolder('Occluders');
-    const op = {
-      get on() { return g.uOccOn.value > 0.5; }, set on(v) { g.uOccOn.value = v ? 1 : 0; },
+    const op = { // enable lives in the Display 'prop reflections' dropdown
       get density() { return g.uOccDensity.value; }, set density(v) { g.uOccDensity.value = v; },
       get widen() { return g.uOccWiden.value; }, set widen(v) { g.uOccWiden.value = v; },
       get hops() { return g.uOccHops.value; }, set hops(v) { g.uOccHops.value = v; },
       get tint() { return g.uOccTint.value; }, set tint(v) { g.uOccTint.value = v; },
     };
-    fo.add(op, 'on').name('analytic occluders');
     fo.add(op, 'density', 0, 3, 0.01);
     fo.add(op, 'widen', 0, 2, 0.01).name('cone / rough-m (fade)');
     fo.add(op, 'tint', 0, 1, 0.01).name('diffuse re-emit');

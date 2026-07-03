@@ -115,11 +115,13 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       float cc = dot(u, u);
       float dw = dot(d, w0);
       float e = dot(u, w0);
-      // a surface point inside a capsule IS that occluder (bench seat over
-      // its own seat capsule, prop resting on a pedestal capsule): skip it
+      // a surface point DEEP inside a capsule IS that occluder (bench seat
+      // over its own seat capsule, prop resting on a pedestal capsule): skip.
+      // Strictly interior (0.9r) - a resting sphere's contact ring sits at
+      // dist >= r, and a generous margin exempted it (bright halo bug)
       float s0 = cc > 1e-6 ? clamp(e / cc, 0.0, 1.0) : 0.0;
       vec3 p0 = w0 - u * s0;
-      if (dot(p0, p0) < A.w * A.w * 1.1) continue;
+      if (dot(p0, p0) < A.w * A.w * 0.81) continue;
       float sg = cc > 1e-6 ? clamp((e - dw * bb) / max(cc - bb * bb, 1e-5), 0.0, 1.0) : 0.0;
       float ts = clamp(sg * bb - dw, 0.0, tMax);
       if (cc > 1e-6) sg = clamp((e + ts * bb) / cc, 0.0, 1.0);

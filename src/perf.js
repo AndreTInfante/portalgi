@@ -134,11 +134,21 @@ export class PerfHarness {
     if (now - s.t0 < MEASURE_MS) return;
     const pct = s.frames ? (100 * s.drops / s.frames) : 0;
     s.results.push([s.level, pct]);
-    if (pct > this.threshold || s.level >= this.maxLevel) {
+    if (pct > this.threshold) s.hi = s.level; else s.lo = s.level;
+    // climb by full steps until the first tip, then bisect (lo, hi) down to
+    // ~5u resolution (~0.25ms) - step quantization otherwise puts +-1ms error
+    // bars on A/B differences
+    let next = null;
+    if (s.hi === undefined) {
+      if (s.level < this.maxLevel) next = s.level + this.step;
+    } else if (s.lo !== undefined && s.hi - s.lo > Math.max(this.step / 4, 5)) {
+      next = Math.round((s.lo + s.hi) / 2);
+    }
+    if (next === null) {
       this._finish();
     } else {
-      s.level += this.step;
-      this.setBurn(s.level);
+      s.level = next;
+      this.setBurn(next);
       s.phase = 'settle';
       s.t0 = now;
     }
@@ -146,10 +156,10 @@ export class PerfHarness {
 
   _finish() {
     const s = this.sweep;
-    let sustainable = 0;
-    for (const [lvl, pct] of s.results) if (pct <= this.threshold) sustainable = lvl;
+    const sustainable = s.lo !== undefined ? s.lo : 0;
+    const tip = s.hi !== undefined ? `${s.hi}u` : `>${this.maxLevel}u`;
     const detail = s.results.map(([l, p]) => `${l}u:${p.toFixed(1)}%`).join(' ');
-    this.lastReport = `[${s.config}] sustainable=${sustainable}u tip=${s.level}u | ${detail}`;
+    this.lastReport = `[${s.config}] sustainable=${sustainable}u tip=${tip} | ${detail}`;
     this._hud = `DONE sust=${sustainable}u`;
     console.log('perf sweep:', this.lastReport);
     try {

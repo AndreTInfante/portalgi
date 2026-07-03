@@ -97,6 +97,36 @@ On-device results display on an in-headset HUD label (+ localStorage history);
 the deployed Pages origin cannot PUT to the dev server, so numbers are read
 from the HUD. (Optional later: self-signed-cert LAN server for auto-upload.)
 
+## First measurements (Quest 3, 2026-07-03, in-headset sweeps)
+
+Sustainable burn level (step 20u; before bisection landed, so +-20u):
+
+| config                  | view                 | 90Hz | 72Hz |
+|-------------------------|----------------------|------|------|
+| steps3 + smudges        | cornell/mirror room  | 100u | 160u |
+| steps0 + smudges        | cornell/mirror room  | 100u | 140u |
+| steps0, no smudges      | cornell/mirror room  | 100u | 180u |
+| steps3 + smudges        | pillar hall (worst)  |  40u | 100u |
+| steps0 + smudges        | pillar hall (worst)  |  80u | 100u |
+| steps0, no smudges      | pillar hall (worst)  | 120u | 160u |
+
+Calibration: the two steps3 rate pairs both give 60u per 2.78ms
+-> ~0.046 ms/unit (~21 u/ms). Same-rate deltas at the pillar-hall worst view,
+90Hz:
+
+- full portal GI (traversal + smudges) vs bare: 80u  ~= 4 ms
+- traversal depth (steps 3 vs 0):               40u  ~= 2 ms (Cornell: ~0 -
+  cost lives where glossy fill crosses portals)
+- planar smudges:                               40u  ~= 2 ms (!) - grazing
+  views rasterized the full mirrored blobs; footprint depth clamp added in
+  response, re-measure
+
+Caveats learned: Cornell pins at 100u across all configs at 90Hz (that view
+appears pacing-bound, not GPU-bound - use pillar hall or 72Hz for A/Bs);
+72<->90 calibration is fuzzed by GPU DVFS, so same-rate deltas are the gold
+standard; step quantization put +-1ms error bars on differences (bisection
+refinement added in response, resolution ~5u ~= 0.25ms).
+
 ## Rollout
 
 1. Perf harness (this session): frame stats, burn pass, auto-sweep, HUD, GUI.

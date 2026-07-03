@@ -399,9 +399,16 @@ export class ReflectionSystem {
 
       // bounding ellipsoid of the blob, in the cone frame
       const rr = fit.round.y;
+      // fade scales with the blob's own depth: a squat bowl's reflection dies
+      // within centimeters, a bench's within its tuned look
+      const fade = Math.max(
+        (P.fadeBase + P.fadeRough * (1 - info.roughF)) * (fit.h + rr), 0.02);
       const bx = Math.max(fit.a0.x, a1.x + Math.abs(fit.c1.x)) * 1.1;
       const bz = Math.max(fit.a0.y, a1.y + Math.abs(fit.c1.y)) * 1.1;
-      const by = (fit.h + rr) * 0.55;
+      // alpha = exp(-(d/fade)^2) is ~0.02 by two fade lengths: cap the blob
+      // depth there, or grazing views rasterize (and chord-march) acres of
+      // floor whose pixels never survive blending
+      const by = Math.min(fit.h + rr, fade * 2) * 0.55;
       e.mat.uniforms.uBC.value.set(fit.c1.x * 0.5, by, fit.c1.y * 0.5);
       e.mat.uniforms.uBR.value.set(bx, by * 1.15, bz);
 
@@ -426,10 +433,7 @@ export class ReflectionSystem {
       e.mat.uniforms.uFloorOrm.value = fs.ormMap;
       e.mat.uniforms.uFloorRoughF.value = info.roughF;
       e.mat.uniforms.uBounds.value.copy(info.bounds);
-      // fade scales with the blob's own depth: a squat bowl's reflection dies
-      // within centimeters, a bench's within its tuned look
-      e.mat.uniforms.uFade.value = Math.max(
-        (P.fadeBase + P.fadeRough * (1 - info.roughF)) * (fit.h + fit.round.y), 0.02);
+      e.mat.uniforms.uFade.value = fade;
     }
   }
 }

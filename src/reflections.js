@@ -20,28 +20,31 @@ import { findCell } from './level.js';
 
 const REFLECTIVE_MAX_ROUGHFACTOR = 0.75; // floors glossier than this get smudges
 
+// user-tuned 2026-07 (in-app Smudges dashboard, dumped values)
 const DEFAULTS = {
-  opacity: 1.0,       // base alpha
-  feather: 0.3,       // silhouette softness: smoothstep width on the implicit
-  fadeBase: 0.25,     // gaussian depth scale (m) on a mirror-perfect floor...
-  fadeRough: 0.3,     // ...plus this much extra on a rough one
-  fresnelMin: 0.3,    // reflectance floor at normal incidence (rough spec)
-  breakBase: 1.35,    // alpha = clamp(breakBase - floorRoughness*breakSlope)
+  opacity: 0.85,      // base alpha
+  feather: 1.26,      // silhouette softness: smoothstep width on the implicit
+  fadeBase: 0.1,      // gaussian depth scale, FRACTION of blob depth, on a
+  fadeRough: 0.2,     // rough floor... plus this much extra on a glossy one
+                      // (fractional: short objects cast SHORT contact smudges)
+  fresnelMin: 0.16,   // reflectance floor at normal incidence (rough spec)
+  breakBase: 0.75,    // alpha = clamp(breakBase - floorRoughness*breakSlope)
   breakSlope: 1.6,
-  widenBase: 0.15,    // deep-ellipse widening, fraction of cone height...
+  widenBase: 0.05,    // deep-ellipse widening, fraction of cone height...
   widenRough: 0.5,    // ...plus this much scaled by floor roughness
   liftFade: 0.3,      // e-folding height (m) for objects lifted off the floor
-  tintGain: 1.0,      // multiplier on every smudge color
+  tintGain: 0.14,     // multiplier on smudge colors: near-black dark shapes
+                      // read best (colored reflections need albedo averages)
   // fit-time (refit() to apply)
-  fitContactBand: 0.15, // bottom fraction of object height = contact footprint
-  fitWidestLo: 0.2,     // height band sampled for the widest ellipse
+  fitContactBand: 0.6,  // bottom fraction of object height = contact footprint
+  fitWidestLo: 0.15,    // height band sampled for the widest ellipse
   fitWidestHi: 0.7,
-  fitHFrac: 0.45,       // widest-plane height as fraction of object height
-  fitAxisScale: 0.6,    // half-axis = band extent * this (0.5 = exact)
+  fitHFrac: 0.67,       // widest-plane height as fraction of object height
+  fitAxisScale: 0.67,   // half-axis = band extent * this (0.5 = exact)
   // authored contacts (benches/pedestals/pillar; refit() to apply)
-  manualScale: 1.0,     // contact radius = collider r * this
-  manualTaper: 1.25,    // widest = contact * this
-  manualH: 0.45,        // plane distance (m)
+  manualScale: 0.94,    // contact half-axes = collider footprint * this
+  manualTaper: 1.0,     // widest = contact * this
+  manualH: 1.2,         // plane distance (m)
 };
 
 const VERT = /* glsl */`
@@ -248,12 +251,13 @@ export class ReflectionSystem {
       fitContactCone(mesh, this.params), true);
   }
 
-  _manualFit(r) {
+  _manualFit(spec) {
     const P = this.params;
-    const a = r * P.manualScale;
+    const rx = (spec.rx !== undefined ? spec.rx : spec.r) * P.manualScale;
+    const rz = (spec.rz !== undefined ? spec.rz : spec.r) * P.manualScale;
     return {
-      a0: new THREE.Vector2(a, a),
-      a1: new THREE.Vector2(a * P.manualTaper, a * P.manualTaper),
+      a0: new THREE.Vector2(rx, rz),
+      a1: new THREE.Vector2(rx * P.manualTaper, rz * P.manualTaper),
       c1: new THREE.Vector2(0, 0),
       h: P.manualH,
       round: new THREE.Vector2(0.02, Math.max(0.25 * P.manualH, 0.05)),
@@ -261,13 +265,14 @@ export class ReflectionSystem {
   }
 
   // authored contact smudge (benches, pedestals, the pillar) - always on.
-  // Equal-center cone: contact ellipse r at the plane, widening with depth.
-  addContact(x, z, r, cellIds) {
+  // spec: {r} round, or {rx, rz, rot} for a rotated elliptical footprint.
+  addContact(x, z, spec, cellIds) {
+    if (typeof spec === 'number') spec = { r: spec };
     const cells = cellIds || [findCell(this.level.cells, new THREE.Vector3(x, 0.5, z))];
     for (const cid of cells) {
       const e = this._makeEntry({ mesh: null, cell: cid }, [0.14, 0.13, 0.12],
-        { c0: new THREE.Vector3(x, 0, z), ...this._manualFit(r) }, false);
-      if (e) { e.manual = true; e.manualR = r; }
+        { c0: new THREE.Vector3(x, 0, z), ...this._manualFit(spec) }, false);
+      if (e) { e.manual = true; e.manualSpec = spec; e.rot = spec.rot || 0; }
     }
   }
 
@@ -276,7 +281,7 @@ export class ReflectionSystem {
   refit() {
     for (const e of this.entries) {
       if (e.manual) {
-        Object.assign(e.fit, this._manualFit(e.manualR));
+        Object.assign(e.fit, this._manualFit(e.manualSpec));
       } else {
         const f = fitContactCone(e.prop.mesh, this.params);
         if (f) e.fit = f;
@@ -369,12 +374,14 @@ export class ReflectionSystem {
       e.mesh.visible = show;
       if (!show) continue;
 
-      // cone frame: origin at the contact ellipse center, y up into the blob;
+      // cone frame: origin at the contact ellipse center, y up into the blob
+      // (manual entries can be yaw-rotated for elliptical footprints);
       // S_MIRROR flips it below the floor in world space
-      e.frame.makeTranslation(fit.c0.x, fit.c0.y, fit.c0.z);
-      if (!e.manual) e.frame.premultiply(p.mesh.matrixWorld);
-      e.frame.premultiply(S_MIRROR);
-      e.mat.uniforms.uInvW.value.copy(e.frame).invert();
+      if (e.manual) {
+        e.frame.makeRotationY(e.rot).setPosition(fit.c0);
+      } else {
+        e.frame.makeTranslation(fit.c0.x, fit.c0.y, fit.c0.z).premultiply(p.mesh.matrixWorld);
+      }
       e.mat.uniforms.uLift.value = lift;
       e.mat.uniforms.uColor.value.copy(e.baseCol).multiplyScalar(P.tintGain);
 
@@ -392,18 +399,24 @@ export class ReflectionSystem {
       e.mat.uniforms.uBC.value.set(fit.c1.x * 0.5, by, fit.c1.y * 0.5);
       e.mat.uniforms.uBR.value.set(bx, by * 1.15, bz);
 
-      // raster footprint mesh: the bounding ellipsoid, through the same frame
+      // raster footprint mesh: the bounding ellipsoid, in frame coords,
+      // through the same frame + mirror
       e.local.compose(
-        e.sv.set(fit.c0.x + fit.c1.x * 0.5, fit.c0.y + by, fit.c0.z + fit.c1.y * 0.5),
-        IDENT_Q, e.sv2.set(bx, by * 1.15, bz));
-      if (!e.manual) e.local.premultiply(p.mesh.matrixWorld);
-      e.mesh.matrix.copy(e.local).premultiply(S_MIRROR);
+        e.sv.set(fit.c1.x * 0.5, by, fit.c1.y * 0.5),
+        IDENT_Q, e.sv2.set(bx, by * 1.15, bz))
+        .premultiply(e.frame).premultiply(S_MIRROR);
+      e.mesh.matrix.copy(e.local);
+      e.frame.premultiply(S_MIRROR);
+      e.mat.uniforms.uInvW.value.copy(e.frame).invert();
 
       const fs = floorSets[p.cell];
       e.mat.uniforms.uFloorOrm.value = fs.ormMap;
       e.mat.uniforms.uFloorRoughF.value = info.roughF;
       e.mat.uniforms.uBounds.value.copy(info.bounds);
-      e.mat.uniforms.uFade.value = P.fadeBase + P.fadeRough * (1 - info.roughF);
+      // fade scales with the blob's own depth: a squat bowl's reflection dies
+      // within centimeters, a bench's within its tuned look
+      e.mat.uniforms.uFade.value = Math.max(
+        (P.fadeBase + P.fadeRough * (1 - info.roughF)) * (fit.h + fit.round.y), 0.02);
     }
   }
 }

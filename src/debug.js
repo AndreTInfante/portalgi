@@ -67,8 +67,8 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
     const refit = () => reflections.refit();
     fs.add(P, 'opacity', 0, 2.5, 0.01);
     fs.add(P, 'feather', 0.02, 1.5, 0.01).name('edge feather');
-    fs.add(P, 'fadeBase', 0.05, 1.5, 0.01).name('depth fade (m)');
-    fs.add(P, 'fadeRough', 0, 1.5, 0.01).name('fade + per gloss');
+    fs.add(P, 'fadeBase', 0.02, 0.6, 0.005).name('depth fade (x depth)');
+    fs.add(P, 'fadeRough', 0, 1, 0.005).name('fade + per gloss');
     fs.add(P, 'fresnelMin', 0, 1, 0.01).name('fresnel floor');
     fs.add(P, 'breakBase', 0, 2, 0.01).name('breakup base');
     fs.add(P, 'breakSlope', 0, 3, 0.01).name('breakup x rough');
@@ -83,7 +83,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
     fs.add(P, 'fitAxisScale', 0.3, 1.2, 0.01).name('fit: axis scale').onChange(refit);
     fs.add(P, 'manualScale', 0.4, 2, 0.01).name('furniture: radius x').onChange(refit);
     fs.add(P, 'manualTaper', 1, 2.5, 0.01).name('furniture: taper').onChange(refit);
-    fs.add(P, 'manualH', 0.1, 1.2, 0.01).name('furniture: depth (m)').onChange(refit);
+    fs.add(P, 'manualH', 0.1, 2, 0.01).name('furniture: depth (m)').onChange(refit);
     fs.add({ dump: () => reflections.dumpParams() }, 'dump').name('DUMP values (console+clipboard)');
   }
   const f3 = gui.addFolder('Bake');

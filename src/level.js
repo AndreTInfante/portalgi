@@ -631,11 +631,13 @@ export function buildLevel() {
     put(0, 0.47, 0, 1.5, 0.09, 0.42);
     put(-0.6, 0.21, 0, 0.08, 0.42, 0.38);
     put(0.6, 0.21, 0, 0.08, 0.42, 0.38);
-    colliders.push({ x: b.x, z: b.z, r: 0.85 });
+    // rx/rz/rot: true contact footprint for reflection smudges (seat is
+    // 1.5x0.42, legs at +-0.6); r stays the round player-collision radius
+    colliders.push({ x: b.x, z: b.z, r: 0.85, rx: 0.7, rz: 0.24, rot: b.rot });
   }
   for (const p of PEDESTAL_DEFS) {
     getBuilder(cells[p.cell], 'walnut', { mapKey: 'walnut' }).box(p.x, 0.5, p.z, 0.42, 1.0, 0.42, 0.8);
-    colliders.push({ x: p.x, z: p.z, r: 0.4 });
+    colliders.push({ x: p.x, z: p.z, r: 0.4, rx: 0.24, rz: 0.24, rot: 0 });
   }
 
   // panels: emissive fixture geometry (the light sources seen in reflections,

@@ -1,0 +1,32 @@
+# Actions-based Pages deploy. Replaces the legacy branch-serving pipeline
+# (pages-build-deployment), which wedged in "queued" uncancellably on
+# 2026-07-03. Requires Settings -> Pages -> Source: "GitHub Actions".
+name: deploy-pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage site (skip .git, server, docs)
+        run: |
+          mkdir _site
+          cp -r index.html src libs assets baked _site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

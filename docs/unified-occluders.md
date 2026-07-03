@@ -1,0 +1,106 @@
+# Unified analytic occluders - design + measurement plan
+
+Decision (2026-07-03): fold dynamic-object reflections into the hull/portal
+traversal itself, replacing the screen-space mirrored imposters ("smudges")
+if the numbers allow. Each cell carries a small list of analytic spheroid
+occluders; reflection rays test them while walking the portal graph, before
+the cell walls. Occlusion is SUBTRACTIVE ONLY.
+
+## Why
+
+- Works on every reflective surface (walls, chrome, glass, mirror), not just
+  up-facing floors - the stencil/mirror approach is floor-only by construction.
+- Cross-portal correctness: today a reflection ray that exits through a
+  doorway sees no smudges in the next cell. Unified occluders fix this free.
+- View-dependent correctness: the mirrored blob is view-independent; ray
+  occlusion darkens the actual reflection direction, so alignment problems
+  (including the upside-down-prop bug) disappear as a category - spheres are
+  rotation-invariant, fitted local, transformed by the prop matrix per frame.
+- Chrome/glass get dynamic-prop presence (the big immersion win).
+- One system instead of stencil masks + mirror matrices + per-floor bounds.
+- AO byproduct: sphere-vs-hemisphere occlusion has a closed form (Quilez),
+  ~10 ALU per sphere, no ray. Multiply into diffuse for DYNAMIC props only
+  (statics already have path-traced AO in the lightmap).
+
+## Cost model (why the budget fear is manageable)
+
+The cost is NOT "per reflective pixel x per spheroid". It is:
+
+- per reflective pixel: one bounding-sphere REJECT per prop per visited cell
+  (~10-15 ALU each; ~50-100 ALU for 4-6 props). The traversal loop is
+  memory-bound (12+ dependent RGBA32F texelFetches per iteration), so pure-ALU
+  rejects hide inside fetch latency on a tiled mobile GPU.
+- per HIT pixel (ray actually passes near an object): full chord/density
+  evaluation - the same screen coverage the current smudges already rasterize.
+
+Disciplines that keep this true:
+1. SPHERES in the hot loop (rotation-invariant, no basis transform). A prop is
+   3-5 spheres; a prop-level bounding sphere gates them.
+2. Hard caps: fixed-size per-cell uniform array (<= 12 spheres/cell), uniform
+   or UBO storage (constant-register reads, no texture traffic).
+3. LOD: occluders evaluated only for cells within N portal hops of the camera;
+   keep the rough > 0.65 early-out (walls skip occluders like they skip the
+   traversal).
+4. Cone-widening: grow effective radii and cut density with
+   rough x rayDistance (same model as uDistRough) so occluders stay consistent
+   with GGX mip blur and fade naturally with distance.
+
+## Shape authoring
+
+- Automatic fit: bounding box / per-submesh bounding boxes -> sphere set
+  (reuse the percentile band-fitting machinery from the smudge cone fit).
+- Manual authoring pass for hero objects (horse, whale, select furniture):
+  artist-aligned ellipsoid/sphere sets stored with the model defs. In-app
+  authoring aid: a debug mode that renders the occluder sets as translucent
+  wireframes over the mesh, GUI-nudgeable, dump-to-clipboard like the smudge
+  dashboard.
+
+## Subtractive-only (v1)
+
+Blocked light goes to black: transmittance multiplies the traced atlas sample.
+Multiple hits saturate - no depth sorting needed. This is what the planar
+smudges already approximate (tuning found near-black shapes read best).
+Known concern: white/bright objects (porcelain horse) reflected as dark blobs,
+especially in chrome. Parked extension if it reads wrong: on hit pixels only,
+re-add occluderTint x sampleIrr(cell, R) - flat irradiance-lit tint instead of
+black, one extra tap, no sorting. Full colored blobs with correct layering
+would need sorting - deliberately out of scope.
+
+## Budget philosophy
+
+Target device: Quest 3 (Quest 2 unsupported). The bar is NOT "the demo holds
+90Hz" - it is game-scale headroom: a real title adds bigger levels, animated
+characters, game logic, audio, UI. Success criterion: portal GI + occluders
+fit in a slice small enough that the frame is mostly EMPTY at 90Hz in the
+demo. Measure, don't vibe: get ms numbers for each feature via the harness.
+
+## Measurement methodology (perf harness)
+
+GPU timer queries (EXT_disjoint_timer_query_webgl2) are unavailable in the
+Quest browser, and at a locked/vsynced 90Hz raw frame deltas only show
+quantized misses. So we measure headroom by CALIBRATED SYNTHETIC LOAD:
+
+1. Burn pass: a fullscreen pass with a tunable ALU loop (uniform-driven,
+   fragCoord-seeded so it can't constant-fold, writes ~0 additively so the
+   image is unchanged). Adds GPU load in controlled increments.
+2. Sweep: hold each burn level ~3s, measure dropped-frame rate from rAF/XR
+   frame deltas (drop = delta > 1.5x median period); step up until drops
+   exceed threshold. The highest sustainable level = headroom in burn units.
+3. ms calibration: run the same sweep at the 90Hz and 72Hz session rates
+   (toggle already on A/X). The tip-level difference spans exactly
+   13.89 - 11.11 = 2.78ms, giving ms-per-burn-unit on the actual device.
+4. A/B: feature cost in ms = (tip level with feature off - tip level with
+   feature on) x ms-per-unit. Config matrix via existing URL params + GUI:
+   steps (0/1/3), cull, smudge, and later occluders.
+
+On-device results display on an in-headset HUD label (+ localStorage history);
+the deployed Pages origin cannot PUT to the dev server, so numbers are read
+from the HUD. (Optional later: self-signed-cert LAN server for auto-upload.)
+
+## Rollout
+
+1. Perf harness (this session): frame stats, burn pass, auto-sweep, HUD, GUI.
+2. Baseline numbers for the current build (traversal depth, culling, smudges).
+3. Occluders behind ?occluders=1, current smudges kept intact as control.
+4. A/B on device; decide whether the planar system retires or stays as the
+   far-field LOD.

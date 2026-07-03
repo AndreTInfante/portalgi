@@ -19,6 +19,7 @@ import { findCell } from './level.js';
 import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
 import { ReflectionSystem } from './reflections.js';
+import { PerfHarness } from './perf.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -153,8 +154,9 @@ async function boot() {
     reflections.staticImposters = v;
     rebake();
   };
+  const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, reflections, onStaticImposters);
+  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, reflections, onStaticImposters, perf);
 
   if (!SHOT && !BAKE) {
     renderer.domElement.addEventListener('mousedown', e => {
@@ -395,6 +397,34 @@ async function boot() {
   }
   if (navigator.xr) renderer.xr.addEventListener('sessionstart', () => applyRate(renderer.xr.getSession()));
 
+  // perf sweep config string: names the A/B condition in every report
+  perf.configFn = () =>
+    `steps${matsys.globals.uMaxSteps.value}/cull${culler.enabled ? 1 : 0}/smudge${reflections.enabled ? 1 : 0}/` +
+    (renderer.xr.isPresenting ? `${rateState.target}Hz` : 'desktop');
+  if (params.has('burn')) perf.setBurn(parseInt(params.get('burn')));
+  if (params.get('sweep') === '1') setTimeout(() => perf.startSweep(perf.configFn()), 3000);
+  // in-VR perf readout: wrist label above controller 0, beside the rate label
+  const perfCanvas = document.createElement('canvas');
+  perfCanvas.width = 512; perfCanvas.height = 48;
+  const perfTex = new THREE.CanvasTexture(perfCanvas);
+  const perfLabel = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.0225),
+    new THREE.MeshBasicMaterial({ map: perfTex, transparent: true, depthTest: false }));
+  let perfLabelText = null;
+  function drawPerfLabel() {
+    const txt = perf.hudText();
+    if (txt === perfLabelText) return;
+    perfLabelText = txt;
+    const ctx = perfCanvas.getContext('2d');
+    ctx.clearRect(0, 0, 512, 48);
+    if (txt) {
+      ctx.fillStyle = '#c8ffc8';
+      ctx.font = 'bold 30px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText(txt, 256, 34);
+    }
+    perfTex.needsUpdate = true;
+  }
+
   if (!navigator.xr) errEl.textContent += 'XR: navigator.xr missing (no WebXR in this browser)\n';
   if (navigator.xr && !SHOT && !BAKE) {
     renderer.xr.enabled = true;
@@ -433,6 +463,10 @@ async function boot() {
         rateLabel.rotation.x = -0.7;
         rateLabel.layers.set(3);
         c.add(rateLabel);
+        perfLabel.position.set(0, 0.075, 0.005);
+        perfLabel.rotation.x = -0.7;
+        perfLabel.layers.set(3);
+        c.add(perfLabel);
       }
       c.addEventListener('selectstart', () => {
         const car = ctrlCarrier(c);
@@ -459,6 +493,7 @@ async function boot() {
     }
   }
   let snapReady = true;
+  let perfBtnReady = true;
   function xrUpdate(dt) {
     // three's XR eye cameras have their OWN layer masks (0|1 and 0|2) - our
     // dynamic layer 3 must be enabled on them or props vanish in-session
@@ -509,6 +544,18 @@ async function boot() {
       applyRate(session);
     }
     if (!ratePressed) rateState.ready = true;
+    // B/Y button: start/cancel a perf sweep (hold still and keep the view
+    // representative while it runs - it measures what you're looking at)
+    let perfPressed = false;
+    for (const src of session.inputSources) {
+      const b = src.gamepad && src.gamepad.buttons;
+      if (b && b[5] && b[5].pressed) perfPressed = true;
+    }
+    if (perfPressed && perfBtnReady) {
+      perfBtnReady = false;
+      if (perf.sweep) perf.cancelSweep(); else perf.startSweep(perf.configFn());
+    }
+    if (!perfPressed) perfBtnReady = true;
     // hull collision on the head position; apply the correction to the rig
     camera.getWorldPosition(headPos);
     player.pos.set(headPos.x, 1.7, headPos.z);
@@ -567,8 +614,11 @@ async function boot() {
       // canvas and the headset shows black
     }
     renderer.render(scene, camera);
+    perf.tick(now);
+    if (inXR) drawPerfLabel();
     fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
-    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cells ${culler.enabled ? culler.visible.size : 'all'} * ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}`;
+    const ph = perf.hudText();
+    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cells ${culler.enabled ? culler.visible.size : 'all'} * ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}${ph ? ' * ' + ph : ''}`;
   });
 
   addEventListener('resize', () => {

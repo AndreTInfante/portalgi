@@ -32,7 +32,7 @@ export function buildPortalWires(scene, level) {
   return group;
 }
 
-export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, reflections, onStaticImposters) {
+export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, reflections, onStaticImposters, perf) {
   const gui = new GUI({ title: 'PortalGI' });
   const g = matsys.globals;
   const proxy = {
@@ -86,6 +86,19 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
     fs.add(P, 'manualTaper', 1, 2.5, 0.01).name('furniture: taper').onChange(refit);
     fs.add(P, 'manualH', 0.1, 2, 0.01).name('furniture: depth (m)').onChange(refit);
     fs.add({ dump: () => reflections.dumpParams() }, 'dump').name('DUMP values (console+clipboard)');
+  }
+  if (perf) {
+    const fp = gui.addFolder('Perf');
+    const pp = { get burn() { return perf.burn; }, set burn(v) { perf.setBurn(v); } };
+    fp.add(pp, 'burn', 0, 600, 5).name('burn (units)');
+    fp.add(perf, 'step', 5, 60, 5).name('sweep step');
+    fp.add(perf, 'threshold', 1, 20, 1).name('tip threshold %');
+    fp.add({ run: () => perf.sweep ? perf.cancelSweep()
+      : perf.startSweep(perf.configFn ? perf.configFn() : '') }, 'run')
+      .name('run/cancel sweep (B/Y in VR)');
+    fp.add({ log: () => console.log(localStorage.getItem('perfLog') || '(no sweeps yet)') }, 'log')
+      .name('print sweep log');
+    fp.close();
   }
   const f3 = gui.addFolder('Bake');
   f3.add(proxy, 'lightmap').name('use lightmap');

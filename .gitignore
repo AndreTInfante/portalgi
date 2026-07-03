@@ -8,3 +8,5 @@ Thumbs.db
 
 # original Poly Haven downloads (huge; the 1k gltf conversions are committed)
 assets/models/*.blend.zip
+# node-side test shim for the vendored three module
+node_modules/

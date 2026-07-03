@@ -127,11 +127,9 @@ async function boot() {
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
   for (const mm of staticModelMeshes) reflections.addStatic(mm);
   // authored contact smudges: benches/pedestals/statics via the collider
-  // registry, plus the pillar (spans all four hall cells)
+  // registry (NOT the hall pillar - it is hull geometry, so its reflection
+  // already comes through the portal traversal)
   for (const cc of level.colliders) reflections.addContact(cc.x, cc.z, cc);
-  // pillar footprint is 1.6x1.6m: contact ellipse just past the faces so a
-  // thin grounded ring shows, widening with depth
-  reflections.addContact(11.3, 0, 1.0, [3, 4, 5, 6]);
   // comparison-screenshot overrides (match the ?steps/?blend block above)
   if (params.get('smudge') === '0') reflections.enabled = false;
   if (params.get('smudge') === 'loud') {

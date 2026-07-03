@@ -20,16 +20,16 @@ import { findCell } from './level.js';
 
 const REFLECTIVE_MAX_ROUGHFACTOR = 0.75; // floors glossier than this get smudges
 
-// user-tuned 2026-07 (in-app Smudges dashboard, dumped values)
+// user-tuned 2026-07 (in-app Smudges dashboard, dumped values, round 2)
 const DEFAULTS = {
-  opacity: 0.85,      // base alpha
+  opacity: 0.75,      // base alpha
   feather: 1.26,      // silhouette softness: smoothstep width on the implicit
-  fadeBase: 0.1,      // gaussian depth scale, FRACTION of blob depth, on a
-  fadeRough: 0.2,     // rough floor... plus this much extra on a glossy one
-                      // (fractional: short objects cast SHORT contact smudges)
+  fadeBase: 0.02,     // gaussian depth scale, FRACTION of blob depth, on a
+  fadeRough: 1.0,     // rough floor... plus this much extra on a glossy one:
+                      // depth reach is almost entirely gloss-driven
   fresnelMin: 0.16,   // reflectance floor at normal incidence (rough spec)
   breakBase: 0.75,    // alpha = clamp(breakBase - floorRoughness*breakSlope)
-  breakSlope: 1.6,
+  breakSlope: 1.05,
   widenBase: 0.05,    // deep-ellipse widening, fraction of cone height...
   widenRough: 0.5,    // ...plus this much scaled by floor roughness
   liftFade: 0.3,      // e-folding height (m) for objects lifted off the floor
@@ -42,9 +42,9 @@ const DEFAULTS = {
   fitHFrac: 0.67,       // widest-plane height as fraction of object height
   fitAxisScale: 0.67,   // half-axis = band extent * this (0.5 = exact)
   // authored contacts (benches/pedestals/pillar; refit() to apply)
-  manualScale: 0.94,    // contact half-axes = collider footprint * this
+  manualScale: 1.53,    // contact half-axes = collider footprint * this
   manualTaper: 1.0,     // widest = contact * this
-  manualH: 1.2,         // plane distance (m)
+  manualH: 0.69,        // plane distance (m)
 };
 
 const VERT = /* glsl */`

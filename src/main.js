@@ -178,8 +178,9 @@ async function boot() {
           [P(cc.rx * 0.86, 0.16, 0), P(cc.rx * 0.86, cc.h * 0.6, 0), cc.rz * 0.8],
         ], cellId, walnutAvg);
       } else {
-        // pedestal: a single stretched vertical capsule
-        const r = cc.rx * 1.15;
+        // pedestal: a single stretched vertical capsule (tight - the blob
+        // overlays the pedestal's own baked reflection, fat reads as fringe)
+        const r = cc.rx;
         occluders.addPiece([
           [[cc.x, r * 0.9, cc.z], [cc.x, cc.h - r * 0.5, cc.z], r],
         ], cellId, walnutAvg);

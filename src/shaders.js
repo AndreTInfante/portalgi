@@ -115,13 +115,14 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       float cc = dot(u, u);
       float dw = dot(d, w0);
       float e = dot(u, w0);
-      // a surface point DEEP inside a capsule IS that occluder (bench seat
-      // over its own seat capsule, prop resting on a pedestal capsule): skip.
-      // Strictly interior (0.9r) - a resting sphere's contact ring sits at
-      // dist >= r, and a generous margin exempted it (bright halo bug)
+      // surfaces inside a capsule ARE that occluder (bench seat over its own
+      // seat capsule, prop resting on a pedestal capsule): fade occlusion in
+      // smoothly just outside the capsule surface instead of a binary skip -
+      // contact regions still darken, and there is no crisp onset edge
       float s0 = cc > 1e-6 ? clamp(e / cc, 0.0, 1.0) : 0.0;
       vec3 p0 = w0 - u * s0;
-      if (dot(p0, p0) < A.w * A.w * 0.81) continue;
+      float selfF = smoothstep(0.81, 1.21, dot(p0, p0) / (A.w * A.w));
+      if (selfF <= 0.0) continue;
       float sg = cc > 1e-6 ? clamp((e - dw * bb) / max(cc - bb * bb, 1e-5), 0.0, 1.0) : 0.0;
       float ts = clamp(sg * bb - dw, 0.0, tMax);
       if (cc > 1e-6) sg = clamp((e + ts * bb) / cc, 0.0, 1.0);
@@ -130,7 +131,7 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       float q = 1.0 - dot(ps, ps) / (rw * rw);    // 0 at the widened silhouette
       if (q <= 0.0) continue;
       float cover = (A.w * A.w) / (rw * rw);      // blur spreads, peak dims
-      float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0);
+      float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0) * selfF;
       trans -= taken;
       col += taken * uOccColor[first + pi].rgb;
     }

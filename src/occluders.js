@@ -69,15 +69,17 @@ function fitCapsules(root) {
     const axes = ['x', 'y', 'z'].sort((a, b) => ext[b] - ext[a]);
     const L = axes[0], sa = ext[axes[1]], sb = ext[axes[2]];
     const ratio = ext[L] / Math.max(Math.max(sa, sb), 1e-3);
+    // radii from the max EXTENT, not the bbox diagonal - the diagonal made a
+    // sphere prop's occluder 1.47x the ball (phantom poking through the floor)
     if (ratio > 1.4) {
-      const r = 0.5 * Math.hypot(sa, sb) * 0.9;
+      const r = 0.55 * Math.max(sa, sb);
       const a = ctr.clone(), b = ctr.clone();
       a[L] = Math.min(min[L] + r, ctr[L]);
       b[L] = Math.max(max[L] - r, ctr[L]);
       out.push({ a, b, r });
     } else {
       const c = ctr.clone();
-      out.push({ a: c, b: c.clone(), r: 0.5 * ext.length() * 0.85 });
+      out.push({ a: c, b: c.clone(), r: 0.5 * Math.max(ext.x, ext.y, ext.z) * 0.95 });
     }
   });
   out.sort((p, q) => q.r - p.r);

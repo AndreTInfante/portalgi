@@ -61,9 +61,72 @@ export class PerfHarness {
     this.threshold = 5;           // % dropped frames = tipped over
     this.deltas = [];             // recent frame deltas (ms)
     this.sweep = null;
+    this.batch = null;            // one-button config matrix (startBatch)
+    this.batchReport = '';
+    this.onBatchDone = null;
     this.lastReport = '';
     this._last = undefined;
     this._hud = '';
+  }
+
+  // run a list of {name, apply()} configs back to back, one sweep each, and
+  // report every number at the end; restoreFn puts the app state back
+  startBatch(configs, restoreFn) {
+    if (this.sweep || this.batch) return;
+    this.batch = { configs, restoreFn, i: 0, results: [] };
+    this.batchReport = '';
+    this._batchNext();
+  }
+
+  cancelBatch() {
+    if (this.sweep) this.cancelSweep();
+    if (this.batch) {
+      if (this.batch.restoreFn) this.batch.restoreFn();
+      this.batch = null;
+    }
+    this._hud = 'batch cancelled';
+  }
+
+  _batchNext() {
+    const b = this.batch;
+    if (b.i >= b.configs.length) { this._batchFinish(); return; }
+    const c = b.configs[b.i];
+    console.log(`perf batch: applying ${b.i + 1}/${b.configs.length} ${c.name}`);
+    c.apply();
+    this._hud = `batch ${b.i + 1}/${b.configs.length} ${c.name}`;
+    // let the pipeline settle on the new config before measuring
+    setTimeout(() => {
+      if (!this.batch) return;
+      console.log(`perf batch: sweeping ${c.name}`);
+      this.startSweep(c.name);
+    }, 500);
+  }
+
+  _batchFinish() {
+    const b = this.batch;
+    const lines = ['PERF BATCH (sustainable burn, higher = cheaper)'];
+    const base = b.results.length ? b.results[0] : null;
+    for (let i = 0; i < b.results.length; i++) {
+      const r = b.results[i];
+      const d = i === 0 ? 'baseline'
+        : `${r.sust - base.sust >= 0 ? '+' : ''}${r.sust - base.sust}u vs ${base.name}`;
+      lines.push(`${r.name.padEnd(10)} ${String(r.sust).padStart(4)}u  (${d})`);
+    }
+    this.batchReport = lines.join('\n');
+    console.log(this.batchReport);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('perfLog',
+          (localStorage.getItem('perfLog') || '') + this.batchReport + '\n');
+      }
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        navigator.clipboard.writeText(this.batchReport).catch(() => {});
+      }
+    } catch (e) { /* headless */ }
+    if (b.restoreFn) b.restoreFn();
+    this.batch = null;
+    this._hud = 'batch done';
+    if (this.onBatchDone) this.onBatchDone(this.batchReport);
   }
 
   setBurn(n) {
@@ -84,11 +147,12 @@ export class PerfHarness {
     if (this._last !== undefined) {
       d = nowMs - this._last;
       if (d > 0 && d < 250) {
-        this.deltas.push(d);
+        this.deltas.push(d); // ring buffer feeds the vsync-period median
         if (this.deltas.length > 240) this.deltas.shift();
-      } else {
-        d = undefined; // tab-hidden gap etc.
       }
+      // sweep accounting keeps slower frames too (they are DROPS, not gaps) -
+      // discarding them made a pathological config read as 0% dropped
+      if (!(d > 0 && d < 5000)) d = undefined;
     }
     this._last = nowMs;
     if (this.sweep) this._tickSweep(nowMs, d);
@@ -99,7 +163,7 @@ export class PerfHarness {
     this.sweep = {
       config: config || '',
       level: 0, // level 0 first: baseline drop rate without burn
-      phase: 'settle', t0: performance.now(),
+      phase: 'settle', t0: performance.now(), tStart: performance.now(),
       period: 0, frames: 0, drops: 0,
       results: [],
     };
@@ -116,6 +180,11 @@ export class PerfHarness {
 
   _tickSweep(now, d) {
     const s = this.sweep;
+    if (now - s.tStart > 90000) { // pathological config: bail with what we have
+      if (s.hi === undefined) s.hi = s.level;
+      this._finish();
+      return;
+    }
     if (s.phase === 'settle') {
       if (now - s.t0 > SETTLE_MS) {
         s.phase = 'measure';
@@ -160,8 +229,16 @@ export class PerfHarness {
     const tip = s.hi !== undefined ? `${s.hi}u` : `>${this.maxLevel}u`;
     const detail = s.results.map(([l, p]) => `${l}u:${p.toFixed(1)}%`).join(' ');
     this.lastReport = `[${s.config}] sustainable=${sustainable}u tip=${tip} | ${detail}`;
-    this._hud = `DONE sust=${sustainable}u`;
     console.log('perf sweep:', this.lastReport);
+    this.sweep = null;
+    this.setBurn(0);
+    if (this.batch) { // batch mode: collect and move on
+      this.batch.results.push({ name: s.config, sust: sustainable, tip });
+      this.batch.i++;
+      this._batchNext();
+      return;
+    }
+    this._hud = `DONE sust=${sustainable}u`;
     try {
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('perfLog',
@@ -171,8 +248,6 @@ export class PerfHarness {
         navigator.clipboard.writeText(this.lastReport).catch(() => {});
       }
     } catch (e) { /* headless */ }
-    this.sweep = null;
-    this.setBurn(0);
   }
 
   // compact status line for the desktop overlay / in-VR wrist label

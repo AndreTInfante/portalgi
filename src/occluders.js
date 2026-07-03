@@ -12,9 +12,9 @@
 //   uOccSph[i]      = world shape sphere
 import * as THREE from 'three';
 
-export const MAX_OCC_PROPS = 24;
-export const MAX_SPHERES = 96;
-export const MAX_PER_CELL = 8;
+export const MAX_OCC_PROPS = 40;
+export const MAX_SPHERES = 160;
+export const MAX_PER_CELL = 10;
 export const MAX_SPH_PER_PROP = 5;
 
 export function buildOccluderGroup(numCells) {
@@ -31,12 +31,14 @@ export function buildOccluderGroup(numCells) {
     }
     return arr;
   };
+  // add() order defines the std140 layout: must match the GLSL block
   return {
     group,
     numCells,
     cell: mk(numCells),
     bound: mk(MAX_OCC_PROPS),
     meta: mk(MAX_OCC_PROPS),
+    color: mk(MAX_OCC_PROPS),
     sph: mk(MAX_SPHERES),
   };
 }
@@ -83,6 +85,38 @@ function fitSpheres(root) {
   return out.slice(0, MAX_SPH_PER_PROP);
 }
 
+// vertex-band fit for big merged static meshes (statue + plinth are one
+// geometry): k spheres stacked along the longest bbox axis, radii from
+// percentile-trimmed extents per band so outliers don't inflate them
+function fitSpheresVerts(mesh, k = 3) {
+  const pos = mesh.geometry.getAttribute('position');
+  const v = new THREE.Vector3();
+  const pts = [];
+  const step = Math.max(1, Math.floor(pos.count / 900));
+  for (let i = 0; i < pos.count; i += step) {
+    pts.push(v.fromBufferAttribute(pos, i).toArray());
+  }
+  mesh.geometry.computeBoundingBox();
+  const bb = mesh.geometry.boundingBox;
+  const ext = new THREE.Vector3().subVectors(bb.max, bb.min);
+  const A = ['x', 'y', 'z'].sort((a, b) => ext[b] - ext[a])[0];
+  const ai = { x: 0, y: 1, z: 2 }[A];
+  const out = [];
+  for (let b = 0; b < k; b++) {
+    const lo = bb.min[A] + (ext[A] * b) / k;
+    const hi = bb.min[A] + (ext[A] * (b + 1)) / k;
+    const band = pts.filter(p => p[ai] >= lo && p[ai] <= hi);
+    if (band.length < 8) continue;
+    const c = [0, 0, 0];
+    for (const p of band) { c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; }
+    c[0] /= band.length; c[1] /= band.length; c[2] /= band.length;
+    const ds = band.map(p => Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2])).sort((x, y) => x - y);
+    const r = ds[Math.floor(ds.length * 0.9)]; // 90th percentile reach
+    out.push({ c: new THREE.Vector3(...c), r: Math.max(r, 0.1) });
+  }
+  return out.slice(0, MAX_SPH_PER_PROP);
+}
+
 export class OccluderSystem {
   constructor(occ, props) {
     this.occ = occ;
@@ -92,8 +126,18 @@ export class OccluderSystem {
       if (p.debugPane) continue; // clear glass occludes nothing
       const spheres = fitSpheres(p.mesh);
       if (spheres.length) {
+        // occluder blob color ~ the prop's diffuse albedo (procedural textures
+        // carry a linear average; model textures fall back to a neutral)
+        const t = p.mats[0] && p.mats[0].uniforms.uTint ? p.mats[0].uniforms.uTint.value : null;
+        const avg = p.mats[0] && p.mats[0].uniforms.uMap &&
+          p.mats[0].uniforms.uMap.value && p.mats[0].uniforms.uMap.value.userData.avg;
+        const col = avg && t ? [avg[0] * t.x, avg[1] * t.y, avg[2] * t.z]
+          : t ? [t.x * 0.5, t.y * 0.5, t.z * 0.5] : [0.35, 0.33, 0.3];
         const id = this.entries.length;
-        this.entries.push({ p, id, spheres, world: spheres.map(() => new THREE.Vector4()) });
+        this.entries.push({
+          p, id, spheres, col,
+          world: spheres.map(() => new THREE.Vector4()),
+        });
         // a prop's own reflection rays start inside its occluder set: tag its
         // materials so the shader skips self (uOccMeta.z carries the id)
         for (const m of p.mats) {
@@ -101,11 +145,47 @@ export class OccluderSystem {
         }
       }
     }
+    this.statics = []; // furniture/statues: world-space, packed as-is
+  }
+
+  // static exhibit mesh (world-space geometry): vertex-band sphere fit
+  addStatic(mesh, cellId, col) {
+    const spheres = fitSpheresVerts(mesh);
+    if (!spheres.length) return;
+    this.statics.push({
+      cell: cellId, col,
+      world: spheres.map(s => new THREE.Vector4(s.c.x, s.c.y, s.c.z, s.r)),
+    });
+  }
+
+  // authored box-ish furniture (benches/pedestals from the collider registry):
+  // sphere chain along the longest of (2rx, h, 2rz), yaw-rotated
+  addBox(x, z, rot, rx, rz, h, cellId, col) {
+    const dims = [2 * rx, h, 2 * rz];
+    const L = dims.indexOf(Math.max(...dims));
+    const short = dims.filter((_, i) => i !== L);
+    const r = 0.5 * Math.hypot(short[0], short[1]) * 0.9;
+    const k = Math.max(1, Math.min(3, Math.round(dims[L] / Math.max(2 * r, 1e-3))));
+    const cos = Math.cos(rot), sin = Math.sin(rot);
+    const world = [];
+    for (let i = 0; i < k; i++) {
+      const f = k > 1 ? i / (k - 1) : 0.5;
+      const off = -dims[L] / 2 + r + (dims[L] - 2 * r) * f;
+      let lx = 0, ly = h / 2, lz = 0;
+      if (L === 0) lx = off; else if (L === 1) ly = h / 2 + off; else lz = off;
+      world.push(new THREE.Vector4(x + lx * cos - lz * sin, ly, z + lx * sin + lz * cos, r));
+    }
+    this.statics.push({ cell: cellId, col, world });
   }
 
   update() {
     const occ = this.occ;
     const byCell = new Map();
+    const push = (cellId, item) => {
+      let list = byCell.get(cellId);
+      if (!list) byCell.set(cellId, list = []);
+      list.push(item);
+    };
     for (const e of this.entries) {
       const mesh = e.p.mesh;
       if (!mesh.visible) continue;
@@ -116,9 +196,13 @@ export class OccluderSystem {
         this.sv.copy(s.c).applyMatrix4(mw);
         e.world[i].set(this.sv.x, this.sv.y, this.sv.z, s.r * scale);
       }
-      let list = byCell.get(e.p.cell);
-      if (!list) byCell.set(e.p.cell, list = []);
-      list.push(e);
+      push(e.p.cell, { world: e.world, col: e.col, id: e.id });
+    }
+    // statics: ids from 1000 so no prop material's uOccSelf (or the static
+    // materials' -1 default) can ever match one
+    for (let i = 0; i < this.statics.length; i++) {
+      const s = this.statics[i];
+      push(s.cell, { world: s.world, col: s.col, id: 1000 + i });
     }
     let pi = 0, si = 0;
     for (let c = 0; c < occ.numCells; c++) {
@@ -129,7 +213,7 @@ export class OccluderSystem {
         for (const e of list) {
           if (count >= MAX_PER_CELL || pi >= MAX_OCC_PROPS ||
               si + e.world.length > MAX_SPHERES) break;
-          // prop-level bounding sphere from the world shape spheres
+          // entry-level bounding sphere from the world shape spheres
           let cx = 0, cy = 0, cz = 0;
           for (const w of e.world) { cx += w.x; cy += w.y; cz += w.z; }
           const n = e.world.length;
@@ -140,6 +224,7 @@ export class OccluderSystem {
           }
           occ.bound[pi].value.set(cx, cy, cz, rb);
           occ.meta[pi].value.set(si, n, e.id, 0);
+          occ.color[pi].value.set(e.col[0], e.col[1], e.col[2], 0);
           for (const w of e.world) occ.sph[si++].value.copy(w);
           pi++;
           count++;

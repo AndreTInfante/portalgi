@@ -61,7 +61,15 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
   f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5 });
   f2.add(proxy, 'portals').name('show portals');
   if (culler) f2.add(culler, 'enabled').name('portal culling');
-  if (reflections) f2.add(reflections, 'enabled').name('prop reflections');
+  if (reflections) {
+    // planar smudges and analytic occluders are alternatives, not layers
+    const modes = { 'Off': 0, 'Planar smudges': 1, 'Analytic occluders': 2 };
+    const cur = g.uOccOn.value > 0.5 ? 2 : (reflections.enabled ? 1 : 0);
+    f2.add({ mode: cur }, 'mode', modes).name('prop reflections').onChange(m => {
+      reflections.enabled = m === 1;
+      g.uOccOn.value = m === 2 ? 1 : 0;
+    });
+  }
   if (onStaticImposters) f2.add({ si: false }, 'si').name('static imposters (rebakes)').onChange(onStaticImposters);
   if (reflections) {
     const fs = gui.addFolder('Smudges');
@@ -97,15 +105,17 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
       get falloff() { return g.uOccFalloff.value; }, set falloff(v) { g.uOccFalloff.value = v; },
       get widen() { return g.uOccWiden.value; }, set widen(v) { g.uOccWiden.value = v; },
       get hops() { return g.uOccHops.value; }, set hops(v) { g.uOccHops.value = v; },
+      get tint() { return g.uOccTint.value; }, set tint(v) { g.uOccTint.value = v; },
     };
     fo.add(op, 'on').name('analytic occluders');
     fo.add(op, 'density', 0, 3, 0.01);
     fo.add(op, 'falloff', 0, 1, 0.005).name('falloff /m');
     fo.add(op, 'widen', 0, 2, 0.01).name('widen x rough-m');
+    fo.add(op, 'tint', 0, 1, 0.01).name('diffuse re-emit');
     fo.add(op, 'hops', 0, 4, 1).name('LOD (cells of walk)');
     fo.add({ dump: () => {
       const j = JSON.stringify({ density: g.uOccDensity.value, falloff: g.uOccFalloff.value,
-        widen: g.uOccWiden.value, hops: g.uOccHops.value }, null, 2);
+        widen: g.uOccWiden.value, tint: g.uOccTint.value, hops: g.uOccHops.value }, null, 2);
       console.log('occluder params:', j);
       if (navigator.clipboard) navigator.clipboard.writeText(j).catch(() => {});
     } }, 'dump').name('DUMP values (console+clipboard)');
@@ -116,9 +126,13 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
     fp.add(pp, 'burn', 0, 600, 5).name('burn (units)');
     fp.add(perf, 'step', 5, 60, 5).name('sweep step');
     fp.add(perf, 'threshold', 1, 20, 1).name('tip threshold %');
-    fp.add({ run: () => perf.sweep ? perf.cancelSweep()
+    fp.add({ batch: () => {
+      if (perf.batch || perf.sweep) { perf.cancelBatch(); return; }
+      if (perf.batchSetup) { const b = perf.batchSetup(); perf.startBatch(b.configs, b.restore); }
+    } }, 'batch').name('RUN FULL BATCH (B/Y in VR)');
+    fp.add({ run: () => (perf.batch || perf.sweep) ? perf.cancelBatch()
       : perf.startSweep(perf.configFn ? perf.configFn() : '') }, 'run')
-      .name('run/cancel sweep (B/Y in VR)');
+      .name('run/cancel single sweep');
     fp.add({ log: () => console.log(localStorage.getItem('perfLog') || '(no sweeps yet)') }, 'log')
       .name('print sweep log');
     fp.close();

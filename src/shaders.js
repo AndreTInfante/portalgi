@@ -70,6 +70,7 @@ layout(std140) uniform OccluderData {
   vec4 uOccCell[${numCells}];
   vec4 uOccBound[${MAX_OCC_PROPS}];
   vec4 uOccMeta[${MAX_OCC_PROPS}];
+  vec4 uOccColor[${MAX_OCC_PROPS}];
   vec4 uOccSph[${MAX_SPHERES}];
 };
 uniform float uOccOn;
@@ -77,12 +78,15 @@ uniform float uOccHops;    // LOD: occluders evaluated for the first N cells of 
 uniform float uOccDensity;
 uniform float uOccFalloff; // occlusion decay per meter of ray distance
 uniform float uOccWiden;   // radius growth per (roughness * meter): match cone blur
+uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
 uniform int uOccSelf;      // this prop's occluder id: rays start inside it - skip
 
 // transmittance through this cell's occluders along ray segment [0, tMax].
-// Subtractive and saturating - no sorting. tBase = path length already
-// walked, so widening and falloff are continuous across portals.
-float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase) {
+// Subtractive and saturating - no sorting. Each bite of transmittance
+// accumulates the biter's albedo into col so the caller can re-emit blocked
+// light as darkened occluder diffuse instead of pitch black. tBase = path
+// length already walked, so widening and falloff are continuous across portals.
+float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase, inout vec3 col) {
   float trans = 1.0;
   int first = int(uOccCell[cell].x);
   int cnt = int(uOccCell[cell].y);
@@ -107,7 +111,9 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase)
       float q = 1.0 - dot(ps, ps) / (rw * rw);    // 0 at the widened silhouette
       if (q <= 0.0) continue;
       float o1 = uOccDensity * q * exp(-(tBase + ts) * uOccFalloff);
-      trans *= 1.0 - clamp(o1, 0.0, 1.0);
+      float taken = trans * clamp(o1, 0.0, 1.0);
+      trans -= taken;
+      col += taken * uOccColor[first + pi].rgb;
     }
     if (trans < 0.01) break;
   }
@@ -172,9 +178,13 @@ vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
     float lod = roughToLod(effR);
 ${useUbo ? /* glsl */`
     // occluder transmittance over this cell's segment attenuates everything
-    // sampled beyond it (this cell's tile AND the recursion)
+    // sampled beyond it (this cell's tile AND the recursion); the blocked
+    // fraction re-emits as darkened occluder diffuse lit by cell irradiance
     if (uOccOn > 0.5 && float(i) < uOccHops) {
-      w *= occSegment(cell, pos, dir, bestT, effR, tTot);
+      vec3 ocol = vec3(0.0);
+      float tr = occSegment(cell, pos, dir, bestT, effR, tTot, ocol);
+      if (tr < 0.997) acc += w * uOccTint * ocol * sampleIrr(cell, -dir);
+      w *= tr;
       if (w < 0.005) return acc;
     }
 ` : ''}

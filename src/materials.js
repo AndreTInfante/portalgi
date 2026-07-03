@@ -59,6 +59,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uOccDensity: { value: 1.2 },
     uOccFalloff: { value: 0.12 },
     uOccWiden: { value: 0.5 },
+    uOccTint: { value: 0.35 },   // artistic: blocked light -> darkened occluder diffuse
   };
 
   function lightUniforms(cellId) {

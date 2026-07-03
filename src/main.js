@@ -110,7 +110,6 @@ async function boot() {
   // optional URL overrides for comparison screenshots
   if (params.has('steps')) matsys.globals.uMaxSteps.value = parseInt(params.get('steps'));
   if (params.has('rhops')) matsys.globals.uRoughHops.value = parseFloat(params.get('rhops'));
-  if (params.get('occluders') === '1') matsys.globals.uOccOn.value = 1;
   if (params.has('occd')) matsys.globals.uOccDensity.value = parseFloat(params.get('occd'));
   if (params.has('blend')) matsys.globals.uBlendOn.value = parseFloat(params.get('blend'));
   if (params.has('debug')) matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
@@ -158,8 +157,26 @@ async function boot() {
     reflections.staticImposters = v;
     rebake();
   };
-  // analytic occluders: dynamic props as sphere sets inside the traversal
+  // analytic occluders: dynamic props as sphere sets inside the traversal,
+  // plus furniture/statues so the comparison with the planar smudges is 1:1
+  // (NOT the hall pillar: it is hull geometry, its reflection is traversed)
   const occluders = matsys.occ ? new OccluderSystem(matsys.occ, props) : null;
+  if (occluders) {
+    const walnutAvg = textures.walnut.map.userData.avg;
+    for (const cc of level.colliders) {
+      if (cc.h === undefined) continue; // statics register from their meshes below
+      occluders.addBox(cc.x, cc.z, cc.rot || 0, cc.rx, cc.rz, cc.h,
+        findCell(level.cells, new THREE.Vector3(cc.x, 0.5, cc.z)), walnutAvg);
+    }
+    for (const mm of staticModelMeshes) {
+      occluders.addStatic(mm, mm.userData.cell, [0.42, 0.4, 0.36]);
+    }
+  }
+  // planar smudges and analytic occluders are alternatives, not layers
+  if (params.get('occluders') === '1') {
+    matsys.globals.uOccOn.value = 1;
+    reflections.enabled = false;
+  }
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
   buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, reflections, onStaticImposters, perf);
@@ -412,24 +429,67 @@ async function boot() {
     (renderer.xr.isPresenting ? `${rateState.target}Hz` : 'desktop');
   if (params.has('burn')) perf.setBurn(parseInt(params.get('burn')));
   if (params.get('sweep') === '1') setTimeout(() => perf.startSweep(perf.configFn()), 3000);
+  if (params.get('batch') === '1') setTimeout(() => {
+    const b = perf.batchSetup();
+    perf.startBatch(b.configs, b.restore);
+  }, 3000);
+  // one-button config matrix: the combinations we actually compare
+  perf.batchSetup = () => {
+    const g = matsys.globals;
+    const saved = {
+      steps: g.uMaxSteps.value, rh: g.uRoughHops.value,
+      occ: g.uOccOn.value, smudge: reflections.enabled,
+    };
+    const set = (steps, rh, smudge, occ) => () => {
+      g.uMaxSteps.value = steps;
+      g.uRoughHops.value = rh;
+      reflections.enabled = smudge;
+      g.uOccOn.value = occ;
+    };
+    return {
+      configs: [
+        { name: 'props-off', apply: set(3, 1, false, 0) },  // baseline first
+        { name: 'occluders', apply: set(3, 1, false, 1) },
+        { name: 'smudges', apply: set(3, 1, true, 0) },
+        { name: 'flat-hops', apply: set(3, 0, false, 0) },
+        { name: 'steps0', apply: set(0, 1, false, 0) },
+      ],
+      restore: () => {
+        g.uMaxSteps.value = saved.steps;
+        g.uRoughHops.value = saved.rh;
+        g.uOccOn.value = saved.occ;
+        reflections.enabled = saved.smudge;
+      },
+    };
+  };
+  perf.onBatchDone = report => { errEl.textContent += '\n' + report + '\n'; };
   // in-VR perf readout: wrist label above controller 0, beside the rate label
   const perfCanvas = document.createElement('canvas');
-  perfCanvas.width = 512; perfCanvas.height = 48;
+  perfCanvas.width = 512; perfCanvas.height = 224;
   const perfTex = new THREE.CanvasTexture(perfCanvas);
-  const perfLabel = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.0225),
+  const perfLabel = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.105),
     new THREE.MeshBasicMaterial({ map: perfTex, transparent: true, depthTest: false }));
   let perfLabelText = null;
   function drawPerfLabel() {
-    const txt = perf.hudText();
+    // finished batch: show the full report; otherwise the one-line status
+    const report = (!perf.sweep && !perf.batch && perf.batchReport) ? perf.batchReport : '';
+    const txt = report || perf.hudText();
     if (txt === perfLabelText) return;
     perfLabelText = txt;
     const ctx = perfCanvas.getContext('2d');
-    ctx.clearRect(0, 0, 512, 48);
-    if (txt) {
-      ctx.fillStyle = '#c8ffc8';
+    ctx.clearRect(0, 0, 512, 224);
+    ctx.fillStyle = '#c8ffc8';
+    if (report) {
+      ctx.font = 'bold 22px monospace';
+      ctx.textAlign = 'left';
+      const lines = report.split('\n');
+      for (let i = 0; i < Math.min(lines.length, 9); i++) {
+        ctx.fillText(lines[i], 8, 26 + i * 24);
+      }
+    } else if (txt) {
       ctx.font = 'bold 30px system-ui';
       ctx.textAlign = 'center';
-      ctx.fillText(txt, 256, 34);
+      ctx.fillText(txt, 256, 200);
     }
     perfTex.needsUpdate = true;
   }
@@ -472,7 +532,7 @@ async function boot() {
         rateLabel.rotation.x = -0.7;
         rateLabel.layers.set(3);
         c.add(rateLabel);
-        perfLabel.position.set(0, 0.075, 0.005);
+        perfLabel.position.set(0, 0.12, 0.02);
         perfLabel.rotation.x = -0.7;
         perfLabel.layers.set(3);
         c.add(perfLabel);
@@ -553,8 +613,8 @@ async function boot() {
       applyRate(session);
     }
     if (!ratePressed) rateState.ready = true;
-    // B/Y button: start/cancel a perf sweep (hold still and keep the view
-    // representative while it runs - it measures what you're looking at)
+    // B/Y button: run/cancel the full perf batch (hold still and keep the
+    // view representative while it runs - it measures what you're looking at)
     let perfPressed = false;
     for (const src of session.inputSources) {
       const b = src.gamepad && src.gamepad.buttons;
@@ -562,7 +622,12 @@ async function boot() {
     }
     if (perfPressed && perfBtnReady) {
       perfBtnReady = false;
-      if (perf.sweep) perf.cancelSweep(); else perf.startSweep(perf.configFn());
+      if (perf.batch || perf.sweep) {
+        perf.cancelBatch();
+      } else {
+        const b = perf.batchSetup();
+        perf.startBatch(b.configs, b.restore);
+      }
     }
     if (!perfPressed) perfBtnReady = true;
     // hull collision on the head position; apply the correction to the rig

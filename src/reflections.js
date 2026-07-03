@@ -40,6 +40,7 @@ uniform float uRimPow;
 uniform sampler2D uFloorOrm;
 uniform float uFloorRoughF;
 uniform vec4 uBounds;     // cell floor bbox: minX, minZ, maxX, maxZ
+uniform vec3 uCenter;     // mirrored prop center (rim = spherical gradient)
 uniform float uExposure;
 varying vec3 vWorld;
 varying vec3 vNrm;
@@ -51,7 +52,10 @@ void main() {
       vWorld.x > uBounds.z || vWorld.z > uBounds.w) discard; // clip to this cell's floor
   float db = max(-vWorld.y, 0.0);
   vec3 V = normalize(cameraPosition - vWorld);
-  float rim = abs(dot(normalize(vNrm), V));
+  // spherical-gradient rim: for ANY convex shape, fragments at the screen
+  // outline have (frag - center) perpendicular to the view -> guaranteed
+  // feather; surface normals only silhouette-fade on sphere-like shapes
+  float rim = abs(dot(normalize(vWorld - uCenter), V));
   // fresnel of the FLOOR at the point the eye reads this smudge through
   vec3 floorP = vec3(vWorld.x, 0.0, vWorld.z);
   vec3 Vf = normalize(cameraPosition - floorP);
@@ -109,6 +113,7 @@ export class ReflectionSystem {
     this.staticImposters = false; // A/B toggle: statics via imposter vs baked capture
     this.entries = [];
     for (const p of props.list) {
+      if (p.debugPane) continue; // a clear glass sheet casts no solid smudge
       const tint = p.mats[0] && p.mats[0].uniforms.uTint ? p.mats[0].uniforms.uTint.value : { x: 0.5, y: 0.5, z: 0.5 };
       this._makeEntry(p, tint, false);
     }
@@ -166,6 +171,7 @@ export class ReflectionSystem {
           uFloorOrm: { value: null },
           uFloorRoughF: { value: 1 },
           uBounds: { value: new THREE.Vector4() },
+          uCenter: { value: new THREE.Vector3() },
           uExposure: this.globals.uExposure, // shared identity with the scene
         },
       });
@@ -195,7 +201,10 @@ export class ReflectionSystem {
       e.mat.uniforms.uFloorOrm.value = fs.ormMap;
       e.mat.uniforms.uFloorRoughF.value = info.roughF;
       e.mat.uniforms.uBounds.value.copy(info.bounds);
-      e.mat.uniforms.uFade.value = 0.6 + 1.6 * (1 - info.roughF); // glossier floor = longer smudge
+      const me = p.mesh.matrixWorld.elements;
+      e.mat.uniforms.uCenter.value.set(me[12], -me[13], me[14]);
+      // rough-reflection contrast dies fast with height: <8% by ~1.2m up
+      e.mat.uniforms.uFade.value = 0.25 + 0.35 * (1 - info.roughF);
       e.mat.uniforms.uInflate.value = 0.1 + 0.35 * info.roughF;   // rougher floor = wider cone
     }
   }

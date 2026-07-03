@@ -129,6 +129,22 @@ export class ReflectionSystem {
       } catch (e) {
         geo = new THREE.SphereGeometry(p.radius || 0.5, 12, 8);
       }
+      // ConvexGeometry is flat-shaded: duplicated verts with per-face normals
+      // crack apart under inflation and give facet-constant rim alpha. Smooth
+      // radial normals (exact enough for a convex blob) fix both.
+      {
+        const pa = geo.getAttribute('position');
+        const c = new THREE.Vector3();
+        const v = new THREE.Vector3();
+        for (let i = 0; i < pa.count; i++) c.add(v.fromBufferAttribute(pa, i));
+        c.divideScalar(pa.count);
+        const nrm = new Float32Array(pa.count * 3);
+        for (let i = 0; i < pa.count; i++) {
+          v.fromBufferAttribute(pa, i).sub(c).normalize();
+          nrm[i * 3] = v.x; nrm[i * 3 + 1] = v.y; nrm[i * 3 + 2] = v.z;
+        }
+        geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+      }
       const mat = new THREE.ShaderMaterial({
         glslVersion: THREE.GLSL3,
         vertexShader: VERT,

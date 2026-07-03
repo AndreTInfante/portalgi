@@ -74,6 +74,15 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
         uLightCount: { value: n },
       },
     });
+    // every opaque surface participates in the reflector stencil mask with
+    // ref 0 (reflective floors override to 1 in buildStaticMeshes): a wall or
+    // prop drawn AFTER a floor must CLEAR the bit, or depth-test-off
+    // reflection imposters show through walls (stencil is last-writer-wins,
+    // not depth-aware)
+    mat.stencilWrite = true;
+    mat.stencilRef = 0;
+    mat.stencilFunc = THREE.AlwaysStencilFunc;
+    mat.stencilZPass = THREE.ReplaceStencilOp;
     allMaterials.push(mat);
     return mat;
   }

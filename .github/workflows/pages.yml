@@ -21,6 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # also flips the repo's Pages source from legacy branch-serving to
+      # "GitHub Actions" so no manual settings change is needed
+      - uses: actions/configure-pages@v5
       - name: Stage site (skip .git, server, docs)
         run: |
           mkdir _site

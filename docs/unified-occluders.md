@@ -185,6 +185,26 @@ r^2/rw^2 with rw grown by surface-rough x distance: chrome sees solid
 occluders with feathered edges at any distance, rough floors see them fade
 with distance, energy-conserving with the blur spread).
 
+## Verdict (Quest 3 batch, 2026-07-03, pillar-hall worst view, 90Hz)
+
+| config              | sustainable | marginal vs props-off |
+|---------------------|-------------|-----------------------|
+| steps0              | 90u         | traversal depth ~1.6ms |
+| props-off (rh1)     | 55u         | baseline              |
+| flat-hops (rh0)     | 55u         | ladder: ~0 at this view (keep - free) |
+| occluders           | 50u         | ~0.23ms               |
+| smudges             | 10u         | ~2.1ms                |
+
+Unified analytic occluders: ~0.23ms for furniture + statues + props on every
+reflective surface including chrome - ~9x cheaper than the planar smudges
+while doing strictly more. DECISION: analytic occluders are the default and
+the planar smudge system is REMOVED outright (src/reflections.js, its
+stencil visible-surface mask, GUI folder, and batch config - strictly worse,
+not worth carrying). Occluder budget raised with the measured headroom
+(64 entries / 128 capsules / 16 per cell / 8 per prop; statue band fits to
+5). Full portal GI (deep traversal + occluders) ~1.85ms at the worst view
+with ~2.3ms of measured synthetic headroom remaining.
+
 ## Rollout
 
 1. Perf harness (this session): frame stats, burn pass, auto-sweep, HUD, GUI.

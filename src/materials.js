@@ -54,7 +54,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uBake: { value: 0.0 },
     uExposure: { value: 0.3 },
     uDebugMode: { value: 0 },
-    uOccOn: { value: 0.0 },      // analytic occluders (?occluders=1 / GUI)
+    uOccOn: { value: 1.0 },      // analytic occluders: DEFAULT after the 2026-07-03
+                                 // A/B (0.23ms vs 2.1ms for planar smudges, worst view)
     uOccHops: { value: 2 },
     uOccDensity: { value: 1.2 },
     uOccWiden: { value: 0.5 },   // cone growth per rough-meter: drives spread AND fade
@@ -106,15 +107,6 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
         uLightCount: { value: n },
       },
     });
-    // every opaque surface participates in the reflector stencil mask with
-    // ref 0 (reflective floors override to 1 in buildStaticMeshes): a wall or
-    // prop drawn AFTER a floor must CLEAR the bit, or depth-test-off
-    // reflection imposters show through walls (stencil is last-writer-wins,
-    // not depth-aware)
-    mat.stencilWrite = true;
-    mat.stencilRef = 0;
-    mat.stencilFunc = THREE.AlwaysStencilFunc;
-    mat.stencilZPass = THREE.ReplaceStencilOp;
     if (hullGroup) mat.uniformsGroups = occ ? [hullGroup, occ.group] : [hullGroup];
     allMaterials.push(mat);
     return mat;
@@ -155,15 +147,6 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       }));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key
-      if (key === 'floor' && (o.roughFactor === undefined || o.roughFactor <= 0.75)) {
-        // reflective floors mark stencil bit 1 where they are the visible
-        // surface; prop reflection imposters render only on those pixels
-        const m = mesh.material;
-        m.stencilWrite = true;
-        m.stencilRef = 1;
-        m.stencilFunc = THREE.AlwaysStencilFunc;
-        m.stencilZPass = THREE.ReplaceStencilOp;
-      }
       group.add(mesh);
     }
   }

@@ -632,9 +632,8 @@ export function buildLevel() {
     put(0, 0.47, 0, 1.5, 0.09, 0.42);
     put(-0.6, 0.21, 0, 0.08, 0.42, 0.38);
     put(0.6, 0.21, 0, 0.08, 0.42, 0.38);
-    // rx/rz/rot: true contact footprint for reflection smudges (seat is
-    // 1.5x0.42, legs at +-0.6); r stays the round player-collision radius;
-    // h feeds the analytic occluder sphere chain
+    // rx/rz/rot/h: footprint + height for the analytic occluder capsules
+    // (seat is 1.5x0.42, legs at +-0.6); r stays the player-collision radius
     colliders.push({ x: b.x, z: b.z, r: 0.85, rx: 0.7, rz: 0.24, rot: b.rot, h: 0.56 });
   }
   for (const p of PEDESTAL_DEFS) {

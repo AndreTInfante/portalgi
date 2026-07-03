@@ -18,7 +18,6 @@ import { loadModelProps, addStaticModels } from './models.js';
 import { findCell } from './level.js';
 import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
-import { ReflectionSystem } from './reflections.js';
 import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
 
@@ -127,39 +126,19 @@ async function boot() {
   const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
   const props = new Props(scene, level, matsys, modelProps);
   const wires = buildPortalWires(scene, level);
-  const reflections = new ReflectionSystem(scene, level, props, matsys.globals);
-  const floorSets = level.cells.map(c => ({
-    ormMap: textures[c.floor.key].ormMap,
-    avg: textures[c.floor.key].map.userData.avg, // linear avg albedo (brightness comp)
-  }));
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
-  for (const mm of staticModelMeshes) reflections.addStatic(mm);
-  // authored contact smudges: benches/pedestals/statics via the collider
-  // registry (NOT the hall pillar - it is hull geometry, so its reflection
-  // already comes through the portal traversal)
-  for (const cc of level.colliders) reflections.addContact(cc.x, cc.z, cc);
-  // comparison-screenshot overrides (match the ?steps/?blend block above)
-  if (params.get('smudge') === '0') reflections.enabled = false;
-  if (params.get('smudge') === 'loud') {
-    reflections.params.opacity = 2.5;
-    for (const e of reflections.entries) e.baseCol.set(1, 0, 0);
-  }
   // ?si=1: exclude static exhibits from captures before the initial bake
-  // (headless A/B of the staticImposters toggle)
+  // (A/B: statues represented by their baked capture vs occluder blob only)
   if (params.get('si') === '1') {
     for (const mm of staticModelMeshes) mm.layers.set(3);
-    reflections.staticImposters = true;
   }
   const onStaticImposters = v => {
-    // A/B: statics either keep their baked (capture-point-smeared) reflection,
-    // or leave the captures and get mirrored imposters instead
     for (const mm of staticModelMeshes) mm.layers.set(v ? 3 : 0);
-    reflections.staticImposters = v;
     rebake();
   };
-  // analytic occluders: dynamic props as sphere sets inside the traversal,
-  // plus furniture/statues so the comparison with the planar smudges is 1:1
-  // (NOT the hall pillar: it is hull geometry, its reflection is traversed)
+  // analytic occluders: dynamic props as capsule sets inside the traversal,
+  // plus furniture/statues (NOT the hall pillar: it is hull geometry, its
+  // reflection is traversed for real)
   const occluders = matsys.occ ? new OccluderSystem(matsys.occ, props) : null;
   if (occluders) {
     const walnutAvg = textures.walnut.map.userData.avg;
@@ -197,14 +176,10 @@ async function boot() {
       occluders.addStatic(mm, mm.userData.cell, [0.42, 0.4, 0.36]);
     }
   }
-  // planar smudges and analytic occluders are alternatives, not layers
-  if (params.get('occluders') === '1') {
-    matsys.globals.uOccOn.value = 1;
-    reflections.enabled = false;
-  }
+  if (params.has('occluders')) matsys.globals.uOccOn.value = parseFloat(params.get('occluders'));
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, reflections, onStaticImposters, perf);
+  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf);
 
   if (!SHOT && !BAKE) {
     renderer.domElement.addEventListener('mousedown', e => {
@@ -371,7 +346,6 @@ async function boot() {
       pane.mesh.lookAt(camera.position);
     }
     props.update(0.016, player);
-    reflections.update(floorSets, null); // smudges are part of the verified frame
     if (occluders) occluders.update();
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
@@ -450,7 +424,7 @@ async function boot() {
   perf.configFn = () =>
     `steps${matsys.globals.uMaxSteps.value}/rh${matsys.globals.uRoughHops.value > 0.5 ? 1 : 0}` +
     `/occ${matsys.globals.uOccOn.value > 0.5 ? 1 : 0}` +
-    `/cull${culler.enabled ? 1 : 0}/smudge${reflections.enabled ? 1 : 0}/` +
+    `/cull${culler.enabled ? 1 : 0}/` +
     (renderer.xr.isPresenting ? `${rateState.target}Hz` : 'desktop');
   if (params.has('burn')) perf.setBurn(parseInt(params.get('burn')));
   if (params.get('sweep') === '1') setTimeout(() => perf.startSweep(perf.configFn()), 3000);
@@ -462,28 +436,24 @@ async function boot() {
   perf.batchSetup = () => {
     const g = matsys.globals;
     const saved = {
-      steps: g.uMaxSteps.value, rh: g.uRoughHops.value,
-      occ: g.uOccOn.value, smudge: reflections.enabled,
+      steps: g.uMaxSteps.value, rh: g.uRoughHops.value, occ: g.uOccOn.value,
     };
-    const set = (steps, rh, smudge, occ) => () => {
+    const set = (steps, rh, occ) => () => {
       g.uMaxSteps.value = steps;
       g.uRoughHops.value = rh;
-      reflections.enabled = smudge;
       g.uOccOn.value = occ;
     };
     return {
       configs: [
-        { name: 'props-off', apply: set(3, 1, false, 0) },  // baseline first
-        { name: 'occluders', apply: set(3, 1, false, 1) },
-        { name: 'smudges', apply: set(3, 1, true, 0) },
-        { name: 'flat-hops', apply: set(3, 0, false, 0) },
-        { name: 'steps0', apply: set(0, 1, false, 0) },
+        { name: 'occ-off', apply: set(3, 1, 0) },  // baseline first
+        { name: 'occluders', apply: set(3, 1, 1) },
+        { name: 'flat-hops', apply: set(3, 0, 0) },
+        { name: 'steps0', apply: set(0, 1, 0) },
       ],
       restore: () => {
         g.uMaxSteps.value = saved.steps;
         g.uRoughHops.value = saved.rh;
         g.uOccOn.value = saved.occ;
-        reflections.enabled = saved.smudge;
       },
     };
   };
@@ -702,7 +672,6 @@ async function boot() {
       culler.compute(inXR ? renderer.xr.getCamera() : camera, inXR ? headPos : player.pos);
     }
     culler.apply(staticGroup, props, state.baking);
-    reflections.update(floorSets, culler.enabled && !state.baking ? culler.visible : null);
     if (occluders && !state.baking) occluders.update();
     if (!inXR) {
       player.applyToCamera(camera);

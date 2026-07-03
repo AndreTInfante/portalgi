@@ -2,6 +2,7 @@
 // bake passes use RawShaderMaterial, also GLSL3 (three prepends the version line).
 import { atlasGLSL } from './atlas.js';
 import { PLANES_OFF, PORTALS_OFF, PORTAL_STRIDE, PROBE_META_OFF, HULL_TEX_W } from './hulldata.js';
+import { MAX_OCC_PROPS, MAX_SPHERES, MAX_PER_CELL, MAX_SPH_PER_PROP } from './occluders.js';
 
 // ------------------------------------------------------------------ shared GLSL
 
@@ -62,6 +63,56 @@ layout(std140) uniform HullData {
   vec4 uHull[${numCells * HULL_TEX_W}];
 };
 vec4 hfetch(int cell, int t) { return uHull[cell * ${HULL_TEX_W} + t]; }
+
+// analytic occluders: dynamic props as sphere sets, tested per cell segment
+// inside the walk (see occluders.js for the packing)
+layout(std140) uniform OccluderData {
+  vec4 uOccCell[${numCells}];
+  vec4 uOccBound[${MAX_OCC_PROPS}];
+  vec4 uOccMeta[${MAX_OCC_PROPS}];
+  vec4 uOccSph[${MAX_SPHERES}];
+};
+uniform float uOccOn;
+uniform float uOccHops;    // LOD: occluders evaluated for the first N cells of the walk
+uniform float uOccDensity;
+uniform float uOccFalloff; // occlusion decay per meter of ray distance
+uniform float uOccWiden;   // radius growth per (roughness * meter): match cone blur
+uniform int uOccSelf;      // this prop's occluder id: rays start inside it - skip
+
+// transmittance through this cell's occluders along ray segment [0, tMax].
+// Subtractive and saturating - no sorting. tBase = path length already
+// walked, so widening and falloff are continuous across portals.
+float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase) {
+  float trans = 1.0;
+  int first = int(uOccCell[cell].x);
+  int cnt = int(uOccCell[cell].y);
+  for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
+    if (pi >= cnt) break;
+    if (int(uOccMeta[first + pi].z) == uOccSelf) continue; // self-occlusion skip
+    vec4 b = uOccBound[first + pi];
+    vec3 oc = b.xyz - o;
+    float tc = clamp(dot(oc, d), 0.0, tMax);
+    vec3 pc = oc - d * tc;
+    float rb = b.w + uOccWiden * rough * (tBase + tc) + 0.05;
+    if (dot(pc, pc) > rb * rb) continue;          // prop-level reject
+    int sf = int(uOccMeta[first + pi].x);
+    int sc = int(uOccMeta[first + pi].y);
+    for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
+      if (si >= sc) break;
+      vec4 s = uOccSph[sf + si];
+      vec3 so = s.xyz - o;
+      float ts = clamp(dot(so, d), 0.0, tMax);
+      vec3 ps = so - d * ts;
+      float rw = s.w + uOccWiden * rough * (tBase + ts);
+      float q = 1.0 - dot(ps, ps) / (rw * rw);    // 0 at the widened silhouette
+      if (q <= 0.0) continue;
+      float o1 = uOccDensity * q * exp(-(tBase + ts) * uOccFalloff);
+      trans *= 1.0 - clamp(o1, 0.0, 1.0);
+    }
+    if (trans < 0.01) break;
+  }
+  return trans;
+}
 ` : /* glsl */`
 uniform sampler2D uHullTex;
 vec4 hfetch(int cell, int t) { return texelFetch(uHullTex, ivec2(t, cell), 0); }
@@ -119,6 +170,14 @@ vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
     float tHit = tTot + bestT;
     float effR = min(1.0, rough * (1.0 + tHit * uDistRough));
     float lod = roughToLod(effR);
+${useUbo ? /* glsl */`
+    // occluder transmittance over this cell's segment attenuates everything
+    // sampled beyond it (this cell's tile AND the recursion)
+    if (uOccOn > 0.5 && float(i) < uOccHops) {
+      w *= occSegment(cell, pos, dir, bestT, effR, tTot);
+      if (w < 0.005) return acc;
+    }
+` : ''}
     int nextCell = -1;
     float blend = 0.0;
     if (i < maxHops) {

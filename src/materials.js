@@ -3,6 +3,7 @@
 // all materials, so flipping e.g. uMaxSteps.value updates the whole scene.
 import * as THREE from 'three';
 import { SCENE_VERT, sceneFrag } from './shaders.js';
+import { buildOccluderGroup } from './occluders.js';
 
 // hull records as a std140 uniform block: the traversal's dependent
 // texelFetches become constant-register reads. Flip false to fall back to
@@ -26,6 +27,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
       hullGroup.add(new THREE.Uniform(new THREE.Vector4(a[i], a[i + 1], a[i + 2], a[i + 3])));
     }
   }
+  // analytic occluder block (filled per frame by OccluderSystem); UBO-only
+  const occ = USE_HULL_UBO ? buildOccluderGroup(numCells) : null;
 
   // defaults from interactive tuning: virtual portals ignore the edge blend in
   // the shader, so modest blend widths here only affect doorways
@@ -51,6 +54,11 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uBake: { value: 0.0 },
     uExposure: { value: 0.3 },
     uDebugMode: { value: 0 },
+    uOccOn: { value: 0.0 },      // analytic occluders (?occluders=1 / GUI)
+    uOccHops: { value: 2 },
+    uOccDensity: { value: 1.2 },
+    uOccFalloff: { value: 0.12 },
+    uOccWiden: { value: 0.5 },
   };
 
   function lightUniforms(cellId) {
@@ -87,6 +95,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
         uTint: { value: new THREE.Vector3(...(opts.tint || [1, 1, 1])) },
         uEmissive: { value: new THREE.Vector3(...(opts.emissive || [0, 0, 0])) },
         uRough: { value: opts.rough !== undefined ? opts.rough : 0.04 }, // glass/pane only
+        uOccSelf: { value: -1 }, // occluder id of THIS prop (self-occlusion skip)
         uRoughFactor: { value: opts.roughFactor !== undefined ? opts.roughFactor : 1 },
         uMetalFactor: { value: opts.metalFactor !== undefined ? opts.metalFactor : 0 },
         // artistic clear-coat cheat: dielectric F0=0.04 spec reads as nothing
@@ -106,7 +115,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     mat.stencilRef = 0;
     mat.stencilFunc = THREE.AlwaysStencilFunc;
     mat.stencilZPass = THREE.ReplaceStencilOp;
-    if (hullGroup) mat.uniformsGroups = [hullGroup];
+    if (hullGroup) mat.uniformsGroups = occ ? [hullGroup, occ.group] : [hullGroup];
     allMaterials.push(mat);
     return mat;
   }
@@ -122,7 +131,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     mat.uniforms.uCell.value = cellId;
   }
 
-  return { globals, makeMaterial, setMaterialCell, allMaterials };
+  return { globals, makeMaterial, setMaterialCell, allMaterials, occ };
 }
 
 // Instantiate all static level meshes into the scene (layer 0 = baked/static).

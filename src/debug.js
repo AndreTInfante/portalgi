@@ -89,6 +89,27 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
     fs.add(P, 'manualH', 0.1, 2, 0.01).name('furniture: depth (m)').onChange(refit);
     fs.add({ dump: () => reflections.dumpParams() }, 'dump').name('DUMP values (console+clipboard)');
   }
+  {
+    const fo = gui.addFolder('Occluders');
+    const op = {
+      get on() { return g.uOccOn.value > 0.5; }, set on(v) { g.uOccOn.value = v ? 1 : 0; },
+      get density() { return g.uOccDensity.value; }, set density(v) { g.uOccDensity.value = v; },
+      get falloff() { return g.uOccFalloff.value; }, set falloff(v) { g.uOccFalloff.value = v; },
+      get widen() { return g.uOccWiden.value; }, set widen(v) { g.uOccWiden.value = v; },
+      get hops() { return g.uOccHops.value; }, set hops(v) { g.uOccHops.value = v; },
+    };
+    fo.add(op, 'on').name('analytic occluders');
+    fo.add(op, 'density', 0, 3, 0.01);
+    fo.add(op, 'falloff', 0, 1, 0.005).name('falloff /m');
+    fo.add(op, 'widen', 0, 2, 0.01).name('widen x rough-m');
+    fo.add(op, 'hops', 0, 4, 1).name('LOD (cells of walk)');
+    fo.add({ dump: () => {
+      const j = JSON.stringify({ density: g.uOccDensity.value, falloff: g.uOccFalloff.value,
+        widen: g.uOccWiden.value, hops: g.uOccHops.value }, null, 2);
+      console.log('occluder params:', j);
+      if (navigator.clipboard) navigator.clipboard.writeText(j).catch(() => {});
+    } }, 'dump').name('DUMP values (console+clipboard)');
+  }
   if (perf) {
     const fp = gui.addFolder('Perf');
     const pp = { get burn() { return perf.burn; }, set burn(v) { perf.setBurn(v); } };

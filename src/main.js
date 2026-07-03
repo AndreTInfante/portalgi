@@ -20,6 +20,7 @@ import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
 import { ReflectionSystem } from './reflections.js';
 import { PerfHarness } from './perf.js';
+import { OccluderSystem } from './occluders.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -109,6 +110,8 @@ async function boot() {
   // optional URL overrides for comparison screenshots
   if (params.has('steps')) matsys.globals.uMaxSteps.value = parseInt(params.get('steps'));
   if (params.has('rhops')) matsys.globals.uRoughHops.value = parseFloat(params.get('rhops'));
+  if (params.get('occluders') === '1') matsys.globals.uOccOn.value = 1;
+  if (params.has('occd')) matsys.globals.uOccDensity.value = parseFloat(params.get('occd'));
   if (params.has('blend')) matsys.globals.uBlendOn.value = parseFloat(params.get('blend'));
   if (params.has('debug')) matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
   if (params.has('irr')) matsys.globals.uIrrBlend.value = parseFloat(params.get('irr'));
@@ -155,6 +158,8 @@ async function boot() {
     reflections.staticImposters = v;
     rebake();
   };
+  // analytic occluders: dynamic props as sphere sets inside the traversal
+  const occluders = matsys.occ ? new OccluderSystem(matsys.occ, props) : null;
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
   buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, reflections, onStaticImposters, perf);
@@ -325,6 +330,7 @@ async function boot() {
     }
     props.update(0.016, player);
     reflections.update(floorSets, null); // smudges are part of the verified frame
+    if (occluders) occluders.update();
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
     const gl = renderer.getContext();
@@ -401,6 +407,7 @@ async function boot() {
   // perf sweep config string: names the A/B condition in every report
   perf.configFn = () =>
     `steps${matsys.globals.uMaxSteps.value}/rh${matsys.globals.uRoughHops.value > 0.5 ? 1 : 0}` +
+    `/occ${matsys.globals.uOccOn.value > 0.5 ? 1 : 0}` +
     `/cull${culler.enabled ? 1 : 0}/smudge${reflections.enabled ? 1 : 0}/` +
     (renderer.xr.isPresenting ? `${rateState.target}Hz` : 'desktop');
   if (params.has('burn')) perf.setBurn(parseInt(params.get('burn')));
@@ -606,6 +613,7 @@ async function boot() {
     }
     culler.apply(staticGroup, props, state.baking);
     reflections.update(floorSets, culler.enabled && !state.baking ? culler.visible : null);
+    if (occluders && !state.baking) occluders.update();
     if (!inXR) {
       player.applyToCamera(camera);
       const aimed = !props.held && props.aim(player.pos, player.viewDir);

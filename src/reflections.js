@@ -1,24 +1,48 @@
-// Planar reflection smudges for dynamic props: the baked atlas can never show
-// moving objects, so mirror an ANALYTIC ELLIPSOID imposter of each prop
-// beneath reflective floors (real geometry -> correct stereo depth in VR).
+// Planar CONTACT reflections for props and furniture: the baked atlas can't
+// show dynamic objects (and smears static contact detail), so mirror an
+// analytic blob under each object on reflective floors.
 //
-// Edge softness is the hard part: per-fragment proxies (normals, center
-// gradients) cannot know they are at the screen silhouette of a low-poly
-// shape. So the silhouette is made analytic instead: each prop is fit with an
-// ellipsoid, and the fragment shader computes the view ray's CHORD LENGTH
-// through it in closed form. Thickness reaches zero exactly and smoothly at
-// the silhouette regardless of tessellation - the sphere mesh is only a
-// raster footprint. Blur-cone widening = growing the ellipsoid radii with
-// height on the CPU (no vertex displacement, nothing to crack).
+// The blob is a rounded tapered cone: a 2D contact ellipse pinned exactly at
+// the mirror plane (fitted to the mesh's ground footprint), a second 2D
+// ellipse at the object's widest band - with its own center, so overhangs
+// stay aligned - a distance between the two planes, and rounded caps. The
+// fragment shader minimizes the implicit function along the view ray, so the
+// silhouette is exact and soft regardless of mesh tessellation (the sphere
+// mesh is only a raster footprint). A short gaussian falloff on depth below
+// the plane kills the deep/widest part entirely: it reads as a contact
+// reflection, strongest where object meets floor.
 //
-// - Floor materials write stencil 1 where a reflective floor is the visible
-//   surface (all other opaques write 0); imposters render depthTest-off,
-//   stencil-tested, clipped to the cell floor bbox.
-// - Alpha: chord softness x height falloff x the floor's ACTUAL roughness map
-//   in floor-plane UV x floor fresnel at the grazing angle.
+// All look parameters live in this.params (see DEFAULTS) and are driven live
+// by the GUI 'Smudges' folder; fit* / manual* changes need refit(), which the
+// GUI calls automatically.
 import * as THREE from 'three';
+import { findCell } from './level.js';
 
 const REFLECTIVE_MAX_ROUGHFACTOR = 0.75; // floors glossier than this get smudges
+
+const DEFAULTS = {
+  opacity: 1.0,       // base alpha
+  feather: 0.3,       // silhouette softness: smoothstep width on the implicit
+  fadeBase: 0.25,     // gaussian depth scale (m) on a mirror-perfect floor...
+  fadeRough: 0.3,     // ...plus this much extra on a rough one
+  fresnelMin: 0.3,    // reflectance floor at normal incidence (rough spec)
+  breakBase: 1.35,    // alpha = clamp(breakBase - floorRoughness*breakSlope)
+  breakSlope: 1.6,
+  widenBase: 0.15,    // deep-ellipse widening, fraction of cone height...
+  widenRough: 0.5,    // ...plus this much scaled by floor roughness
+  liftFade: 0.3,      // e-folding height (m) for objects lifted off the floor
+  tintGain: 1.0,      // multiplier on every smudge color
+  // fit-time (refit() to apply)
+  fitContactBand: 0.15, // bottom fraction of object height = contact footprint
+  fitWidestLo: 0.2,     // height band sampled for the widest ellipse
+  fitWidestHi: 0.7,
+  fitHFrac: 0.45,       // widest-plane height as fraction of object height
+  fitAxisScale: 0.6,    // half-axis = band extent * this (0.5 = exact)
+  // authored contacts (benches/pedestals/pillar; refit() to apply)
+  manualScale: 1.0,     // contact radius = collider r * this
+  manualTaper: 1.25,    // widest = contact * this
+  manualH: 0.45,        // plane distance (m)
+};
 
 const VERT = /* glsl */`
 varying vec3 vWorld;
@@ -33,63 +57,145 @@ const FRAG = /* glsl */`
 precision highp float;
 uniform vec3 uColor;
 uniform float uOpacity;
-uniform float uFade;
+uniform float uFeather;
+uniform float uFresnelMin;
+uniform float uBreakBase;
+uniform float uBreakSlope;
+uniform float uFade;    // gaussian depth scale: contact zone only
+uniform float uLift;    // whole-smudge fade when the object leaves the floor
 uniform sampler2D uFloorOrm;
 uniform float uFloorRoughF;
 uniform vec4 uBounds;   // cell floor bbox: minX, minZ, maxX, maxZ
-uniform mat4 uInvM;     // world -> unit-sphere space of the ellipsoid
-uniform float uCenterY; // depth of the mirrored ellipsoid center below floor
+uniform mat4 uInvW;     // world -> cone frame (origin at contact center, y up into the blob)
+uniform vec2 uA0;       // contact ellipse half-axes (at y=0)
+uniform vec2 uA1;       // widest ellipse half-axes (at y=uH, pre-widened by floor roughness)
+uniform vec2 uC1;       // xz offset of the widest ellipse center
+uniform float uH;       // distance between the two ellipse planes
+uniform vec2 uRound;    // cap rounding below/above the two planes
+uniform vec3 uBC;       // bounding ellipsoid center (cone frame)
+uniform vec3 uBR;       // bounding ellipsoid radii
 uniform float uExposure;
 varying vec3 vWorld;
 vec3 acesTonemap(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
+// tapered-cone implicit: cross sections are ellipses lerped (axes AND center)
+// between the contact plane (y=0) and the widest plane (y=uH), rounded caps
+float coneF(vec3 p) {
+  float yc = clamp(p.y, 0.0, uH);
+  float f = yc / max(uH, 1e-3);
+  vec2 q = (p.xz - uC1 * f) / mix(uA0, uA1, f);
+  float e = (p.y - yc) / (p.y < 0.0 ? uRound.x : uRound.y);
+  return dot(q, q) + e * e - 1.0;
+}
 void main() {
   if (vWorld.x < uBounds.x || vWorld.z < uBounds.y ||
       vWorld.x > uBounds.z || vWorld.z > uBounds.w) discard; // this cell's floor only
-  // analytic silhouette: chord of the view ray through the unit sphere
-  vec3 ro = (uInvM * vec4(cameraPosition, 1.0)).xyz;
-  vec3 rp = (uInvM * vec4(vWorld, 1.0)).xyz;
-  vec3 rd = normalize(rp - ro);
-  float b = dot(ro, rd);
-  float c2 = dot(ro, ro) - 1.0;
-  float h = b * b - c2;
-  if (h <= 0.0) discard;                 // ray misses the ellipsoid
-  float chord = 2.0 * sqrt(h);           // 0 at silhouette -> ~2 through center
-  float shape = smoothstep(0.0, 1.1, chord);
-  // fresnel of the FLOOR at the point the eye reads this smudge through
+  // shared-parameter ray: p_frame(t) = uInvW * (cam + t*dw), dw unnormalized,
+  // so the same t addresses world space (for depth) and cone space (for F)
+  vec3 dw = vWorld - cameraPosition;
+  vec3 o = (uInvW * vec4(cameraPosition, 1.0)).xyz;
+  vec3 d = (uInvW * vec4(dw, 0.0)).xyz;
+  vec3 os = (o - uBC) / uBR;
+  vec3 ds = d / uBR;
+  float A = dot(ds, ds), B = dot(os, ds), C = dot(os, os) - 1.0;
+  float hh = B * B - A * C;
+  if (hh <= 0.0) discard;
+  float sq = sqrt(hh);
+  float t0 = (-B - sq) / A, t1 = (-B + sq) / A;
+  float Fmin = 1e9;
+  float tIn = -1.0;
+  float tPrev = t0;
+  for (int i = 0; i < 16; i++) {
+    float t = mix(t0, t1, (float(i) + 0.5) / 16.0);
+    float F = coneF(o + d * t);
+    Fmin = min(Fmin, F);
+    if (tIn < 0.0 && F < 0.0) {
+      // bisect the entry point: a smooth depth kills sample banding
+      float lo = tPrev, hi = t;
+      for (int j = 0; j < 4; j++) {
+        float tm = 0.5 * (lo + hi);
+        if (coneF(o + d * tm) < 0.0) hi = tm; else lo = tm;
+      }
+      tIn = 0.5 * (lo + hi);
+    }
+    tPrev = t;
+  }
+  if (Fmin >= 0.0) discard;
+  float shape = smoothstep(0.0, uFeather, -Fmin); // exact soft silhouette
+  // depth where the ray first meets the blob = the visible reflection
+  // surface: full strength at the contact line, gaussian death with depth
+  float yw = cameraPosition.y + tIn * dw.y;
+  float g = max(-yw, 0.0) / uFade;
   vec3 Vf = normalize(cameraPosition - vec3(vWorld.x, 0.0, vWorld.z));
-  float F = 0.05 + 0.95 * pow(1.0 - max(Vf.y, 0.0), 5.0);
+  // flattened fresnel: the floor's ROUGH spec (see the baked atlas
+  // reflections) keeps substantial reflectance even near-normal
+  float F5 = uFresnelMin + (1.0 - uFresnelMin) * pow(1.0 - max(Vf.y, 0.0), 5.0);
   float rgh = texture(uFloorOrm, vWorld.xz * 0.35).g * uFloorRoughF;
   float a = uOpacity
           * shape
-          * exp(-uCenterY / uFade)       // rough-reflection contrast dies with height
-          * clamp(1.35 - rgh * 1.6, 0.0, 1.0)
-          * F;
-  vec3 c = pow(acesTonemap(uColor * uExposure), vec3(1.0 / 2.2)); // match scene output
+          * exp(-g * g)                        // contact falloff: the deep part fades out entirely
+          * uLift
+          * clamp(uBreakBase - rgh * uBreakSlope, 0.0, 1.0)
+          * F5;
+  vec3 c = pow(acesTonemap(uColor * uExposure), vec3(1.0 / 2.2)); // scene output space
   gl_FragColor = vec4(c, clamp(a, 0.0, 1.0));
 }
 `;
 
-// local-space bbox of all mesh vertices under a root (for the ellipsoid fit)
-function localBBox(root) {
+// Fit the rounded cone to a mesh: contact ellipse from the bottom height
+// band, widest ellipse from a mid band (each with 8th-92nd percentile extents
+// so sparse geometry and outliers like fins don't inflate them) - everything
+// above the widest plane fades out anyway.
+function fitContactCone(root, P) {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
-  const box = new THREE.Box3();
   const v = new THREE.Vector3();
+  const pts = [];
+  let minY = 1e9, maxY = -1e9;
   root.traverse(o => {
     if (!o.isMesh) return;
     const pos = o.geometry.getAttribute('position');
     const m = new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld);
-    const step = Math.max(1, Math.floor(pos.count / 200));
+    const step = Math.max(1, Math.floor(pos.count / 600));
     for (let i = 0; i < pos.count; i += step) {
-      box.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(m));
+      v.fromBufferAttribute(pos, i).applyMatrix4(m);
+      pts.push([v.x, v.y, v.z]);
+      if (v.y < minY) minY = v.y;
+      if (v.y > maxY) maxY = v.y;
     }
   });
-  return box;
+  if (!pts.length) return null;
+  const H = Math.max(maxY - minY, 0.02);
+  const ellipse = (band) => {
+    if (band.length < 4) return null;
+    const pick = (arr, q) => arr[Math.min(arr.length - 1, Math.floor(q * arr.length))];
+    const xs = band.map(p => p[0]).sort((a, b) => a - b);
+    const zs = band.map(p => p[2]).sort((a, b) => a - b);
+    const x0 = pick(xs, 0.08), x1 = pick(xs, 0.92);
+    const z0 = pick(zs, 0.08), z1 = pick(zs, 0.92);
+    return {
+      c: new THREE.Vector2((x0 + x1) / 2, (z0 + z1) / 2),
+      a: new THREE.Vector2(Math.max((x1 - x0) * P.fitAxisScale, 0.04),
+                           Math.max((z1 - z0) * P.fitAxisScale, 0.04)),
+    };
+  };
+  const contact = ellipse(pts.filter(p => p[1] <= minY + Math.max(P.fitContactBand * H, 0.05)));
+  const widest = ellipse(pts.filter(p => p[1] >= minY + P.fitWidestLo * H && p[1] <= minY + P.fitWidestHi * H))
+    || contact;
+  if (!contact) return null;
+  const h = Math.max(P.fitHFrac * H, 0.05);
+  return {
+    c0: new THREE.Vector3(contact.c.x, minY, contact.c.y),
+    a0: contact.a,
+    a1: new THREE.Vector2(Math.max(widest.a.x, contact.a.x), Math.max(widest.a.y, contact.a.y)),
+    c1: new THREE.Vector2(widest.c.x - contact.c.x, widest.c.y - contact.c.y),
+    h,
+    round: new THREE.Vector2(0.02, Math.max(0.25 * h, 0.05)),
+  };
 }
 
-const S_MIRROR = new THREE.Matrix4().makeScale(1, -1, 1); // reflect about y=0
+const S_MIRROR = new THREE.Matrix4().makeScale(1, -1, 1);
 const IDENT_Q = new THREE.Quaternion();
 
 export class ReflectionSystem {
@@ -98,10 +204,19 @@ export class ReflectionSystem {
     this.props = props;
     this.globals = globals;
     this.enabled = true;
-    this.staticImposters = false; // A/B: statics via imposter vs baked capture
+    this.staticImposters = false; // A/B: horse/whale via imposter vs baked capture
+    this.params = { ...DEFAULTS };
+    // shared BY IDENTITY across all smudge materials (like matsys.globals)
+    this.shared = {
+      uOpacity: { value: this.params.opacity },
+      uFeather: { value: this.params.feather },
+      uFresnelMin: { value: this.params.fresnelMin },
+      uBreakBase: { value: this.params.breakBase },
+      uBreakSlope: { value: this.params.breakSlope },
+    };
     this.group = new THREE.Group();
     scene.add(this.group);
-    this.footprint = new THREE.SphereGeometry(1.04, 24, 16); // shared raster hull
+    this.footprint = new THREE.SphereGeometry(1.04, 24, 16);
 
     this.cellInfo = level.cells.map(c => {
       const reflective = c.floor.roughFactor <= REFLECTIVE_MAX_ROUGHFACTOR;
@@ -115,22 +230,73 @@ export class ReflectionSystem {
     this.entries = [];
     for (const p of props.list) {
       if (p.debugPane) continue; // a clear glass sheet casts no solid smudge
-      const t = p.mats[0] && p.mats[0].uniforms.uTint ? p.mats[0].uniforms.uTint.value : { x: 0.5, y: 0.5, z: 0.5 };
-      this._makeEntry(p, t, false);
+      const t = p.mats[0] && p.mats[0].uniforms.uTint ? p.mats[0].uniforms.uTint.value : null;
+      const hasMaps = p.mats[0] && p.mats[0].uniforms.uMap &&
+        p.mats[0].uniforms.uMap.value && p.mats[0].uniforms.uMap.value.image &&
+        p.mats[0].uniforms.uMap.value.image.width > 8;
+      // textured props carry tint [1,1,1]; their real albedo is in maps we
+      // never averaged - default DARK so alpha-over darkens the floor
+      const col = hasMaps ? [0.16, 0.15, 0.14]
+        : t ? [t.x * 0.4, t.y * 0.4, t.z * 0.4] : [0.2, 0.2, 0.2];
+      this._makeEntry(p, col, fitContactCone(p.mesh, this.params), false);
     }
   }
 
-  // lightmapped static exhibits (geometry already in world space)
+  // lightmapped static exhibits (world-space geometry; gated by staticImposters)
   addStatic(mesh) {
-    this._makeEntry({ mesh, cell: mesh.userData.cell }, { x: 0.45, y: 0.43, z: 0.4 }, true);
+    this._makeEntry({ mesh, cell: mesh.userData.cell }, [0.13, 0.12, 0.11],
+      fitContactCone(mesh, this.params), true);
   }
 
-  _makeEntry(p, tint, isStatic) {
-    const box = localBBox(p.mesh);
-    if (box.isEmpty()) return;
-    const center = box.getCenter(new THREE.Vector3());
-    const radii = box.getSize(new THREE.Vector3()).multiplyScalar(0.5 * 1.05);
-    radii.x = Math.max(radii.x, 0.03); radii.y = Math.max(radii.y, 0.03); radii.z = Math.max(radii.z, 0.03);
+  _manualFit(r) {
+    const P = this.params;
+    const a = r * P.manualScale;
+    return {
+      a0: new THREE.Vector2(a, a),
+      a1: new THREE.Vector2(a * P.manualTaper, a * P.manualTaper),
+      c1: new THREE.Vector2(0, 0),
+      h: P.manualH,
+      round: new THREE.Vector2(0.02, Math.max(0.25 * P.manualH, 0.05)),
+    };
+  }
+
+  // authored contact smudge (benches, pedestals, the pillar) - always on.
+  // Equal-center cone: contact ellipse r at the plane, widening with depth.
+  addContact(x, z, r, cellIds) {
+    const cells = cellIds || [findCell(this.level.cells, new THREE.Vector3(x, 0.5, z))];
+    for (const cid of cells) {
+      const e = this._makeEntry({ mesh: null, cell: cid }, [0.14, 0.13, 0.12],
+        { c0: new THREE.Vector3(x, 0, z), ...this._manualFit(r) }, false);
+      if (e) { e.manual = true; e.manualR = r; }
+    }
+  }
+
+  // re-run the mesh fits / rebuild authored cones after a fit* or manual*
+  // parameter change (GUI calls this)
+  refit() {
+    for (const e of this.entries) {
+      if (e.manual) {
+        Object.assign(e.fit, this._manualFit(e.manualR));
+      } else {
+        const f = fitContactCone(e.prop.mesh, this.params);
+        if (f) e.fit = f;
+      }
+      e.mat.uniforms.uA0.value.copy(e.fit.a0);
+      e.mat.uniforms.uC1.value.copy(e.fit.c1);
+      e.mat.uniforms.uH.value = e.fit.h;
+      e.mat.uniforms.uRound.value.copy(e.fit.round);
+    }
+  }
+
+  dumpParams() {
+    const json = JSON.stringify(this.params, null, 2);
+    console.log('smudge params:', json);
+    if (navigator.clipboard) navigator.clipboard.writeText(json).catch(() => {});
+    return json;
+  }
+
+  _makeEntry(p, col, fit, isStatic) {
+    if (!fit) return null;
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: VERT,
@@ -138,20 +304,27 @@ export class ReflectionSystem {
       transparent: true,
       depthTest: false,
       depthWrite: false,
-      side: THREE.DoubleSide,   // mirrored transform flips winding
+      side: THREE.DoubleSide,
       stencilWrite: true,       // enables the stencil unit...
       stencilWriteMask: 0,      // ...but never writes
       stencilFunc: THREE.EqualStencilFunc,
       stencilRef: 1,
       uniforms: {
-        uColor: { value: new THREE.Vector3(tint.x * 0.5, tint.y * 0.5, tint.z * 0.5) },
-        uOpacity: { value: 0.85 },
-        uFade: { value: 0.5 },
+        ...this.shared, // shared identity - do not clone
+        uColor: { value: new THREE.Vector3(...col) },
+        uFade: { value: 0.4 },
+        uLift: { value: 1 },
         uFloorOrm: { value: null },
         uFloorRoughF: { value: 1 },
         uBounds: { value: new THREE.Vector4() },
-        uInvM: { value: new THREE.Matrix4() },
-        uCenterY: { value: 0 },
+        uInvW: { value: new THREE.Matrix4() },
+        uA0: { value: fit.a0.clone() },
+        uA1: { value: fit.a1.clone() },
+        uC1: { value: fit.c1.clone() },
+        uH: { value: fit.h },
+        uRound: { value: fit.round.clone() },
+        uBC: { value: new THREE.Vector3() },
+        uBR: { value: new THREE.Vector3() },
         uExposure: this.globals.uExposure, // shared identity with the scene
       },
     });
@@ -162,35 +335,75 @@ export class ReflectionSystem {
     mesh.layers.set(3); // never in bake captures
     mesh.visible = false;
     this.group.add(mesh);
-    this.entries.push({
-      prop: p, mesh, mat, isStatic, center, radii,
-      local: new THREE.Matrix4(), scratch: new THREE.Vector3(),
-    });
+    const e = {
+      prop: p, mesh, mat, isStatic, manual: false, fit,
+      baseCol: new THREE.Vector3(...col),
+      frame: new THREE.Matrix4(), local: new THREE.Matrix4(),
+      sv: new THREE.Vector3(), sv2: new THREE.Vector3(),
+    };
+    this.entries.push(e);
+    return e;
   }
 
   update(floorSets, visibleCells) {
+    const P = this.params;
+    this.shared.uOpacity.value = P.opacity;
+    this.shared.uFeather.value = P.feather;
+    this.shared.uFresnelMin.value = P.fresnelMin;
+    this.shared.uBreakBase.value = P.breakBase;
+    this.shared.uBreakSlope.value = P.breakSlope;
     for (const e of this.entries) {
       const p = e.prop;
+      const fit = e.fit;
       const info = this.enabled ? this.cellInfo[p.cell] : null;
-      const show = !!info && p.mesh.visible && (!e.isStatic || this.staticImposters)
+      const propVisible = e.manual ? true : p.mesh.visible;
+      let show = !!info && propVisible && (!e.isStatic || this.staticImposters)
         && (!visibleCells || visibleCells.has(p.cell));
+      let lift = 1;
+      if (show && !e.manual) {
+        p.mesh.updateMatrixWorld(true);
+        const wc = e.sv.copy(fit.c0).applyMatrix4(p.mesh.matrixWorld);
+        lift = Math.exp(-Math.max(wc.y, 0) / P.liftFade); // lifted objects lose contact
+        if (lift < 0.02) show = false;
+      }
       e.mesh.visible = show;
       if (!show) continue;
-      p.mesh.updateMatrixWorld(true);
-      // ellipsoid center height above the floor drives fade + cone widening
-      const wc = e.scratch.copy(e.center).applyMatrix4(p.mesh.matrixWorld);
-      const hgt = Math.max(wc.y, 0);
-      const widen = (0.15 + 0.5 * info.roughF) * hgt;
-      e.scratch.set(e.radii.x + widen, e.radii.y + widen * 0.4, e.radii.z + widen);
-      e.local.compose(e.center, IDENT_Q, e.scratch);
-      e.mesh.matrix.copy(p.mesh.matrixWorld).multiply(e.local).premultiply(S_MIRROR);
-      e.mat.uniforms.uInvM.value.copy(e.mesh.matrix).invert();
-      e.mat.uniforms.uCenterY.value = hgt;
+
+      // cone frame: origin at the contact ellipse center, y up into the blob;
+      // S_MIRROR flips it below the floor in world space
+      e.frame.makeTranslation(fit.c0.x, fit.c0.y, fit.c0.z);
+      if (!e.manual) e.frame.premultiply(p.mesh.matrixWorld);
+      e.frame.premultiply(S_MIRROR);
+      e.mat.uniforms.uInvW.value.copy(e.frame).invert();
+      e.mat.uniforms.uLift.value = lift;
+      e.mat.uniforms.uColor.value.copy(e.baseCol).multiplyScalar(P.tintGain);
+
+      // reflection blur grows with depth on rough floors: widen the DEEP
+      // ellipse only - the contact ellipse stays pinned to the footprint
+      const widen = (P.widenBase + P.widenRough * info.roughF) * fit.h;
+      const a1 = e.mat.uniforms.uA1.value.copy(fit.a1);
+      a1.x += widen; a1.y += widen;
+
+      // bounding ellipsoid of the blob, in the cone frame
+      const rr = fit.round.y;
+      const bx = Math.max(fit.a0.x, a1.x + Math.abs(fit.c1.x)) * 1.1;
+      const bz = Math.max(fit.a0.y, a1.y + Math.abs(fit.c1.y)) * 1.1;
+      const by = (fit.h + rr) * 0.55;
+      e.mat.uniforms.uBC.value.set(fit.c1.x * 0.5, by, fit.c1.y * 0.5);
+      e.mat.uniforms.uBR.value.set(bx, by * 1.15, bz);
+
+      // raster footprint mesh: the bounding ellipsoid, through the same frame
+      e.local.compose(
+        e.sv.set(fit.c0.x + fit.c1.x * 0.5, fit.c0.y + by, fit.c0.z + fit.c1.y * 0.5),
+        IDENT_Q, e.sv2.set(bx, by * 1.15, bz));
+      if (!e.manual) e.local.premultiply(p.mesh.matrixWorld);
+      e.mesh.matrix.copy(e.local).premultiply(S_MIRROR);
+
       const fs = floorSets[p.cell];
       e.mat.uniforms.uFloorOrm.value = fs.ormMap;
       e.mat.uniforms.uFloorRoughF.value = info.roughF;
       e.mat.uniforms.uBounds.value.copy(info.bounds);
-      e.mat.uniforms.uFade.value = 0.25 + 0.35 * (1 - info.roughF);
+      e.mat.uniforms.uFade.value = P.fadeBase + P.fadeRough * (1 - info.roughF);
     }
   }
 }

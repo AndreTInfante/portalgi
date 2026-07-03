@@ -61,6 +61,31 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
   if (culler) f2.add(culler, 'enabled').name('portal culling');
   if (reflections) f2.add(reflections, 'enabled').name('prop reflections');
   if (onStaticImposters) f2.add({ si: false }, 'si').name('static imposters (rebakes)').onChange(onStaticImposters);
+  if (reflections) {
+    const fs = gui.addFolder('Smudges');
+    const P = reflections.params;
+    const refit = () => reflections.refit();
+    fs.add(P, 'opacity', 0, 2.5, 0.01);
+    fs.add(P, 'feather', 0.02, 1.5, 0.01).name('edge feather');
+    fs.add(P, 'fadeBase', 0.05, 1.5, 0.01).name('depth fade (m)');
+    fs.add(P, 'fadeRough', 0, 1.5, 0.01).name('fade + per gloss');
+    fs.add(P, 'fresnelMin', 0, 1, 0.01).name('fresnel floor');
+    fs.add(P, 'breakBase', 0, 2, 0.01).name('breakup base');
+    fs.add(P, 'breakSlope', 0, 3, 0.01).name('breakup x rough');
+    fs.add(P, 'widenBase', 0, 1, 0.01).name('deep widen');
+    fs.add(P, 'widenRough', 0, 2, 0.01).name('widen x rough');
+    fs.add(P, 'liftFade', 0.05, 1, 0.01).name('lift fade (m)');
+    fs.add(P, 'tintGain', 0, 3, 0.01).name('tint gain');
+    fs.add(P, 'fitContactBand', 0.05, 0.6, 0.01).name('fit: contact band').onChange(refit);
+    fs.add(P, 'fitWidestLo', 0, 1, 0.01).name('fit: widest lo').onChange(refit);
+    fs.add(P, 'fitWidestHi', 0, 1, 0.01).name('fit: widest hi').onChange(refit);
+    fs.add(P, 'fitHFrac', 0.1, 1, 0.01).name('fit: height frac').onChange(refit);
+    fs.add(P, 'fitAxisScale', 0.3, 1.2, 0.01).name('fit: axis scale').onChange(refit);
+    fs.add(P, 'manualScale', 0.4, 2, 0.01).name('furniture: radius x').onChange(refit);
+    fs.add(P, 'manualTaper', 1, 2.5, 0.01).name('furniture: taper').onChange(refit);
+    fs.add(P, 'manualH', 0.1, 1.2, 0.01).name('furniture: depth (m)').onChange(refit);
+    fs.add({ dump: () => reflections.dumpParams() }, 'dump').name('DUMP values (console+clipboard)');
+  }
   const f3 = gui.addFolder('Bake');
   f3.add(proxy, 'lightmap').name('use lightmap');
   f3.add(state, 'bounces', 1, 3, 1);

@@ -126,6 +126,18 @@ async function boot() {
   const floorSets = level.cells.map(c => ({ ormMap: textures[c.floor.key].ormMap }));
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
   for (const mm of staticModelMeshes) reflections.addStatic(mm);
+  // authored contact smudges: benches/pedestals/statics via the collider
+  // registry, plus the pillar (spans all four hall cells)
+  for (const cc of level.colliders) reflections.addContact(cc.x, cc.z, cc.r);
+  // pillar footprint is 1.6x1.6m: contact ellipse just past the faces so a
+  // thin grounded ring shows, widening with depth
+  reflections.addContact(11.3, 0, 1.0, [3, 4, 5, 6]);
+  // comparison-screenshot overrides (match the ?steps/?blend block above)
+  if (params.get('smudge') === '0') reflections.enabled = false;
+  if (params.get('smudge') === 'loud') {
+    reflections.params.opacity = 2.5;
+    for (const e of reflections.entries) e.baseCol.set(1, 0, 0);
+  }
   const onStaticImposters = v => {
     // A/B: statics either keep their baked (capture-point-smeared) reflection,
     // or leave the captures and get mirrored imposters instead
@@ -300,6 +312,7 @@ async function boot() {
       pane.mesh.lookAt(camera.position);
     }
     props.update(0.016, player);
+    reflections.update(floorSets, null); // smudges are part of the verified frame
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
     const gl = renderer.getContext();

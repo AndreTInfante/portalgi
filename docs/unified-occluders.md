@@ -158,7 +158,10 @@ worst view + a chrome-ball-in-hand view; decide the smudge system's fate
 
 Phase D - later: manual capsule authoring for horse/whale/furniture
 (wireframe debug view + GUI nudge + JSON dump), analytic sphere AO into the
-diffuse term for dynamics. If the technique is committed to long-term:
+diffuse term for dynamics. Finer-than-material self-skip if groups prove too
+coarse: per-vertex occluder-ignore hints (e.g. a group id in vertex colors,
+fetched against the occluder array) so regions of one mesh can ignore
+different blob sets - Andre's suggestion 2026-07-03. If the technique is committed to long-term:
 auto-exclude anything carrying an occluder imposter from the CAPTURES
 (statics are currently represented twice - smeared in the atlas AND as an
 occluder blob).

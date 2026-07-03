@@ -231,10 +231,10 @@ const CELL_DEFS = [
     floor: { key: 'concrete', roughFactor: 0.35 } },
   { name: 'L1', fp: [[6.3, -11.6], [12.3, -11.6], [16.3, -11.6], [16.3, -5.3], [6.3, -5.3]], h: 3.6,
     edges: [{}, { open: true }, {}, {}, {}],
-    floor: { key: 'wood', roughFactor: 1.4 } },
+    floor: { key: 'wood', roughFactor: 0.55 } },
   { name: 'L2', fp: [[12.3, -17.6], [16.3, -17.6], [16.3, -11.6], [12.3, -11.6]], h: 3.6,
     edges: [{}, {}, { open: true }, {}],
-    floor: { key: 'wood', roughFactor: 1.4 } },
+    floor: { key: 'wood', roughFactor: 0.55 } },
   // lights-off room: one small saturated lamp in a corner -- stress test for
   // diffuse props and irradiance quality in a strongly colored environment
   { name: 'darkroom', fp: rect(12.3, -23.9, 17.3, -17.9), h: 3.2,

@@ -57,9 +57,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uOccOn: { value: 0.0 },      // analytic occluders (?occluders=1 / GUI)
     uOccHops: { value: 2 },
     uOccDensity: { value: 1.2 },
-    uOccFalloff: { value: 0.12 },
-    uOccWiden: { value: 0.5 },
-    uOccTint: { value: 0.35 },   // artistic: blocked light -> darkened occluder diffuse
+    uOccWiden: { value: 0.5 },   // cone growth per rough-meter: drives spread AND fade
+    uOccTint: { value: 0.8 },    // user-tuned: it's ~AO + optically-correct ambient
   };
 
   function lightUniforms(cellId) {

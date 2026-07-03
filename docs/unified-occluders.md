@@ -156,10 +156,21 @@ Phase C - measure on device: sweep A/B occluders vs (clamped) smudges at the
 worst view + a chrome-ball-in-hand view; decide the smudge system's fate
 (retire for dynamics / keep as static contact grounding).
 
-Phase D - later: manual sphere authoring for horse/whale/furniture
+Phase D - later: manual capsule authoring for horse/whale/furniture
 (wireframe debug view + GUI nudge + JSON dump), analytic sphere AO into the
-diffuse term for dynamics, tinted-irradiance re-add if pure subtractive
-reads wrong on bright objects.
+diffuse term for dynamics. If the technique is committed to long-term:
+auto-exclude anything carrying an occluder imposter from the CAPTURES
+(statics are currently represented twice - smeared in the atlas AND as an
+occluder blob).
+
+Shipped since the plan was written: capsule primitive (sphere swept along a
+segment - two vec4 slots, a==b degenerates to a sphere; rotation is just
+transforming two endpoints); tinted re-emission (blocked light re-emits
+occluder albedo x cell irradiance x uOccTint, user-tuned 0.8 - it is ~AO
+plus optically-plausible ambient); cone-footprint falloff (occlusion peak =
+r^2/rw^2 with rw grown by surface-rough x distance: chrome sees solid
+occluders with feathered edges at any distance, rough floors see them fade
+with distance, energy-conserving with the blur spread).
 
 ## Rollout
 

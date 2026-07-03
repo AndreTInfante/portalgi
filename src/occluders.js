@@ -43,10 +43,11 @@ export function buildOccluderGroup(numCells) {
   };
 }
 
-// Automatic fit: one sphere per submesh bounding box, elongated boxes split
-// into a chain of 2-3 along the long axis. Local space; largest 5 kept.
+// Automatic fit: one CAPSULE per submesh bounding box - elongated boxes get
+// a single stretched capsule along the long axis, compact ones degenerate to
+// a sphere (a == b). Local space; largest 5 kept.
 // (Hero statics get a manual authoring pass later - see the design doc.)
-function fitSpheres(root) {
+function fitCapsules(root) {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
   const v = new THREE.Vector3();
@@ -66,19 +67,17 @@ function fitSpheres(root) {
     const ext = new THREE.Vector3().subVectors(max, min);
     const ctr = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
     const axes = ['x', 'y', 'z'].sort((a, b) => ext[b] - ext[a]);
-    const L = axes[0], a = ext[axes[1]], b = ext[axes[2]];
-    const ratio = ext[L] / Math.max(Math.max(a, b), 1e-3);
-    if (ratio > 1.7) {
-      // chain along the long axis: cross-section-sized spheres
-      const k = Math.min(3, Math.round(ratio));
-      const r = 0.5 * Math.hypot(a, b) * 0.9;
-      for (let i = 0; i < k; i++) {
-        const c = ctr.clone();
-        c[L] = min[L] + r + (ext[L] - 2 * r) * (k > 1 ? i / (k - 1) : 0.5);
-        out.push({ c, r });
-      }
+    const L = axes[0], sa = ext[axes[1]], sb = ext[axes[2]];
+    const ratio = ext[L] / Math.max(Math.max(sa, sb), 1e-3);
+    if (ratio > 1.4) {
+      const r = 0.5 * Math.hypot(sa, sb) * 0.9;
+      const a = ctr.clone(), b = ctr.clone();
+      a[L] = Math.min(min[L] + r, ctr[L]);
+      b[L] = Math.max(max[L] - r, ctr[L]);
+      out.push({ a, b, r });
     } else {
-      out.push({ c: ctr.clone(), r: 0.5 * ext.length() * 0.85 });
+      const c = ctr.clone();
+      out.push({ a: c, b: c.clone(), r: 0.5 * ext.length() * 0.85 });
     }
   });
   out.sort((p, q) => q.r - p.r);
@@ -88,7 +87,7 @@ function fitSpheres(root) {
 // vertex-band fit for big merged static meshes (statue + plinth are one
 // geometry): k spheres stacked along the longest bbox axis, radii from
 // percentile-trimmed extents per band so outliers don't inflate them
-function fitSpheresVerts(mesh, k = 3) {
+function fitCapsulesVerts(mesh, k = 3) {
   const pos = mesh.geometry.getAttribute('position');
   const v = new THREE.Vector3();
   const pts = [];
@@ -112,7 +111,8 @@ function fitSpheresVerts(mesh, k = 3) {
     c[0] /= band.length; c[1] /= band.length; c[2] /= band.length;
     const ds = band.map(p => Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2])).sort((x, y) => x - y);
     const r = ds[Math.floor(ds.length * 0.9)]; // 90th percentile reach
-    out.push({ c: new THREE.Vector3(...c), r: Math.max(r, 0.1) });
+    const cv = new THREE.Vector3(...c);
+    out.push({ a: cv, b: cv.clone(), r: Math.max(r, 0.1) });
   }
   return out.slice(0, MAX_SPH_PER_PROP);
 }
@@ -124,7 +124,7 @@ export class OccluderSystem {
     this.sv = new THREE.Vector3();
     for (const p of props.list) {
       if (p.debugPane) continue; // clear glass occludes nothing
-      const spheres = fitSpheres(p.mesh);
+      const spheres = fitCapsules(p.mesh);
       if (spheres.length) {
         // occluder blob color ~ the prop's diffuse albedo (procedural textures
         // carry a linear average; model textures fall back to a neutral)
@@ -136,7 +136,8 @@ export class OccluderSystem {
         const id = this.entries.length;
         this.entries.push({
           p, id, spheres, col,
-          world: spheres.map(() => new THREE.Vector4()),
+          // two vec4 slots per capsule: (a, r) and (b, spare)
+          world: spheres.map(() => [new THREE.Vector4(), new THREE.Vector4()]),
         });
         // a prop's own reflection rays start inside its occluder set: tag its
         // materials so the shader skips self (uOccMeta.z carries the id)
@@ -148,34 +149,29 @@ export class OccluderSystem {
     this.statics = []; // furniture/statues: world-space, packed as-is
   }
 
-  // static exhibit mesh (world-space geometry): vertex-band sphere fit
+  // static exhibit mesh (world-space geometry): vertex-band fit
   addStatic(mesh, cellId, col) {
-    const spheres = fitSpheresVerts(mesh);
-    if (!spheres.length) return;
+    const caps = fitCapsulesVerts(mesh);
+    if (!caps.length) return;
     this.statics.push({
       cell: cellId, col,
-      world: spheres.map(s => new THREE.Vector4(s.c.x, s.c.y, s.c.z, s.r)),
+      world: caps.map(s => [
+        new THREE.Vector4(s.a.x, s.a.y, s.a.z, s.r),
+        new THREE.Vector4(s.b.x, s.b.y, s.b.z, 0),
+      ]),
     });
   }
 
-  // authored box-ish furniture (benches/pedestals from the collider registry):
-  // sphere chain along the longest of (2rx, h, 2rz), yaw-rotated
-  addBox(x, z, rot, rx, rz, h, cellId, col) {
-    const dims = [2 * rx, h, 2 * rz];
-    const L = dims.indexOf(Math.max(...dims));
-    const short = dims.filter((_, i) => i !== L);
-    const r = 0.5 * Math.hypot(short[0], short[1]) * 0.9;
-    const k = Math.max(1, Math.min(3, Math.round(dims[L] / Math.max(2 * r, 1e-3))));
-    const cos = Math.cos(rot), sin = Math.sin(rot);
-    const world = [];
-    for (let i = 0; i < k; i++) {
-      const f = k > 1 ? i / (k - 1) : 0.5;
-      const off = -dims[L] / 2 + r + (dims[L] - 2 * r) * f;
-      let lx = 0, ly = h / 2, lz = 0;
-      if (L === 0) lx = off; else if (L === 1) ly = h / 2 + off; else lz = off;
-      world.push(new THREE.Vector4(x + lx * cos - lz * sin, ly, z + lx * sin + lz * cos, r));
-    }
-    this.statics.push({ cell: cellId, col, world });
+  // authored furniture piece: a list of world-space capsules [a, b, r] that
+  // stays ONE entry (tight bounding sphere keeps the reject test effective)
+  addPiece(capsules, cellId, col) {
+    this.statics.push({
+      cell: cellId, col,
+      world: capsules.slice(0, MAX_SPH_PER_PROP).map(([a, b, r]) => [
+        new THREE.Vector4(a[0], a[1], a[2], r),
+        new THREE.Vector4(b[0], b[1], b[2], 0),
+      ]),
+    });
   }
 
   update() {
@@ -193,8 +189,10 @@ export class OccluderSystem {
       const scale = mw.getMaxScaleOnAxis();
       for (let i = 0; i < e.spheres.length; i++) {
         const s = e.spheres[i];
-        this.sv.copy(s.c).applyMatrix4(mw);
-        e.world[i].set(this.sv.x, this.sv.y, this.sv.z, s.r * scale);
+        this.sv.copy(s.a).applyMatrix4(mw);
+        e.world[i][0].set(this.sv.x, this.sv.y, this.sv.z, s.r * scale);
+        this.sv.copy(s.b).applyMatrix4(mw);
+        e.world[i][1].set(this.sv.x, this.sv.y, this.sv.z, 0);
       }
       push(e.p.cell, { world: e.world, col: e.col, id: e.id });
     }
@@ -212,20 +210,27 @@ export class OccluderSystem {
       if (list) {
         for (const e of list) {
           if (count >= MAX_PER_CELL || pi >= MAX_OCC_PROPS ||
-              si + e.world.length > MAX_SPHERES) break;
-          // entry-level bounding sphere from the world shape spheres
+              si + e.world.length * 2 > MAX_SPHERES) break;
+          // entry-level bounding sphere over both capsule endpoints
           let cx = 0, cy = 0, cz = 0;
-          for (const w of e.world) { cx += w.x; cy += w.y; cz += w.z; }
+          for (const [wa, wb] of e.world) {
+            cx += (wa.x + wb.x) / 2; cy += (wa.y + wb.y) / 2; cz += (wa.z + wb.z) / 2;
+          }
           const n = e.world.length;
           cx /= n; cy /= n; cz /= n;
           let rb = 0;
-          for (const w of e.world) {
-            rb = Math.max(rb, Math.hypot(w.x - cx, w.y - cy, w.z - cz) + w.w);
+          for (const [wa, wb] of e.world) {
+            rb = Math.max(rb,
+              Math.hypot(wa.x - cx, wa.y - cy, wa.z - cz) + wa.w,
+              Math.hypot(wb.x - cx, wb.y - cy, wb.z - cz) + wa.w);
           }
           occ.bound[pi].value.set(cx, cy, cz, rb);
           occ.meta[pi].value.set(si, n, e.id, 0);
           occ.color[pi].value.set(e.col[0], e.col[1], e.col[2], 0);
-          for (const w of e.world) occ.sph[si++].value.copy(w);
+          for (const [wa, wb] of e.world) {
+            occ.sph[si++].value.copy(wa);
+            occ.sph[si++].value.copy(wb);
+          }
           pi++;
           count++;
         }

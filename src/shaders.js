@@ -76,16 +76,20 @@ layout(std140) uniform OccluderData {
 uniform float uOccOn;
 uniform float uOccHops;    // LOD: occluders evaluated for the first N cells of the walk
 uniform float uOccDensity;
-uniform float uOccFalloff; // occlusion decay per meter of ray distance
-uniform float uOccWiden;   // radius growth per (roughness * meter): match cone blur
+uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
 uniform int uOccSelf;      // this prop's occluder id: rays start inside it - skip
 
-// transmittance through this cell's occluders along ray segment [0, tMax].
+// transmittance through this cell's occluders (CAPSULES: two vec4 slots,
+// (a,r)+(b,-); a==b is a sphere) along ray segment [0, tMax].
+// Falloff is cone-footprint coverage: the reflection cone grows with
+// surface roughness x distance, and a blurred occluder spreads its
+// occlusion over the widened radius with a dimmed peak (r^2/rw^2) - energy
+// conserving. Chrome (rough~0) sees solid occluders with feathered edges at
+// any distance; rough floors see them fade out with distance.
 // Subtractive and saturating - no sorting. Each bite of transmittance
 // accumulates the biter's albedo into col so the caller can re-emit blocked
-// light as darkened occluder diffuse instead of pitch black. tBase = path
-// length already walked, so widening and falloff are continuous across portals.
+// light as darkened occluder diffuse instead of pitch black.
 float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase, inout vec3 col) {
   float trans = 1.0;
   int first = int(uOccCell[cell].x);
@@ -98,20 +102,33 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
     float tc = clamp(dot(oc, d), 0.0, tMax);
     vec3 pc = oc - d * tc;
     float rb = b.w + uOccWiden * rough * (tBase + tc) + 0.05;
-    if (dot(pc, pc) > rb * rb) continue;          // prop-level reject
+    if (dot(pc, pc) > rb * rb) continue;          // entry-level reject
     int sf = int(uOccMeta[first + pi].x);
     int sc = int(uOccMeta[first + pi].y);
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;
-      vec4 s = uOccSph[sf + si];
-      vec3 so = s.xyz - o;
-      float ts = clamp(dot(so, d), 0.0, tMax);
-      vec3 ps = so - d * ts;
-      float rw = s.w + uOccWiden * rough * (tBase + ts);
+      vec4 A = uOccSph[sf + si * 2];
+      vec3 u = uOccSph[sf + si * 2 + 1].xyz - A.xyz;
+      // closest approach between the ray segment and the capsule axis
+      vec3 w0 = o - A.xyz;
+      float bb = dot(d, u);
+      float cc = dot(u, u);
+      float dw = dot(d, w0);
+      float e = dot(u, w0);
+      // a surface point inside a capsule IS that occluder (bench seat over
+      // its own seat capsule, prop resting on a pedestal capsule): skip it
+      float s0 = cc > 1e-6 ? clamp(e / cc, 0.0, 1.0) : 0.0;
+      vec3 p0 = w0 - u * s0;
+      if (dot(p0, p0) < A.w * A.w * 1.1) continue;
+      float sg = cc > 1e-6 ? clamp((e - dw * bb) / max(cc - bb * bb, 1e-5), 0.0, 1.0) : 0.0;
+      float ts = clamp(sg * bb - dw, 0.0, tMax);
+      if (cc > 1e-6) sg = clamp((e + ts * bb) / cc, 0.0, 1.0);
+      vec3 ps = w0 + d * ts - u * sg;
+      float rw = A.w + uOccWiden * rough * (tBase + ts);
       float q = 1.0 - dot(ps, ps) / (rw * rw);    // 0 at the widened silhouette
       if (q <= 0.0) continue;
-      float o1 = uOccDensity * q * exp(-(tBase + ts) * uOccFalloff);
-      float taken = trans * clamp(o1, 0.0, 1.0);
+      float cover = (A.w * A.w) / (rw * rw);      // blur spreads, peak dims
+      float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0);
       trans -= taken;
       col += taken * uOccColor[first + pi].rgb;
     }
@@ -182,7 +199,9 @@ ${useUbo ? /* glsl */`
     // fraction re-emits as darkened occluder diffuse lit by cell irradiance
     if (uOccOn > 0.5 && float(i) < uOccHops) {
       vec3 ocol = vec3(0.0);
-      float tr = occSegment(cell, pos, dir, bestT, effR, tTot, ocol);
+      // surface roughness (not distance-grown effR) drives the cone: the
+      // footprint model already accounts for distance inside occSegment
+      float tr = occSegment(cell, pos, dir, bestT, rough, tTot, ocol);
       if (tr < 0.997) acc += w * uOccTint * ocol * sampleIrr(cell, -dir);
       w *= tr;
       if (w < 0.005) return acc;

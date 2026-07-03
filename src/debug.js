@@ -102,19 +102,17 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
     const op = {
       get on() { return g.uOccOn.value > 0.5; }, set on(v) { g.uOccOn.value = v ? 1 : 0; },
       get density() { return g.uOccDensity.value; }, set density(v) { g.uOccDensity.value = v; },
-      get falloff() { return g.uOccFalloff.value; }, set falloff(v) { g.uOccFalloff.value = v; },
       get widen() { return g.uOccWiden.value; }, set widen(v) { g.uOccWiden.value = v; },
       get hops() { return g.uOccHops.value; }, set hops(v) { g.uOccHops.value = v; },
       get tint() { return g.uOccTint.value; }, set tint(v) { g.uOccTint.value = v; },
     };
     fo.add(op, 'on').name('analytic occluders');
     fo.add(op, 'density', 0, 3, 0.01);
-    fo.add(op, 'falloff', 0, 1, 0.005).name('falloff /m');
-    fo.add(op, 'widen', 0, 2, 0.01).name('widen x rough-m');
+    fo.add(op, 'widen', 0, 2, 0.01).name('cone / rough-m (fade)');
     fo.add(op, 'tint', 0, 1, 0.01).name('diffuse re-emit');
     fo.add(op, 'hops', 0, 4, 1).name('LOD (cells of walk)');
     fo.add({ dump: () => {
-      const j = JSON.stringify({ density: g.uOccDensity.value, falloff: g.uOccFalloff.value,
+      const j = JSON.stringify({ density: g.uOccDensity.value,
         widen: g.uOccWiden.value, tint: g.uOccTint.value, hops: g.uOccHops.value }, null, 2);
       console.log('occluder params:', j);
       if (navigator.clipboard) navigator.clipboard.writeText(j).catch(() => {});

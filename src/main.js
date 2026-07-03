@@ -165,8 +165,25 @@ async function boot() {
     const walnutAvg = textures.walnut.map.userData.avg;
     for (const cc of level.colliders) {
       if (cc.h === undefined) continue; // statics register from their meshes below
-      occluders.addBox(cc.x, cc.z, cc.rot || 0, cc.rx, cc.rz, cc.h,
-        findCell(level.cells, new THREE.Vector3(cc.x, 0.5, cc.z)), walnutAvg);
+      const cellId = findCell(level.cells, new THREE.Vector3(cc.x, 0.5, cc.z));
+      const rot = cc.rot || 0;
+      const cos = Math.cos(rot), sin = Math.sin(rot);
+      const P = (lx, y, lz) => [cc.x + lx * cos - lz * sin, y, cc.z + lx * sin + lz * cos];
+      if (cc.rx > cc.rz * 2) {
+        // bench: one long seat capsule + two narrow leg capsules
+        const rs = cc.rz;
+        occluders.addPiece([
+          [P(-(cc.rx - rs), cc.h * 0.84, 0), P(cc.rx - rs, cc.h * 0.84, 0), rs],
+          [P(-cc.rx * 0.86, 0.16, 0), P(-cc.rx * 0.86, cc.h * 0.6, 0), cc.rz * 0.8],
+          [P(cc.rx * 0.86, 0.16, 0), P(cc.rx * 0.86, cc.h * 0.6, 0), cc.rz * 0.8],
+        ], cellId, walnutAvg);
+      } else {
+        // pedestal: a single stretched vertical capsule
+        const r = cc.rx * 1.15;
+        occluders.addPiece([
+          [[cc.x, r * 0.9, cc.z], [cc.x, cc.h - r * 0.5, cc.z], r],
+        ], cellId, walnutAvg);
+      }
     }
     for (const mm of staticModelMeshes) {
       occluders.addStatic(mm, mm.userData.cell, [0.42, 0.4, 0.36]);

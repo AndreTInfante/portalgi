@@ -69,6 +69,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
         uRough: { value: opts.rough !== undefined ? opts.rough : 0.04 }, // glass/pane only
         uRoughFactor: { value: opts.roughFactor !== undefined ? opts.roughFactor : 1 },
         uMetalFactor: { value: opts.metalFactor !== undefined ? opts.metalFactor : 0 },
+        // artistic clear-coat cheat: dielectric F0=0.04 spec reads as nothing
+        // on a bright floor - polished stone needs help to read as polished
+        uSpecBoost: { value: opts.specBoost !== undefined ? opts.specBoost : 1 },
         uLightPos: { value: lp },
         uLightColor: { value: lc },
         uLightCount: { value: n },
@@ -118,7 +121,7 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
         map: set.map, nrm: set.normalMap, orm: set.ormMap,
         roughFactor: o.paintingIndex !== undefined ? 0.4 : (o.roughFactor !== undefined ? o.roughFactor : 1),
         metalFactor: o.metalFactor !== undefined ? o.metalFactor : (o.texMap ? 1 : 0),
-        tint: o.tint, emissive: o.emissive,
+        specBoost: o.specBoost, tint: o.tint, emissive: o.emissive,
       }));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key

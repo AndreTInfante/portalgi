@@ -240,6 +240,7 @@ uniform sampler2D uNrmMap;
 uniform sampler2D uOrmMap;   // AO / roughness / metallic
 uniform float uRoughFactor;
 uniform float uMetalFactor;
+uniform float uSpecBoost;
 uniform sampler2D uLightmap;
 uniform float uUseLightmap;
 uniform int uCell;
@@ -385,7 +386,7 @@ void main() {
       // along R - skip the whole hull walk (Tier 1)
       vec3 pre = (rough > 0.65) ? sampleIrr(uCell, R)
                                 : traceSpec(uCell, P, R, rough, steps);
-      color += pre * envBRDF(F0, rough, NoV) * ao;
+      color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
     }
   }
 

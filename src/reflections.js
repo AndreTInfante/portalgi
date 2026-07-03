@@ -22,10 +22,10 @@ const REFLECTIVE_MAX_ROUGHFACTOR = 0.75; // floors glossier than this get smudge
 
 // user-tuned 2026-07 (in-app Smudges dashboard, dumped values, round 2)
 const DEFAULTS = {
-  opacity: 0.75,      // base alpha
+  opacity: 0.86,      // base alpha (x brightComp: 0.90 eff on wood, 0.65 on marble)
   feather: 1.26,      // silhouette softness: smoothstep width on the implicit
   fadeBase: 0.02,     // gaussian depth scale, FRACTION of blob depth, on a
-  fadeRough: 1.0,     // rough floor... plus this much extra on a glossy one:
+  fadeRough: 0.46,    // rough floor... plus this much extra on a glossy one:
                       // depth reach is almost entirely gloss-driven
   fresnelMin: 0.16,   // reflectance floor at normal incidence (rough spec)
   breakBase: 0.75,    // alpha = clamp(breakBase - floorRoughness*breakSlope)
@@ -35,6 +35,9 @@ const DEFAULTS = {
   liftFade: 0.3,      // e-folding height (m) for objects lifted off the floor
   tintGain: 0.14,     // multiplier on smudge colors: near-black dark shapes
                       // read best (colored reflections need albedo averages)
+  brightComp: 0.175,  // equalize perceived darkening across floor albedos:
+                      // 0 = constant alpha, 1 = full 1/luminance compensation.
+                      // Solved from Andre's calibration (0.90 wood / 0.65 marble)
   // fit-time (refit() to apply)
   fitContactBand: 0.6,  // bottom fraction of object height = contact footprint
   fitWidestLo: 0.15,    // height band sampled for the widest ellipse
@@ -44,7 +47,7 @@ const DEFAULTS = {
   // authored contacts (benches/pedestals/pillar; refit() to apply)
   manualScale: 1.53,    // contact half-axes = collider footprint * this
   manualTaper: 1.0,     // widest = contact * this
-  manualH: 0.69,        // plane distance (m)
+  manualH: 1.3,         // plane distance (m)
 };
 
 const VERT = /* glsl */`
@@ -66,6 +69,7 @@ uniform float uBreakBase;
 uniform float uBreakSlope;
 uniform float uFade;    // gaussian depth scale: contact zone only
 uniform float uLift;    // whole-smudge fade when the object leaves the floor
+uniform float uBright;  // floor-albedo compensation (dimmer on bright floors)
 uniform sampler2D uFloorOrm;
 uniform float uFloorRoughF;
 uniform vec4 uBounds;   // cell floor bbox: minX, minZ, maxX, maxZ
@@ -136,6 +140,7 @@ void main() {
   float F5 = uFresnelMin + (1.0 - uFresnelMin) * pow(1.0 - max(Vf.y, 0.0), 5.0);
   float rgh = texture(uFloorOrm, vWorld.xz * 0.35).g * uFloorRoughF;
   float a = uOpacity
+          * uBright
           * shape
           * exp(-g * g)                        // contact falloff: the deep part fades out entirely
           * uLift
@@ -319,6 +324,7 @@ export class ReflectionSystem {
         uColor: { value: new THREE.Vector3(...col) },
         uFade: { value: 0.4 },
         uLift: { value: 1 },
+        uBright: { value: 1 },
         uFloorOrm: { value: null },
         uFloorRoughF: { value: 1 },
         uBounds: { value: new THREE.Vector4() },
@@ -410,6 +416,13 @@ export class ReflectionSystem {
       e.mat.uniforms.uInvW.value.copy(e.frame).invert();
 
       const fs = floorSets[p.cell];
+      // perceived-darkening compensation: alpha-over with a near-black color
+      // removes far more absolute luminance from white marble than dark wood
+      if (fs.lum === undefined) {
+        const av = fs.avg || [0.15, 0.15, 0.15];
+        fs.lum = Math.max(0.2126 * av[0] + 0.7152 * av[1] + 0.0722 * av[2], 0.02);
+      }
+      e.mat.uniforms.uBright.value = Math.min(Math.pow(0.12 / fs.lum, P.brightComp), 1.3);
       e.mat.uniforms.uFloorOrm.value = fs.ormMap;
       e.mat.uniforms.uFloorRoughF.value = info.roughF;
       e.mat.uniforms.uBounds.value.copy(info.bounds);

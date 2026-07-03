@@ -36,6 +36,7 @@ const SHOT_POSES = {
   9: { pos: [0, 1.7, 19.2], look: [-0.9, 1.2, 23.5] },     // exhibit hall A: PBR models
   10: { pos: [4.4, 1.7, 22.5], look: [7.5, 1.2, 22.5] },   // cornell box
   11: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.1, 22.5] }, // exhibit hall B
+  12: { pos: [0, 1.5, 10.6], look: [0, 1.4, 12.4] },       // debug pane held up in the rotunda
 };
 
 const overlay = document.getElementById('overlay');
@@ -123,7 +124,10 @@ async function boot() {
   const props = new Props(scene, level, matsys, modelProps);
   const wires = buildPortalWires(scene, level);
   const reflections = new ReflectionSystem(scene, level, props, matsys.globals);
-  const floorSets = level.cells.map(c => ({ ormMap: textures[c.floor.key].ormMap }));
+  const floorSets = level.cells.map(c => ({
+    ormMap: textures[c.floor.key].ormMap,
+    avg: textures[c.floor.key].map.userData.avg, // linear avg albedo (brightness comp)
+  }));
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
   for (const mm of staticModelMeshes) reflections.addStatic(mm);
   // authored contact smudges: benches/pedestals/statics via the collider
@@ -135,6 +139,12 @@ async function boot() {
   if (params.get('smudge') === 'loud') {
     reflections.params.opacity = 2.5;
     for (const e of reflections.entries) e.baseCol.set(1, 0, 0);
+  }
+  // ?si=1: exclude static exhibits from captures before the initial bake
+  // (headless A/B of the staticImposters toggle)
+  if (params.get('si') === '1') {
+    for (const mm of staticModelMeshes) mm.layers.set(3);
+    reflections.staticImposters = true;
   }
   const onStaticImposters = v => {
     // A/B: statics either keep their baked (capture-point-smeared) reflection,
@@ -304,9 +314,10 @@ async function boot() {
     const pose = SHOT_POSES[SHOT] || SHOT_POSES[1];
     camera.position.set(...pose.pos);
     camera.lookAt(...pose.look);
-    if (SHOT === 7) { // pose the debug pane as if held up in front of the camera
+    if (SHOT === 7 || SHOT === 12) { // pose the debug pane as if held up in front of the camera
       const pane = props.list.find(p => p.debugPane);
-      pane.mesh.position.set(1.2, 1.35, -1.2);
+      if (SHOT === 7) pane.mesh.position.set(1.2, 1.35, -1.2);
+      else pane.mesh.position.set(0, 1.4, 12.4);
       pane.mesh.lookAt(camera.position);
     }
     props.update(0.016, player);

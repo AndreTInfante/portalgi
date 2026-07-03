@@ -216,7 +216,7 @@ const CELL_DEFS = [
   { name: 'corridor', fp: rect(-1.2, 4.3, 1.2, 9.3), h: 3.0,
     floor: { key: 'concrete', roughFactor: 1.3 } },
   { name: 'rotunda', fp: decagon(ROT_C[0], ROT_C[1], ROT_R), h: 5.0,
-    floor: { key: 'marble', roughFactor: 0.6 } },
+    floor: { key: 'marble', roughFactor: 0.25, specBoost: 4.5 } },
   { name: 'hallN', fp: [[HX0, HZ1], [HX1, HZ1], [PX1, PZ1], [PX0, PZ1]], h: 3.6,
     edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
     floor: { key: 'concrete', roughFactor: 0.35 } },
@@ -528,7 +528,8 @@ export function buildLevel() {
   // ---- meshes: floors, ceilings, walls (with holes)
   for (const cell of cells) {
     const fb = getBuilder(cell, 'floor',
-      { mapKey: cell.floor.key, roughFactor: cell.floor.roughFactor });
+      { mapKey: cell.floor.key, roughFactor: cell.floor.roughFactor,
+        specBoost: cell.floor.specBoost });
     const cb = getBuilder(cell, 'plasterPlain', { mapKey: 'plasterPlain' });
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
     const floorPts = cell.fp.map(p => [p[0], cell.floorY, p[1]]);

@@ -76,6 +76,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
     fs.add(P, 'widenRough', 0, 2, 0.01).name('widen x rough');
     fs.add(P, 'liftFade', 0.05, 1, 0.01).name('lift fade (m)');
     fs.add(P, 'tintGain', 0, 3, 0.01).name('tint gain');
+    fs.add(P, 'brightComp', 0, 1, 0.01).name('brightness comp');
     fs.add(P, 'fitContactBand', 0.05, 0.6, 0.01).name('fit: contact band').onChange(refit);
     fs.add(P, 'fitWidestLo', 0, 1, 0.01).name('fit: widest lo').onChange(refit);
     fs.add(P, 'fitWidestHi', 0, 1, 0.01).name('fit: widest hi').onChange(refit);

@@ -37,6 +37,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
   const g = matsys.globals;
   const proxy = {
     get steps() { return g.uMaxSteps.value; }, set steps(v) { g.uMaxSteps.value = v; },
+    get roughHops() { return g.uRoughHops.value > 0.5; }, set roughHops(v) { g.uRoughHops.value = v ? 1 : 0; },
     get edgeBlend() { return g.uBlendOn.value > 0.5; }, set edgeBlend(v) { g.uBlendOn.value = v ? 1 : 0; },
     get blendBase() { return g.uBlendBase.value; }, set blendBase(v) { g.uBlendBase.value = v; },
     get blendRough() { return g.uBlendRough.value; }, set blendRough(v) { g.uBlendRough.value = v; },
@@ -49,6 +50,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, refl
   };
   const f1 = gui.addFolder('Traversal');
   f1.add(proxy, 'steps', 0, 6, 1).name('portal hops (0=PCCM)');
+  f1.add(proxy, 'roughHops').name('rough-scaled hops');
   f1.add(proxy, 'edgeBlend').name('edge blend');
   f1.add(proxy, 'blendBase', 0, 0.4, 0.01).name('blend width base');
   f1.add(proxy, 'blendRough', 0, 3, 0.05).name('blend - rough-dist');

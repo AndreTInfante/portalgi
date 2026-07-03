@@ -108,6 +108,7 @@ async function boot() {
 
   // optional URL overrides for comparison screenshots
   if (params.has('steps')) matsys.globals.uMaxSteps.value = parseInt(params.get('steps'));
+  if (params.has('rhops')) matsys.globals.uRoughHops.value = parseFloat(params.get('rhops'));
   if (params.has('blend')) matsys.globals.uBlendOn.value = parseFloat(params.get('blend'));
   if (params.has('debug')) matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
   if (params.has('irr')) matsys.globals.uIrrBlend.value = parseFloat(params.get('irr'));
@@ -399,7 +400,8 @@ async function boot() {
 
   // perf sweep config string: names the A/B condition in every report
   perf.configFn = () =>
-    `steps${matsys.globals.uMaxSteps.value}/cull${culler.enabled ? 1 : 0}/smudge${reflections.enabled ? 1 : 0}/` +
+    `steps${matsys.globals.uMaxSteps.value}/rh${matsys.globals.uRoughHops.value > 0.5 ? 1 : 0}` +
+    `/cull${culler.enabled ? 1 : 0}/smudge${reflections.enabled ? 1 : 0}/` +
     (renderer.xr.isPresenting ? `${rateState.target}Hz` : 'desktop');
   if (params.has('burn')) perf.setBurn(parseInt(params.get('burn')));
   if (params.get('sweep') === '1') setTimeout(() => perf.startSweep(perf.configFn()), 3000);

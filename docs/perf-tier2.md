@@ -46,9 +46,10 @@ on/off, 72 vs 90 cap:
    distance fade of the crossfade.
 
 5. Portal hops as a mobile quality dial
-   uMaxSteps 3 -> 2 on Quest costs depth in doorway-through-doorway
-   reflections only; wire to the same in-VR toggle cluster if fill is still
-   the limiter after items 1-3.
+   SHIPPED (2026-07-03) in a smarter form: roughness-scaled hop budget in
+   traceSpec (rough > 0.35 -> 1 hop, > 0.12 -> 2, sharp -> uMaxSteps; the
+   rough > 0.65 irradiance early-out is the 0-hop rung). uRoughHops toggle +
+   ?rhops= for A/B.
 
 ## Deliberately deferred (Tier 3, revisit only if needed)
 - KTX2/ASTC texture transcoding (4-8x texture bandwidth; needs a toktx

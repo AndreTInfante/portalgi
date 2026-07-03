@@ -23,6 +23,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uLightmap: { value: blackTex }, // swapped in once the path-traced bake lands
     uUseLightmap: { value: 0.0 },
     uMaxSteps: { value: 3 },
+    uRoughHops: { value: 1.0 },
     uBlendOn: { value: 1.0 },
     uBlendBase: { value: 0.04 },
     uBlendRough: { value: 1.0 }, // ~cone footprint radius per (roughness - meter); silhouette edges only

@@ -57,6 +57,7 @@ float roughToLod(float r) {
 const TRACE_GLSL = /* glsl */`
 uniform sampler2D uHullTex;
 uniform int uMaxSteps;      // portal hops allowed; 0 = plain parallax-corrected cubemap
+uniform float uRoughHops;   // 1 = scale the hop budget by surface roughness
 uniform float uBlendOn;
 uniform float uBlendBase;   // blend band width floor, meters
 uniform float uBlendRough;  // blend band growth per (roughness * meter)
@@ -70,6 +71,15 @@ vec4 hfetch(int cell, int t) { return texelFetch(uHullTex, ivec2(t, cell), 0); }
 // hop into the neighbor cell. A straight ray can never revisit a convex cell,
 // so this always makes forward progress.
 vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
+  // roughness-scaled hop budget: a reflection too blurry to resolve an image
+  // can't resolve a second portal either. Anything reflective keeps >= 1 hop
+  // (portal-boundary artifacts appear at 0); the rough > 0.65 irradiance
+  // early-out at the call site is the 0-hop rung of the same ladder.
+  int maxHops = uMaxSteps;
+  if (uRoughHops > 0.5) {
+    if (rough > 0.35) maxHops = min(uMaxSteps, 1);
+    else if (rough > 0.12) maxHops = min(uMaxSteps, 2);
+  }
   vec4 h0 = hfetch(cell, 0);
   int pc = int(h0.w);
   for (int j = 0; j < ${'12'}; j++) {           // nudge start point inside the hull
@@ -103,7 +113,7 @@ vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
     float lod = roughToLod(effR);
     int nextCell = -1;
     float blend = 0.0;
-    if (i < uMaxSteps) {
+    if (i < maxHops) {
       int poc = int(hfetch(cell, 1).x);
       for (int p = 0; p < 4; p++) {
         if (p >= poc) break;

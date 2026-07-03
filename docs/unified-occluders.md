@@ -127,6 +127,40 @@ appears pacing-bound, not GPU-bound - use pillar hall or 72Hz for A/Bs);
 standard; step quantization put +-1ms error bars on differences (bisection
 refinement added in response, resolution ~5u ~= 0.25ms).
 
+## Work plan (2026-07-03)
+
+Phase A - UBO foundation (Tier 2 item 1, shared infra for occluders):
+1. hulldata.js emits the SAME packed vec4 stream as a Float32Array alongside
+   the DataTexture (one packing routine, two consumers during transition).
+2. TRACE_GLSL: std140 uniform block, hfetch() becomes flat array indexing;
+   texture path kept behind a compile-time define as instant fallback if
+   three's UniformsGroup misbehaves.
+3. materials.js: one static-usage UniformsGroup attached to every scene
+   material. Verify shots pixel-similar; commit.
+
+Phase B - occluder plumbing (?occluders=1):
+1. occluders.js: auto-fit sphere sets per dynamic prop (per-submesh bounding
+   spheres, capped ~5/prop, plus one prop-level bounding sphere); per-frame
+   world transform + per-cell packing into a dynamic-usage UniformsGroup.
+   V1 scope: DYNAMIC props only - statics stay in the captures (occluding
+   them too would double-darken); hero statics come later with the manual
+   authoring pass + capture-exclusion decision.
+2. traceSpec: per cell visited (within uOccHops of the start, LOD), test the
+   segment against that cell's list - prop bound reject, then sphere chords
+   -> transmittance, cone-widened by rough x distance, distance falloff;
+   multiply the final atlas sample. Subtractive only, saturating.
+3. GUI 'Occluders' folder (enable, density, falloff, widen, LOD hops) in the
+   dashboard pattern: Andre tunes, dumps values, they get baked as defaults.
+
+Phase C - measure on device: sweep A/B occluders vs (clamped) smudges at the
+worst view + a chrome-ball-in-hand view; decide the smudge system's fate
+(retire for dynamics / keep as static contact grounding).
+
+Phase D - later: manual sphere authoring for horse/whale/furniture
+(wireframe debug view + GUI nudge + JSON dump), analytic sphere AO into the
+diffuse term for dynamics, tinted-irradiance re-add if pure subtractive
+reads wrong on bright objects.
+
 ## Rollout
 
 1. Perf harness (this session): frame stats, burn pass, auto-sweep, HUD, GUI.

@@ -1,7 +1,7 @@
 // All GLSL for the POC. Scene materials use THREE.ShaderMaterial with GLSL3;
 // bake passes use RawShaderMaterial, also GLSL3 (three prepends the version line).
 import { atlasGLSL } from './atlas.js';
-import { PLANES_OFF, PORTALS_OFF, PORTAL_STRIDE, PROBE_META_OFF } from './hulldata.js';
+import { PLANES_OFF, PORTALS_OFF, PORTAL_STRIDE, PROBE_META_OFF, HULL_TEX_W } from './hulldata.js';
 
 // ------------------------------------------------------------------ shared GLSL
 
@@ -53,17 +53,25 @@ float roughToLod(float r) {
 }
 `;
 
-// portal-hull traversal; expects uHullTex + uniforms below in scope
-const TRACE_GLSL = /* glsl */`
+// portal-hull traversal; hull records come from a std140 uniform block
+// (constant-register reads - the dependent texelFetch path is kept as a
+// fallback should UniformsGroup misbehave on some driver)
+const traceGlsl = (numCells, useUbo) => /* glsl */`
+${useUbo ? /* glsl */`
+layout(std140) uniform HullData {
+  vec4 uHull[${numCells * HULL_TEX_W}];
+};
+vec4 hfetch(int cell, int t) { return uHull[cell * ${HULL_TEX_W} + t]; }
+` : /* glsl */`
 uniform sampler2D uHullTex;
+vec4 hfetch(int cell, int t) { return texelFetch(uHullTex, ivec2(t, cell), 0); }
+`}
 uniform int uMaxSteps;      // portal hops allowed; 0 = plain parallax-corrected cubemap
 uniform float uRoughHops;   // 1 = scale the hop budget by surface roughness
 uniform float uBlendOn;
 uniform float uBlendBase;   // blend band width floor, meters
 uniform float uBlendRough;  // blend band growth per (roughness * meter)
 uniform float uDistRough;   // roughness growth per meter of path length
-
-vec4 hfetch(int cell, int t) { return texelFetch(uHullTex, ivec2(t, cell), 0); }
 
 // Walk the reflection ray through the convex-cell graph.
 // Each iteration: analytic ray-vs-hull exit, portal lookup on the exit plane,
@@ -234,7 +242,7 @@ void main() {
 }
 `;
 
-export function sceneFrag(numCells) {
+export function sceneFrag(numCells, useUbo = true) {
   return /* glsl */`
 precision highp float;
 layout(location = 0) out vec4 fragOut;
@@ -270,7 +278,7 @@ uniform int uDebugMode;   // 0 off, 1 cell tint, 2 step heatmap, 3 irradiance, 4
 ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
-${TRACE_GLSL}
+${traceGlsl(numCells, useUbo)}
 ${TONEMAP_GLSL}
 
 // Diffuse for dynamic objects: per-cell irradiance PROBE GRID, trilinear over

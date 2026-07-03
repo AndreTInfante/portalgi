@@ -45,5 +45,9 @@ export function buildHullTexture(cells) {
   const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
   tex.minFilter = tex.magFilter = THREE.NearestFilter;
   tex.needsUpdate = true;
+  // the scene shader reads this same stream from a std140 uniform block
+  // (constant-register reads beat dependent texelFetches in the hot loop);
+  // bake-side shaders keep the texture path
+  tex.userData.array = data;
   return tex;
 }

@@ -4,9 +4,28 @@
 import * as THREE from 'three';
 import { SCENE_VERT, sceneFrag } from './shaders.js';
 
+// hull records as a std140 uniform block: the traversal's dependent
+// texelFetches become constant-register reads. Flip false to fall back to
+// the DataTexture path (same GLSL interface) if a driver misbehaves.
+const USE_HULL_UBO = true;
+
 export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   const numCells = level.cells.length;
-  const frag = sceneFrag(numCells);
+  const frag = sceneFrag(numCells, USE_HULL_UBO);
+
+  let hullGroup = null;
+  if (USE_HULL_UBO) {
+    // one Uniform per vec4 slot: r160's UniformsGroup change-cache can't
+    // handle a single array-valued uniform (value.clone() on a plain Array),
+    // and the std140 layout is byte-identical either way
+    hullGroup = new THREE.UniformsGroup();
+    hullGroup.setName('HullData');
+    hullGroup.setUsage(THREE.StaticDrawUsage);
+    const a = hullTex.userData.array;
+    for (let i = 0; i < a.length; i += 4) {
+      hullGroup.add(new THREE.Uniform(new THREE.Vector4(a[i], a[i + 1], a[i + 2], a[i + 3])));
+    }
+  }
 
   // defaults from interactive tuning: virtual portals ignore the edge blend in
   // the shader, so modest blend widths here only affect doorways
@@ -87,6 +106,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     mat.stencilRef = 0;
     mat.stencilFunc = THREE.AlwaysStencilFunc;
     mat.stencilZPass = THREE.ReplaceStencilOp;
+    if (hullGroup) mat.uniformsGroups = [hullGroup];
     allMaterials.push(mat);
     return mat;
   }

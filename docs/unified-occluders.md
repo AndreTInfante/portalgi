@@ -219,8 +219,10 @@ with ~2.3ms of measured synthetic headroom remaining.
   demotes all uniform-block reads once the fast constant store overflows.
   ~13KB total measured safe. Occluder array sizes are capacity, not budget.
 - Traversal levers (portal-plane mask, first-crossing-only blend, single-tap
-  secondary hops): traversal delta 35u -> 20u (~1.6ms -> ~0.92ms). Target
-  (<1.5ms) met for the traversal itself.
+  blend partials): traversal delta 35u -> 20u (~1.6ms -> ~0.92ms). Target
+  (<1.5ms) met. NOTE: single-tap on recursed TERMINALS was reverted 2026-07-04
+  (mip popping at portal thresholds in-headset); the blend-partial single tap
+  stays.
 - Bottleneck shifted: the occluder marginal cost read as 5u against the
   pre-lever baseline but 20u (~0.92ms) now - its UBO traffic used to hide
   under the hull-scan reads the mask eliminated. Full GI still ~1.85ms.

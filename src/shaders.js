@@ -43,14 +43,11 @@ vec3 sampleSpec(int cell, vec3 dir, float lod) {
   vec3 b = sampleTile(cell, k1, o);
   return mix(a, b, lod - float(k0));
 }
-// single-tap variant: nearest prefiltered LOD, no manual trilinear. Used on
-// secondary portal hops, where distance-grown roughness has already blurred
-// the reflection past the point where LOD interpolation is visible.
-vec3 sampleSpec1(int cell, vec3 dir, float lod) {
-  vec2 o = octEncode(normalize(dir));
-  int k = int(clamp(lod, 0.0, MAX_SPEC_LOD) + 0.5);
-  return sampleTile(cell, min(k, N_LODS - 1), o);
-}
+// NOTE (2026-07-04): a single-tap nearest-LOD sampler was tried for
+// secondary hops and blend partials - every use produced a visible artifact
+// (mip pop at thresholds, widened-looking blend bands). All atlas samples
+// are manual trilinear; the surviving traversal optimization is the
+// portal-plane mask, which changes no sampling at all.
 vec3 sampleIrr(int cell, vec3 n) {
   vec2 o = octEncode(normalize(n));
   vec2 base = vec2(IRR_X + BORDER_PX, float(cell) * ROW_H + BORDER_PX);
@@ -272,9 +269,7 @@ ${useUbo ? /* glsl */`
       return acc;
     }
     if (blend < 0.998) {
-      // transition-band content, weighted (1-blend) and summed against the
-      // recursed sample: single-tap is beneath visibility here
-      acc += w * (1.0 - blend) * sampleSpec1(cell, localDir, lod);
+      acc += w * (1.0 - blend) * sampleSpec(cell, localDir, lod);
       w *= blend;
     }
     stepsUsed += 1.0;

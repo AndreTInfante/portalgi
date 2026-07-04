@@ -205,6 +205,29 @@ not worth carrying). Occluder budget raised with the measured headroom
 5). Full portal GI (deep traversal + occluders) ~1.85ms at the worst view
 with ~2.3ms of measured synthetic headroom remaining.
 
+## Perf round 2 (2026-07-03, after traversal levers + UBO ceiling revert)
+
+| config    | batch 1 | batch 3 |
+|-----------|---------|---------|
+| steps0    | 90u     | 90u     |
+| occ-off   | 55u     | 70u     |
+| flat-hops | 55u     | 70u     |
+| occluders | 50u     | 50u     |
+
+- PLATFORM CONSTRAINT (batch 2, reverted): ~15.7KB combined UBO regressed
+  every config incl. steps0 (which runs none of the changed code) - Adreno
+  demotes all uniform-block reads once the fast constant store overflows.
+  ~13KB total measured safe. Occluder array sizes are capacity, not budget.
+- Traversal levers (portal-plane mask, first-crossing-only blend, single-tap
+  secondary hops): traversal delta 35u -> 20u (~1.6ms -> ~0.92ms). Target
+  (<1.5ms) met for the traversal itself.
+- Bottleneck shifted: the occluder marginal cost read as 5u against the
+  pre-lever baseline but 20u (~0.92ms) now - its UBO traffic used to hide
+  under the hull-scan reads the mask eliminated. Full GI still ~1.85ms.
+  Next levers if needed: pack uOccMeta+uOccColor into one vec4 (one fewer
+  read per candidate entry), uOccHops LOD 2 -> 1 (quality dial, GUI-testable
+  with zero code).
+
 ## Rollout
 
 1. Perf harness (this session): frame stats, burn pass, auto-sweep, HUD, GUI.

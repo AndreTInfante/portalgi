@@ -76,7 +76,6 @@ vec4 hfetch(int cell, int t) { return uHull[cell * ${HULL_TEX_W} + t]; }
 // inside the walk (see occluders.js for the packing)
 layout(std140) uniform OccluderData {
   vec4 uOccCell[${numCells}];  // x = first entry, y = count
-  vec4 uOccCellB[${numCells}]; // bounding sphere over the cell's entries
   vec4 uOccBound[${MAX_OCC_PROPS}];
   vec4 uOccColor[${MAX_OCC_PROPS}]; // rgb albedo; w packs group|count|firstSlot
   vec4 uOccSph[${MAX_SPHERES}];
@@ -103,14 +102,6 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
   float trans = 1.0;
   int cnt = int(uOccCell[cell].y);
   if (cnt == 0) return trans;
-  // cell-level reject: most rays (up toward ceilings, paintings, walls) miss
-  // the whole prop cluster - one read kills the entire entry loop
-  vec4 cb = uOccCellB[cell];
-  vec3 oc0 = cb.xyz - o;
-  float tc0 = clamp(dot(oc0, d), 0.0, tMax);
-  vec3 pc0 = oc0 - d * tc0;
-  float rb0 = cb.w + uOccWiden * rough * (tBase + tc0) + 0.05;
-  if (dot(pc0, pc0) > rb0 * rb0) return trans;
   int first = int(uOccCell[cell].x);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
@@ -167,7 +158,7 @@ uniform float uDistRough;   // roughness growth per meter of path length
 // roughness-scaled edge blend, then either terminate on the local cubemap or
 // hop into the neighbor cell. A straight ray can never revisit a convex cell,
 // so this always makes forward progress.
-vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
+vec3 traceSpecCore(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed, inout vec3 occAcc) {
   // roughness-scaled hop budget: a reflection too blurry to resolve an image
   // can't resolve a second portal either. Anything reflective keeps >= 1 hop
   // (portal-boundary artifacts appear at 0); the rough > 0.65 irradiance
@@ -217,7 +208,9 @@ ${useUbo ? /* glsl */`
       // surface roughness (not distance-grown effR) drives the cone: the
       // footprint model already accounts for distance inside occSegment
       float tr = occSegment(cell, pos, dir, bestT, rough, tTot, ocol);
-      if (tr < 0.997) acc += w * uOccTint * ocol * sampleIrr(cell, -dir);
+      // blocked color accumulates across hops; the wrapper lights it with
+      // ONE irradiance tap per ray (dir never changes - the ray is straight)
+      occAcc += w * ocol;
       w *= tr;
       if (w < 0.005) return acc;
     }
@@ -284,6 +277,20 @@ ${useUbo ? /* glsl */`
     if (w < 0.005) return acc;
   }
   return acc;
+}
+
+vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
+  vec3 occAcc = vec3(0.0);
+  vec3 r = traceSpecCore(cell, pos, dir, rough, stepsUsed, occAcc);
+${useUbo ? /* glsl */`
+  // deferred tinted re-emission: one tap, only where occlusion is perceptible
+  // (the old per-hop tap on ANY 0.3% occlusion was an extra atlas fetch over
+  // every faintly-grazed pixel - most of the gallery floor)
+  if (occAcc.r + occAcc.g + occAcc.b > 0.015) {
+    r += uOccTint * occAcc * sampleIrr(cell, -dir);
+  }
+` : ''}
+  return r;
 }
 
 uniform float uIrrBlend;   // meters; 0 disables cross-portal diffuse blending

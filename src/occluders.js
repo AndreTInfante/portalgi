@@ -37,14 +37,14 @@ export function buildOccluderGroup(numCells) {
     return arr;
   };
   // add() order defines the std140 layout: must match the GLSL block.
-  // uOccMeta is gone: firstSphere/count/group pack into color.w (17 bits,
-  // float-exact), paying for the cell-level bounding sphere array that lets
-  // most rays reject a whole cell's entries with one read.
+  // firstSphere/count/group pack into color.w (17 bits, float-exact).
+  // NOTE: no cell-level aggregate volume - entries touch the floor, so any
+  // aggregate containing them contains the floor, and floor-origin rays
+  // (the dominant fill) intersect it at t=0. It can never reject them.
   return {
     group,
     numCells,
     cell: mk(numCells),
-    cellB: mk(numCells),
     bound: mk(MAX_OCC_PROPS),
     color: mk(MAX_OCC_PROPS),
     sph: mk(MAX_SPHERES),
@@ -257,21 +257,6 @@ export class OccluderSystem {
         }
       }
       occ.cell[c].value.set(first, count, 0, 0);
-      // cell-level bounding sphere over this cell's packed entries: one
-      // shader-side test culls the whole list for rays that miss the cluster
-      let bx = 0, by = 0, bz = 0, br = 0;
-      for (let k = first; k < pi; k++) {
-        const b = occ.bound[k].value;
-        bx += b.x; by += b.y; bz += b.z;
-      }
-      if (count > 0) {
-        bx /= count; by /= count; bz /= count;
-        for (let k = first; k < pi; k++) {
-          const b = occ.bound[k].value;
-          br = Math.max(br, Math.hypot(b.x - bx, b.y - by, b.z - bz) + b.w);
-        }
-      }
-      occ.cellB[c].value.set(bx, by, bz, br);
     }
   }
 }

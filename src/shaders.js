@@ -75,10 +75,10 @@ vec4 hfetch(int cell, int t) { return uHull[cell * ${HULL_TEX_W} + t]; }
 // analytic occluders: dynamic props as sphere sets, tested per cell segment
 // inside the walk (see occluders.js for the packing)
 layout(std140) uniform OccluderData {
-  vec4 uOccCell[${numCells}];
+  vec4 uOccCell[${numCells}];  // x = first entry, y = count
+  vec4 uOccCellB[${numCells}]; // bounding sphere over the cell's entries
   vec4 uOccBound[${MAX_OCC_PROPS}];
-  vec4 uOccMeta[${MAX_OCC_PROPS}];
-  vec4 uOccColor[${MAX_OCC_PROPS}];
+  vec4 uOccColor[${MAX_OCC_PROPS}]; // rgb albedo; w packs group|count|firstSlot
   vec4 uOccSph[${MAX_SPHERES}];
 };
 uniform float uOccOn;
@@ -101,19 +101,30 @@ uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shad
 // light as darkened occluder diffuse instead of pitch black.
 float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase, inout vec3 col) {
   float trans = 1.0;
-  int first = int(uOccCell[cell].x);
   int cnt = int(uOccCell[cell].y);
+  if (cnt == 0) return trans;
+  // cell-level reject: most rays (up toward ceilings, paintings, walls) miss
+  // the whole prop cluster - one read kills the entire entry loop
+  vec4 cb = uOccCellB[cell];
+  vec3 oc0 = cb.xyz - o;
+  float tc0 = clamp(dot(oc0, d), 0.0, tMax);
+  vec3 pc0 = oc0 - d * tc0;
+  float rb0 = cb.w + uOccWiden * rough * (tBase + tc0) + 0.05;
+  if (dot(pc0, pc0) > rb0 * rb0) return trans;
+  int first = int(uOccCell[cell].x);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
-    if (int(uOccMeta[first + pi].z) == uOccSelf) continue; // own-group skip
     vec4 b = uOccBound[first + pi];
     vec3 oc = b.xyz - o;
     float tc = clamp(dot(oc, d), 0.0, tMax);
     vec3 pc = oc - d * tc;
     float rb = b.w + uOccWiden * rough * (tBase + tc) + 0.05;
     if (dot(pc, pc) > rb * rb) continue;          // entry-level reject
-    int sf = int(uOccMeta[first + pi].x);
-    int sc = int(uOccMeta[first + pi].y);
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
+    if ((packed & 63) == uOccSelf) continue;      // own-group skip
+    int sc = (packed >> 6) & 7;
+    int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;
       vec4 A = uOccSph[sf + si * 2];
@@ -134,7 +145,7 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       float cover = (A.w * A.w) / (rw * rw);      // blur spreads, peak dims
       float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0);
       trans -= taken;
-      col += taken * uOccColor[first + pi].rgb;
+      col += taken * colw.rgb;
     }
     if (trans < 0.01) break;
   }

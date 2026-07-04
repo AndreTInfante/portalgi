@@ -36,13 +36,16 @@ export function buildOccluderGroup(numCells) {
     }
     return arr;
   };
-  // add() order defines the std140 layout: must match the GLSL block
+  // add() order defines the std140 layout: must match the GLSL block.
+  // uOccMeta is gone: firstSphere/count/group pack into color.w (17 bits,
+  // float-exact), paying for the cell-level bounding sphere array that lets
+  // most rays reject a whole cell's entries with one read.
   return {
     group,
     numCells,
     cell: mk(numCells),
+    cellB: mk(numCells),
     bound: mk(MAX_OCC_PROPS),
-    meta: mk(MAX_OCC_PROPS),
     color: mk(MAX_OCC_PROPS),
     sph: mk(MAX_SPHERES),
   };
@@ -242,8 +245,9 @@ export class OccluderSystem {
               Math.hypot(wb.x - cx, wb.y - cy, wb.z - cz) + wa.w);
           }
           occ.bound[pi].value.set(cx, cy, cz, rb);
-          occ.meta[pi].value.set(si, n, e.group, 0);
-          occ.color[pi].value.set(e.col[0], e.col[1], e.col[2], 0);
+          // color.w packs group (6b) | sphereCount (3b) | firstSlot (rest)
+          occ.color[pi].value.set(e.col[0], e.col[1], e.col[2],
+            e.group + n * 64 + si * 512);
           for (const [wa, wb] of e.world) {
             occ.sph[si++].value.copy(wa);
             occ.sph[si++].value.copy(wb);
@@ -253,6 +257,21 @@ export class OccluderSystem {
         }
       }
       occ.cell[c].value.set(first, count, 0, 0);
+      // cell-level bounding sphere over this cell's packed entries: one
+      // shader-side test culls the whole list for rays that miss the cluster
+      let bx = 0, by = 0, bz = 0, br = 0;
+      for (let k = first; k < pi; k++) {
+        const b = occ.bound[k].value;
+        bx += b.x; by += b.y; bz += b.z;
+      }
+      if (count > 0) {
+        bx /= count; by /= count; bz /= count;
+        for (let k = first; k < pi; k++) {
+          const b = occ.bound[k].value;
+          br = Math.max(br, Math.hypot(b.x - bx, b.y - by, b.z - bz) + b.w);
+        }
+      }
+      occ.cellB[c].value.set(bx, by, bz, br);
     }
   }
 }

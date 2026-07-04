@@ -158,7 +158,7 @@ uniform float uDistRough;   // roughness growth per meter of path length
 // roughness-scaled edge blend, then either terminate on the local cubemap or
 // hop into the neighbor cell. A straight ray can never revisit a convex cell,
 // so this always makes forward progress.
-vec3 traceSpecCore(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed, inout vec3 occAcc) {
+vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
   // roughness-scaled hop budget: a reflection too blurry to resolve an image
   // can't resolve a second portal either. Anything reflective keeps >= 1 hop
   // (portal-boundary artifacts appear at 0); the rough > 0.65 irradiance
@@ -208,9 +208,12 @@ ${useUbo ? /* glsl */`
       // surface roughness (not distance-grown effR) drives the cone: the
       // footprint model already accounts for distance inside occSegment
       float tr = occSegment(cell, pos, dir, bestT, rough, tTot, ocol);
-      // blocked color accumulates across hops; the wrapper lights it with
-      // ONE irradiance tap per ray (dir never changes - the ray is straight)
-      occAcc += w * ocol;
+      // tinted re-emission taps irradiance only at PERCEPTIBLE occlusion
+      // (>= 5%; the old 0.3% threshold bought an extra atlas fetch across
+      // every faintly-grazed pixel of cone-widened blob area). Kept per-hop:
+      // an accumulator threaded through the walk cost registers on every
+      // traceSpec in every pixel and tipped occupancy (measured regression)
+      if (tr < 0.95) acc += w * uOccTint * ocol * sampleIrr(cell, -dir);
       w *= tr;
       if (w < 0.005) return acc;
     }
@@ -277,20 +280,6 @@ ${useUbo ? /* glsl */`
     if (w < 0.005) return acc;
   }
   return acc;
-}
-
-vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
-  vec3 occAcc = vec3(0.0);
-  vec3 r = traceSpecCore(cell, pos, dir, rough, stepsUsed, occAcc);
-${useUbo ? /* glsl */`
-  // deferred tinted re-emission: one tap, only where occlusion is perceptible
-  // (the old per-hop tap on ANY 0.3% occlusion was an extra atlas fetch over
-  // every faintly-grazed pixel - most of the gallery floor)
-  if (occAcc.r + occAcc.g + occAcc.b > 0.015) {
-    r += uOccTint * occAcc * sampleIrr(cell, -dir);
-  }
-` : ''}
-  return r;
 }
 
 uniform float uIrrBlend;   // meters; 0 disables cross-portal diffuse blending

@@ -537,7 +537,10 @@ export function buildLevel() {
     cb.polygon(floorPts.map(p => [p[0], cell.ceilY, p[2]]), [0, -1, 0], uvf);
     for (const edge of cell.edges) {
       if (edge.open) continue;
-      const wb = getBuilder(cell, edge.mat, { mapKey: edge.mat });
+      // concrete walls use the wall-styled set (form-tie panels); the plain
+      // 'concrete' key stays on floors where panel seams would look wrong
+      const wb = getBuilder(cell, edge.mat, {
+        mapKey: edge.mat === 'concrete' ? 'concreteWall' : edge.mat });
       const len = Math.hypot(edge.b[0] - edge.a[0], edge.b[1] - edge.a[1]);
       const h = cell.ceilY - cell.floorY;
       const u = [(edge.b[0] - edge.a[0]) / len, (edge.b[1] - edge.a[1]) / len];
@@ -572,21 +575,26 @@ export function buildLevel() {
       for (const b of B) { const d = a.distanceToSquared(b); if (d < bd) { bd = d; best = b; } }
       return best;
     });
-    const jb = getBuilder(sa.cell, 'plaster', { mapKey: 'plaster' });
+    // plasterPlain: the plaster set's baked-in baseboard stripe (v < 0.045)
+    // must not paint across jamb reveals (the "footers in door frames" bug)
+    const jb = getBuilder(sa.cell, 'plasterPlain', { mapKey: 'plasterPlain' });
     const fb = getBuilder(sa.cell, 'floor');
     const mid = A[0].clone().add(A[2]).add(Bp[0]).add(Bp[2]).multiplyScalar(0.25);
-    const quadToward = (builder, p0, p1, p2, p3, uvScale) => {
+    const quadToward = (builder, p0, p1, p2, p3) => {
       const e1 = p1.clone().sub(p0), e2 = p3.clone().sub(p0);
+      // world-proportional UVs at the floor/ceiling density; a fixed square
+      // scale squashed the texture ~10:1 on the tall thin reveals
+      const us = e1.length() * 0.35, vs = e2.length() * 0.35;
       const g = e1.clone().cross(e2);
       const inC = mid.clone().sub(p0);
       const n = g.dot(inC) >= 0 ? g.normalize() : g.negate().normalize();
       builder.quad([p0.toArray(), p1.toArray(), p2.toArray(), p3.toArray()], n.toArray(),
-        [[0, 0], [uvScale, 0], [uvScale, uvScale], [0, uvScale]]);
+        [[0, 0], [us, 0], [us, vs], [0, vs]]);
     };
-    quadToward(jb, A[0], Bp[0], Bp[3], A[3], 0.3);   // left reveal
-    quadToward(jb, A[1], Bp[1], Bp[2], A[2], 0.3);   // right reveal
-    quadToward(jb, A[3], Bp[3], Bp[2], A[2], 0.3);   // lintel underside
-    quadToward(fb, A[0], Bp[0], Bp[1], A[1], 0.3);   // floor strip
+    quadToward(jb, A[0], Bp[0], Bp[3], A[3]);   // left reveal
+    quadToward(jb, A[1], Bp[1], Bp[2], A[2]);   // right reveal
+    quadToward(jb, A[3], Bp[3], Bp[2], A[2]);   // lintel underside
+    quadToward(fb, A[0], Bp[0], Bp[1], A[1]);   // floor strip
   }
 
   // ---- paintings (rotunda ones resolved to decagon edges), built as geometry:

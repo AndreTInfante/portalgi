@@ -75,6 +75,188 @@ function makePBRSet(size, fills) {
   return { map, normalMap, ormMap };
 }
 
+async function loadImg(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`texture fetch failed (${res.status}): ${url}`);
+  return createImageBitmap(await res.blob());
+}
+
+// Image -> CanvasTexture with the same conventions as makeCanvasTex (flipY
+// false, repeat wrap, userData.avg on sRGB maps). opts:
+//   tile      draw the source NxN (full source res per tile; canvas grows)
+//   target    per-channel sRGB average to gain the image toward (brightness
+//             correction so swapped-in photos keep the baked look's energy)
+//   flatten   compress albedo contrast toward the target (1 = keep, 0 = flat);
+//             photo plaster is far blotchier than clean gallery walls
+//   norFlat   scale normal-map strength toward flat (1 = keep)
+//   roughMul  scale the ORM roughness channel (G); lower = glossier
+//   band      paint the baseboard strip over v < 0.045: fn(x, y) -> [r,g,b]
+//   srgb      color texture (compute avg, tag SRGBColorSpace)
+function makeImgTex(img, { tile = 1, target = null, flatten = 1, norFlat = 1, roughMul = 1, band = null, srgb = false } = {}) {
+  const size = Math.min(img.width * tile, 2048);
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const step = size / tile;
+  for (let ty = 0; ty < tile; ty++) {
+    for (let tx = 0; tx < tile; tx++) ctx.drawImage(img, tx * step, ty * step, step, step);
+  }
+  const id = ctx.getImageData(0, 0, size, size);
+  const d = id.data;
+  if (target) {
+    let sr = 0, sg = 0, sb = 0;
+    for (let i = 0; i < d.length; i += 4) { sr += d[i]; sg += d[i + 1]; sb += d[i + 2]; }
+    const np = d.length / 4;
+    const g = [target[0] / (sr / np), target[1] / (sg / np), target[2] / (sb / np)];
+    for (let i = 0; i < d.length; i += 4) {
+      for (let ch = 0; ch < 3; ch++) {
+        const v = d[i + ch] * g[ch];
+        d[i + ch] = Math.min(255, target[ch] + (v - target[ch]) * flatten);
+      }
+    }
+  }
+  if (norFlat < 1) {
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = 128 + (d[i] - 128) * norFlat;
+      d[i + 1] = 128 + (d[i + 1] - 128) * norFlat;
+    }
+  }
+  if (roughMul !== 1) {
+    for (let i = 1; i < d.length; i += 4) d[i] = Math.min(255, d[i] * roughMul);
+  }
+  if (band) {
+    const rows = Math.round(size * 0.045);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4;
+        const [r, g, b] = band(x, y);
+        d[i] = r; d[i + 1] = g; d[i + 2] = b;
+      }
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.flipY = false;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  if (srgb) {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    let sr = 0, sg = 0, sb = 0;
+    for (let i = 0; i < d.length; i += 4) { sr += d[i]; sg += d[i + 1]; sb += d[i + 2]; }
+    const np = d.length / 4 * 255;
+    tex.userData.avg = [(sr / np) ** 2.2, (sg / np) ** 2.2, (sb / np) ** 2.2];
+  } else {
+    tex.colorSpace = THREE.LinearSRGBColorSpace;
+  }
+  return tex;
+}
+
+// Which photo set replaces each procedural key. To swap one: drop the maps in
+// assets/textures/<slug>/<slug>_{diff,nor_gl,arm}_<res>.jpg (Poly Haven's jpg
+// naming) and edit the entry here. Knobs (all optional):
+//   target   [r,g,b] sRGB average to steer brightness toward (omit = natural
+//            color; the targets below are the procedural sets' averages, so
+//            the tuned room brightness survives the swap)
+//   flatten  0..1 albedo contrast around target (1 = full photo contrast)
+//   norFlat  0..1 normal-map strength (1 = full)
+//   roughMul scales ORM roughness; lower = glossier
+export const REAL_SETS = {
+  // Andre's CC0 white veined marble ships as separate maps (cgbookcase-style
+  // naming): give `files` explicitly; ao + rough compose into an ORM in-loader
+  marble: {
+    dir: 'marble_0017_ao_1k',
+    files: {
+      diff: 'marble_0017_color_1k.jpg', nor: 'marble_0017_normal_opengl_1k.png',
+      ao: 'marble_0017_ao_1k.jpg', rough: 'marble_0017_roughness_1k.jpg',
+    },
+    target: [208, 208, 211], roughMul: 0.6,
+  },
+  // varnished dark wood: reflects far more cleanly than plank/parquet photos
+  wood: { slug: 'wood_table_001', res: '2k' },
+  concrete: { slug: 'concrete_floor_worn_001', res: '1k', target: [135, 135, 132] },
+  // board-formed panels with form ties: wall-styled, so walls only (floors
+  // keep the plain slab above via the concrete/concreteWall key split)
+  concreteWall: { slug: 'concrete_wall_009', res: '2k' },
+  walnut: { slug: 'dark_wood', res: '1k' },
+  // mild flatten reins in the photo's stains without going flat-procedural
+  // (also feeds plasterPlain = ceilings/jambs)
+  plaster: { slug: 'painted_plaster_wall', res: '1k', target: [230, 226, 219], flatten: 0.65, norFlat: 0.7 },
+};
+
+// AO (R) + roughness (G) images -> one ORM texture (metal = 0)
+function makeOrmTex(aoImg, roughImg, { roughMul = 1 } = {}) {
+  const size = Math.min(Math.max(aoImg.width, roughImg.width), 2048);
+  const grab = img => {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const x = c.getContext('2d');
+    x.drawImage(img, 0, 0, size, size);
+    return { c, x, d: x.getImageData(0, 0, size, size) };
+  };
+  const ao = grab(aoImg), ro = grab(roughImg);
+  const d = ao.d.data, rd = ro.d.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i + 1] = Math.min(255, rd[i] * roughMul);
+    d[i + 2] = 0;
+  }
+  ao.x.putImageData(ao.d, 0, 0);
+  const tex = new THREE.CanvasTexture(ao.c);
+  tex.flipY = false;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  return tex;
+}
+
+// Swap the procedural sets for photo sets (CC0). Fetch failure throws; the
+// caller keeps the procedural fallback.
+export async function applyRealTextures(textures) {
+  // default: Poly Haven jpg naming inside assets/textures/<slug>/;
+  // sets with explicit `files` (+ optional `dir`) may split ORM into ao+rough
+  const filesOf = s => s.files || {
+    diff: `${s.slug}_diff_${s.res}.jpg`,
+    nor: `${s.slug}_nor_gl_${s.res}.jpg`,
+    arm: `${s.slug}_arm_${s.res}.jpg`,
+  };
+  const keys = Object.keys(REAL_SETS);
+  const all = await Promise.all(keys.map(k => {
+    const s = REAL_SETS[k];
+    const f = filesOf(s);
+    const url = file => `./assets/textures/${s.dir || s.slug}/${file}`;
+    const parts = f.arm ? [f.diff, f.nor, f.arm] : [f.diff, f.nor, f.ao, f.rough];
+    return Promise.all(parts.map(p => loadImg(url(p))));
+  }));
+  // NOTE each map gets ONLY its own opts: norFlat/roughMul rescale channels
+  // and would tint the albedo if spread into the diffuse call (they did)
+  const set = (imgs, opts = {}) => ({
+    map: makeImgTex(imgs[0], { tile: opts.tile, target: opts.target,
+      flatten: opts.flatten, srgb: true, band: opts.bandAlbedo }),
+    normalMap: makeImgTex(imgs[1], { tile: opts.tile, norFlat: opts.norFlat,
+      band: opts.band && (() => [128, 128, 255]) }),
+    ormMap: imgs.length > 3
+      ? makeOrmTex(imgs[2], imgs[3], opts)
+      : makeImgTex(imgs[2], { tile: opts.tile, roughMul: opts.roughMul,
+          band: opts.band && (() => [255, 115, 0]) }),
+  });
+  // baseboard strip painted back over the wall set, matching the procedural one
+  const bb = (x, y) => {
+    const n = fbm(x / 1024 * 12, y / 1024 * 12, 4, 12);
+    const l = 62 + n * 18;
+    return [l, l * 0.92, l * 0.85];
+  };
+  keys.forEach((k, i) => {
+    const { slug, res, dir, files, ...opts } = REAL_SETS[k];
+    if (k !== 'plaster') { textures[k] = set(all[i], opts); return; }
+    // plaster: tile 2x2 inside the canvas (wall v spans the height exactly
+    // once for the baseboard band), paint the band in, clamp vertically
+    textures.plaster = set(all[i], { ...opts, tile: 2, band: true, bandAlbedo: bb });
+    for (const t of [textures.plaster.map, textures.plaster.normalMap, textures.plaster.ormMap]) {
+      t.wrapT = THREE.ClampToEdgeWrapping;
+    }
+    textures.plasterPlain = set(all[i], { ...opts, tile: 2 });
+  });
+}
+
 export function buildTextures() {
   // Each entry is a PBR set: { map, normalMap, ormMap }; map.userData.avg holds
   // the linear average albedo for the path tracer.
@@ -159,7 +341,8 @@ export function buildTextures() {
   const cornellRed = flat(165, 40, 35, 0.95);
   const cornellGreen = flat(70, 145, 55, 0.95);
 
-  return { plaster, plasterPlain, wood, marble, concrete, walnut, white, cornellWhite, cornellRed, cornellGreen };
+  return { plaster, plasterPlain, wood, marble, concrete, concreteWall: concrete,
+    walnut, white, cornellWhite, cornellRed, cornellGreen };
 }
 // name, aspect (w/h), display height in meters
 export const PAINTINGS = [

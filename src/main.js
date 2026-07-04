@@ -4,7 +4,7 @@
 // capture) -> loop. `?bake=1` runs a high-quality bake and PUTs the textures
 // to the dev server under baked/ for distribution.
 import * as THREE from 'three';
-import { buildTextures, loadPaintingTextures } from './textures.js';
+import { buildTextures, applyRealTextures, loadPaintingTextures } from './textures.js';
 import { buildLevel, packLightmapCharts } from './level.js';
 import { buildHullTexture } from './hulldata.js';
 import { Baker } from './bake.js';
@@ -102,6 +102,13 @@ async function boot() {
   };
 
   const textures = buildTextures();
+  // Poly Haven photo sets replace the procedural ones (?realtex=0 to compare);
+  // on fetch failure the procedural fallback just stays in place
+  if (params.get('realtex') !== '0') {
+    overlayMsg.textContent = 'Loading textures...';
+    try { await applyRealTextures(textures); }
+    catch (e) { console.warn('real textures unavailable, using procedural:', e.message); }
+  }
   const level = buildLevel();
   await addStaticModels(level); // static exhibits join the builders BEFORE chart packing
   packLightmapCharts(level, lmSettings.lmden, lmSettings.lmw);

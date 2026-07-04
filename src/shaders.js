@@ -262,9 +262,10 @@ ${useUbo ? /* glsl */`
     }
     vec3 localDir = hitP - h0.xyz;
     if (nextCell < 0 || blend <= 0.002) {
-      // primary hit keeps manual trilinear; secondary hops are blur-dominated
-      acc += w * (i == 0 ? sampleSpec(cell, localDir, lod)
-                         : sampleSpec1(cell, localDir, lod));
+      // the terminal sample is directly visible content: always trilinear.
+      // (Nearest-LOD here popped between mip columns as reflections crossed
+      // portal thresholds - fidelity discontinuity right at the seam.)
+      acc += w * sampleSpec(cell, localDir, lod);
       return acc;
     }
     if (blend < 0.998) { // only reachable on the first crossing

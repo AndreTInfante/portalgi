@@ -56,7 +56,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uDebugMode: { value: 0 },
     uOccOn: { value: 1.0 },      // analytic occluders: DEFAULT after the 2026-07-03
                                  // A/B (0.23ms vs 2.1ms for planar smudges, worst view)
-    uOccHops: { value: 2 },
+    uOccHops: { value: 1 },     // hop-2 occlusion measured ~0.9ms for through-
+                                // doorway blobs only (GUI dial to restore)
     uOccDensity: { value: 1.2 },
     uOccWiden: { value: 0.5 },   // cone growth per rough-meter: drives spread AND fade
     uOccTint: { value: 0.8 },    // user-tuned: it's ~AO + optically-correct ambient

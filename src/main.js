@@ -177,6 +177,12 @@ async function boot() {
     }
   }
   if (params.has('occluders')) matsys.globals.uOccOn.value = parseFloat(params.get('occluders'));
+  // eye-buffer scale: ~19% fill at 0.9 for near-invisible sharpness loss
+  // (Tier 2 item 3; ground-truth ~1.9ms at the gallery worst view).
+  // Applies at session START - re-enter VR after changing the GUI slider
+  renderer.xr.setFramebufferScaleFactor(
+    params.has('fbscale') ? parseFloat(params.get('fbscale')) : 1.0);
+  window.__setFbScale = v => renderer.xr.setFramebufferScaleFactor(v);
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
   const state = { bounces: useLightmap ? 1 : 3, baking: false };

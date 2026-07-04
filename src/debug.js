@@ -61,6 +61,10 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5 });
   f2.add(proxy, 'portals').name('show portals');
   if (culler) f2.add(culler, 'enabled').name('portal culling');
+  if (typeof window !== 'undefined' && window.__setFbScale) {
+    f2.add({ fb: 1.0 }, 'fb', 0.7, 1.2, 0.05).name('eye buffer scale (re-enter VR)')
+      .onChange(v => window.__setFbScale(v));
+  }
   if (onStaticImposters) f2.add({ si: false }, 'si').name('static imposters (rebakes)').onChange(onStaticImposters);
   {
     const fo = gui.addFolder('Occluders');

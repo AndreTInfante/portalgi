@@ -134,14 +134,17 @@ async function boot() {
   const props = new Props(scene, level, matsys, modelProps);
   const wires = buildPortalWires(scene, level);
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
-  // proxied statics are OUT of the cubemap captures by default: one
-  // representation per object (capsules in reflections, capsule AO in
-  // diffuse, lightmap receive-only). ?si=0 re-includes them for A/B.
+  // everything with capsule proxies (statues AND furniture) is OUT of the
+  // cubemap captures by default: one representation per object (capsules in
+  // reflections, capsule AO in diffuse, lightmap receive-only).
+  // ?si=0 re-includes them for A/B.
+  const proxiedStaticMeshes = staticGroup.children.filter(
+    mm => mm.name.includes(':smodel') || mm.name.endsWith(':furniture'));
   if (params.get('si') !== '0') {
-    for (const mm of staticModelMeshes) mm.layers.set(3);
+    for (const mm of proxiedStaticMeshes) mm.layers.set(3);
   }
   const onStaticImposters = v => {
-    for (const mm of staticModelMeshes) mm.layers.set(v ? 3 : 0);
+    for (const mm of proxiedStaticMeshes) mm.layers.set(v ? 3 : 0);
     rebake();
   };
   // analytic occluders: dynamic props as capsule sets inside the traversal,
@@ -150,10 +153,10 @@ async function boot() {
   const occluders = matsys.occ ? new OccluderSystem(matsys.occ, props) : null;
   if (occluders) {
     const walnutAvg = textures.walnut.map.userData.avg;
-    // the walnut material of a cell = the surfaces its furniture pieces
+    // the furniture material of a cell = the surfaces its capsule pieces
     // approximate (own-group skip); floors/walls carry no group
     const walnutMat = cid => {
-      const mm = staticGroup.children.find(m => m.userData.cell === cid && m.name.endsWith(':walnut'));
+      const mm = staticGroup.children.find(m => m.userData.cell === cid && m.name.endsWith(':furniture'));
       return mm ? mm.material : null;
     };
     for (const cc of level.colliders) {

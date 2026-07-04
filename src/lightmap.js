@@ -23,12 +23,16 @@ const GBUF_VERT = /* glsl */`
 in vec3 position;
 in vec3 normal;
 in vec2 lmuv;
+uniform vec2 uJitter; // subtexel offset (uv units): shifts which surface
+                      // point lands on each texel center - jittered per
+                      // final-gather pass, the average supersamples shadow
+                      // edges (lightmap anti-aliasing)
 out vec3 vPos;
 out vec3 vNrm;
 void main() {
   vPos = position;
   vNrm = normal;
-  gl_Position = vec4(lmuv * 2.0 - 1.0, 0.0, 1.0);
+  gl_Position = vec4((lmuv + uJitter) * 2.0 - 1.0, 0.0, 1.0);
 }
 `;
 
@@ -91,7 +95,12 @@ bool occluded(vec3 from, vec3 to) {
 void main() {
   ivec2 tx = ivec2(gl_FragCoord.xy);
   vec4 pw = texelFetch(uPos, tx, 0);
-  if (pw.a < 0.5) { fragColor = vec4(0.0); return; }
+  if (pw.a < 0.5) {
+    // jittered G-buffers can uncover a border texel in one pass and not the
+    // next: keep the accumulated value instead of zeroing it
+    fragColor = uAccumW > 0.0 ? texelFetch(uAccum, tx, 0) : vec4(0.0);
+    return;
+  }
   vec3 P = pw.xyz;
   vec3 N = texelFetch(uNrm, tx, 0).xyz;
   vec3 Po = P + N * 0.02;
@@ -213,7 +222,7 @@ export class Lightmapper {
         a = [a[0] * tint[0], a[1] * tint[1], a[2] * tint[2]];
         const e = o.emissive || [0, 0, 0];
         const nv = g.pos.length / 3;
-        const casts = !o.proxyFrame;
+        const casts = !o.proxyFrame && !o.occProxied;
         for (let i = 0; i < nv; i++) {
           gpos.push(g.pos[i * 3], g.pos[i * 3 + 1], g.pos[i * 3 + 2]);
           gnrm.push(g.nrm[i * 3], g.nrm[i * 3 + 1], g.nrm[i * 3 + 2]);
@@ -275,7 +284,8 @@ export class Lightmapper {
     // ---- pass materials
     this.gbufMat = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3, vertexShader: GBUF_VERT, fragmentShader: GBUF_FRAG,
-      uniforms: { uWhich: { value: 0 } }, side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+      uniforms: { uWhich: { value: 0 }, uJitter: { value: new THREE.Vector2() } },
+      side: THREE.DoubleSide, depthTest: false, depthWrite: false,
     });
     this.bakeMesh = new THREE.Mesh(geoGather, this.gbufMat);
     this.bakeMesh.frustumCulled = false;
@@ -367,7 +377,8 @@ export class Lightmapper {
 
   *bakeSteps() {
     const { renderer } = this;
-    // G-buffer
+    // G-buffer (unjittered: bounce iterations want texel centers)
+    this.gbufMat.uniforms.uJitter.value.set(0, 0);
     this.gbufMat.uniforms.uWhich.value = 0;
     renderer.setRenderTarget(this.posRT);
     renderer.setClearColor(0x000000, 0);
@@ -402,6 +413,20 @@ export class Lightmapper {
       this.runFs(this.lmC, this.dilateMat);
       yield;
       for (let a = 0; a < this.finalPasses; a++) {
+        // lightmap AA: re-rasterize the G-buffer with a subtexel jitter (R2
+        // sequence) so each independent gather samples a different point in
+        // the texel footprint - the average supersamples shadow edges
+        const jx = (((a + 1) * 0.7548776662) % 1 - 0.5) * 0.98;
+        const jy = (((a + 1) * 0.5698402911) % 1 - 0.5) * 0.98;
+        this.gbufMat.uniforms.uJitter.value.set(jx / this.size[0], jy / this.size[1]);
+        this.gbufMat.uniforms.uWhich.value = 0;
+        renderer.setRenderTarget(this.posRT);
+        renderer.clear();
+        renderer.render(this.bakeScene, this.cam);
+        this.gbufMat.uniforms.uWhich.value = 1;
+        renderer.setRenderTarget(this.nrmRT);
+        renderer.clear();
+        renderer.render(this.bakeScene, this.cam);
         this.ptUniforms.uPrev.value = this.lmC.texture;
         this.ptUniforms.uGather.value = 1;
         this.ptUniforms.uSeed.value = 0.311 + a * 0.777;

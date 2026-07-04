@@ -621,7 +621,10 @@ export function buildLevel() {
   // ---- benches, pedestals (+ player colliders)
   const colliders = [];
   for (const b of BENCH_DEFS) {
-    const wb = getBuilder(cells[b.cell], 'walnut', { mapKey: 'walnut' });
+    // 'furniture' is a separate builder from 'walnut' (frames): furniture has
+    // capsule proxies, so it is excluded from the bakes (occProxied) - one
+    // representation per object - while frames keep casting normally
+    const wb = getBuilder(cells[b.cell], 'furniture', { mapKey: 'walnut', occProxied: true });
     const cos = Math.cos(b.rot), sin = Math.sin(b.rot);
     const put = (lx, ly, lz, sx, sy, sz) => {
       // rotate local xz by rot around bench center (axis-aligned boxes only at 0/90deg)
@@ -637,7 +640,8 @@ export function buildLevel() {
     colliders.push({ x: b.x, z: b.z, r: 0.85, rx: 0.7, rz: 0.24, rot: b.rot, h: 0.56 });
   }
   for (const p of PEDESTAL_DEFS) {
-    getBuilder(cells[p.cell], 'walnut', { mapKey: 'walnut' }).box(p.x, 0.5, p.z, 0.42, 1.0, 0.42, 0.8);
+    getBuilder(cells[p.cell], 'furniture', { mapKey: 'walnut', occProxied: true })
+      .box(p.x, 0.5, p.z, 0.42, 1.0, 0.42, 0.8);
     colliders.push({ x: p.x, z: p.z, r: 0.4, rx: 0.24, rz: 0.24, rot: 0, h: 1.0 });
   }
 

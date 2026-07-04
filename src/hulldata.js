@@ -2,7 +2,9 @@
 //
 // Row y = cell id. Texel layout along x:
 //   0            : capture.xyz, planeCount
-//   1            : portalCount, floorY, ceilY, 0
+//   1            : portalCount, floorY, ceilY, portal-plane bitmask (bit j =
+//                  plane j carries a portal; exits onto other planes skip the
+//                  whole portal scan)
 //   2 .. 13      : hull planes (n.xyz, d), inside = dot(n,p)+d > 0
 //   14 + p*5 + 0 : portal p: planeIndex, neighborCell, isVirtual, silhouette-edge bitmask
 //   14 + p*5 + 1..4 : portal edge planes (n.xyz, d), >0 inside the portal polygon
@@ -30,7 +32,8 @@ export function buildHullTexture(cells) {
     if (cell.planes.length > MAX_PLANES) throw new Error(`${cell.name}: ${cell.planes.length} planes > ${MAX_PLANES}`);
     if (cell.portals.length > MAX_PORTALS) throw new Error(`${cell.name}: ${cell.portals.length} portals > ${MAX_PORTALS}`);
     put(cell.id, 0, cell.capture.x, cell.capture.y, cell.capture.z, cell.planes.length);
-    put(cell.id, 1, cell.portals.length, cell.floorY, cell.ceilY, 0);
+    const planeMask = cell.portals.reduce((m, po) => m | (1 << po.planeIndex), 0);
+    put(cell.id, 1, cell.portals.length, cell.floorY, cell.ceilY, planeMask);
     cell.planes.forEach((pl, j) => put(cell.id, PLANES_OFF + j, pl.n.x, pl.n.y, pl.n.z, pl.d));
     cell.portals.forEach((po, p) => {
       const base = PORTALS_OFF + p * PORTAL_STRIDE;

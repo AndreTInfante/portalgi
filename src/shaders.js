@@ -43,6 +43,14 @@ vec3 sampleSpec(int cell, vec3 dir, float lod) {
   vec3 b = sampleTile(cell, k1, o);
   return mix(a, b, lod - float(k0));
 }
+// single-tap variant: nearest prefiltered LOD, no manual trilinear. Used on
+// secondary portal hops, where distance-grown roughness has already blurred
+// the reflection past the point where LOD interpolation is visible.
+vec3 sampleSpec1(int cell, vec3 dir, float lod) {
+  vec2 o = octEncode(normalize(dir));
+  int k = int(clamp(lod, 0.0, MAX_SPEC_LOD) + 0.5);
+  return sampleTile(cell, min(k, N_LODS - 1), o);
+}
 vec3 sampleIrr(int cell, vec3 n) {
   vec2 o = octEncode(normalize(n));
   vec2 base = vec2(IRR_X + BORDER_PX, float(cell) * ROW_H + BORDER_PX);
@@ -205,8 +213,12 @@ ${useUbo ? /* glsl */`
 ` : ''}
     int nextCell = -1;
     float blend = 0.0;
-    if (i < maxHops) {
-      int poc = int(hfetch(cell, 1).x);
+    // the portal-plane bitmask skips the whole scan when the exit plane
+    // carries no portal - the common case for every glossy pixel
+    if (i < maxHops && bestPlane >= 0) {
+      vec4 h1 = hfetch(cell, 1);
+      if ((int(h1.w) & (1 << bestPlane)) != 0) {
+      int poc = int(h1.x);
       for (int p = 0; p < 4; p++) {
         if (p >= poc) break;
         int base = ${PORTALS_OFF} + p * ${PORTAL_STRIDE};
@@ -230,19 +242,25 @@ ${useUbo ? /* glsl */`
           if ((silMask & (1 << e)) != 0) blendD = min(blendD, d);
         }
         if (insideD > 0.0) {
+          // edge blending only on the FIRST crossing: it exists to anti-alias
+          // partition edges the eye can resolve; deeper crossings are tiny on
+          // screen and blending doubles the atlas samples
           float bw = uBlendBase + uBlendRough * effR * max(tHit, 0.3);
-          blend = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
+          blend = (uBlendOn < 0.5 || i > 0) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
           nextCell = int(ph.y);
           break;
         }
       }
+      }
     }
     vec3 localDir = hitP - h0.xyz;
     if (nextCell < 0 || blend <= 0.002) {
-      acc += w * sampleSpec(cell, localDir, lod);
+      // primary hit keeps manual trilinear; secondary hops are blur-dominated
+      acc += w * (i == 0 ? sampleSpec(cell, localDir, lod)
+                         : sampleSpec1(cell, localDir, lod));
       return acc;
     }
-    if (blend < 0.998) {
+    if (blend < 0.998) { // only reachable on the first crossing
       acc += w * (1.0 - blend) * sampleSpec(cell, localDir, lod);
       w *= blend;
     }

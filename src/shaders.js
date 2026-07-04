@@ -113,9 +113,16 @@ float capsuleAO(int cell, vec3 P, vec3 N) {
       float cc = dot(u, u);
       float t = cc > 1e-6 ? clamp(dot(P - A.xyz, u) / cc, 0.0, 1.0) : 0.0;
       vec3 d = A.xyz + u * t - P;                // to the nearest axis point
-      float d2 = max(dot(d, d), 1e-4);
-      float o1 = clamp(dot(N, d * inversesqrt(d2)), 0.0, 1.0) * (A.w * A.w) / d2;
-      aoc *= 1.0 - min(o1 * uOccAO, 0.85);      // never pitch black
+      // surfaces INSIDE a loose capsule (walls poking through a fit) never
+      // evaluate closer than the capsule surface + 3cm: contact stays strong,
+      // interior saturation blotches become impossible
+      float d2 = max(dot(d, d), (A.w + 0.03) * (A.w + 0.03));
+      float invd = inversesqrt(d2);
+      float o1 = clamp(dot(N, d * invd), 0.0, 1.0) * (A.w * A.w) / d2;
+      // smooth range falloff to zero BEFORE the binary entry reject radius -
+      // the reject alone printed a visible AO edge line around objects
+      float reach = clamp(1.0 - (d2 * invd - A.w) / 0.6, 0.0, 1.0);
+      aoc *= 1.0 - min(o1 * reach * reach * uOccAO, 0.85);
     }
     if (aoc < 0.15) break;
   }

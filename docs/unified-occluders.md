@@ -228,6 +228,24 @@ with ~2.3ms of measured synthetic headroom remaining.
   read per candidate entry), uOccHops LOD 2 -> 1 (quality dial, GUI-testable
   with zero code).
 
+## Ground truth (ovrgpuprofiler render-stage trace, gallery worst view, 2026-07-03)
+
+Session ran at 72Hz (74 surface executions/s). Per frame, 3360x1760 MSAA4,
+44/72 bins rendered (FOV mask):
+  Render 10.1ms + Preempt 1.15ms (compositor, not ours) + Binning 0.43ms
+  + StoreColor 0.33ms = ~12.4ms total, ~11.2ms net app GPU.
+So the gallery prop view genuinely exceeds the 90Hz budget (11.1ms) on the
+current build - the reported dip was real load (thermals can only stack on
+top). At 72Hz it fits with ~1.5ms spare. Realtime counters at cruise:
+wave occupancy 52% (the structural ceiling -> shader variants), texture
+fetch stall 2% (atlas hot set fits L2: 30% L1 miss, 0.06% L2 miss), ALU 30%,
+bandwidth ~3GB/s, i-cache 0.1% - nothing else near saturation.
+Ground-truth-sized levers for 90Hz in dense rooms: framebuffer scale 0.9
+(~-1.9ms of the 10.1ms render), occluder LOD dial, shader variants
+(occupancy), or ship dense rooms at 72/dynamic rate. Note: drawcall-level
+ovrgpuprofiler tracing does not attach to the Browser privileged process;
+render-stage level is the floor for web content.
+
 ## Rollout
 
 1. Perf harness (this session): frame stats, burn pass, auto-sweep, HUD, GUI.

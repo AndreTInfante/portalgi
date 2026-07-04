@@ -261,7 +261,9 @@ ${useUbo ? /* glsl */`
       return acc;
     }
     if (blend < 0.998) { // only reachable on the first crossing
-      acc += w * (1.0 - blend) * sampleSpec(cell, localDir, lod);
+      // transition-band content, weighted (1-blend) and summed against the
+      // recursed sample: single-tap is beneath visibility here
+      acc += w * (1.0 - blend) * sampleSpec1(cell, localDir, lod);
       w *= blend;
     }
     stepsUsed += 1.0;

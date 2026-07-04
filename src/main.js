@@ -140,6 +140,12 @@ async function boot() {
     document.addEventListener('pointerdown', () => audio.unlock());
     document.addEventListener('keydown', () => audio.unlock());
     renderer.xr.addEventListener('sessionstart', () => audio.unlock());
+    // one-click mute next to the GUI panel (persists via localStorage)
+    const muteEl = document.getElementById('mute');
+    const drawMute = () => { muteEl.textContent = audio.muted ? '\u{1F507}' : '\u{1F50A}'; };
+    muteEl.classList.remove('hidden');
+    drawMute();
+    muteEl.addEventListener('click', () => { audio.muted = !audio.muted; drawMute(); });
   }
   const wires = buildPortalWires(scene, level);
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));

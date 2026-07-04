@@ -31,6 +31,12 @@
     position: absolute; left: 12px; top: 40px; right: 12px; color: #ff7070;
     font: 12px/1.4 monospace; white-space: pre-wrap; text-shadow: 0 1px 2px #000;
   }
+  #mute {
+    position: absolute; right: 260px; top: 6px; pointer-events: auto;
+    font-size: 19px; line-height: 1; padding: 5px; cursor: pointer;
+    text-shadow: 0 1px 2px #000; user-select: none; opacity: 0.85;
+  }
+  #mute:hover { opacity: 1; }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -39,6 +45,7 @@
   <div id="crosshair" class="hidden"></div>
   <div id="fps"></div>
   <div id="err"></div>
+  <div id="mute" class="hidden" title="toggle audio"></div>
   <div id="help" class="hidden">WASD move &nbsp;·&nbsp; mouse look &nbsp;·&nbsp; click / E grab &nbsp;·&nbsp; click throw &nbsp;·&nbsp; RMB drop &nbsp;·&nbsp; V noclip &nbsp;·&nbsp; B re-bake &nbsp;·&nbsp; Esc release mouse</div>
   <div id="overlay"><div id="overlay-msg">Loading…</div><small id="overlay-sub"></small></div>
 </div>

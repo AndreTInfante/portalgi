@@ -86,7 +86,9 @@ export class Props {
         }
       }
       const pos = p.mesh.position;
+      const prevCell = p.cell;
       p.cell = findCell(this.level.cells, pos, p.cell);
+      if (p.cell !== prevCell) p.contacts = 0; // plane indices renumber per cell
       for (const m of p.mats) {
         this.matsys.setMaterialCell(m, p.cell); // arms a 0.2s diffuse crossfade on change
         const u = m.uniforms;
@@ -129,6 +131,7 @@ export class Props {
     const cell = this.level.cells[p.cell];
     const pos = p.mesh.position;
     let onFloor = false;
+    let contacts = 0; // plane-index bitmask (hull cells have far fewer than 32 planes)
     for (let idx = 0; idx < cell.planes.length; idx++) {
       const pl = cell.planes[idx];
       // floor rests at the model's true base height; walls use the sphere bound
@@ -143,19 +146,23 @@ export class Props {
         if (edgeDist > p.radius * 0.5) { passable = true; break; }
       }
       if (passable) continue;
+      contacts |= 1 << idx;
       pos.addScaledVector(pl.n, rad - d);
       const vn = pl.n.dot(p.vel);
       if (vn < 0) {
         p.vel.addScaledVector(pl.n, -vn * (1 + REST));
-        // audible thunk; the cooldown stops the held-prop carry spring from
-        // machine-gunning it while a prop is dragged along a wall
-        if (this.onImpact && vn < -0.5) {
+        // thunk only on NEW contact with this plane: the held-prop carry spring
+        // re-penetrates every frame while pressed into a wall, and per-plane
+        // (not per-prop) tracking keeps floor rest from muting a wall hit.
+        // the cooldown backstops corner rattle alternating between two planes
+        if (this.onImpact && vn < -0.5 && !(p.contacts & (1 << idx))) {
           const t = performance.now();
           if (t - (p.impactT || 0) > 120) { p.impactT = t; this.onImpact(pos, -vn, p); }
         }
       }
       if (pl.n.y > 0.5) onFloor = true;
     }
+    p.contacts = contacts;
     return onFloor;
   }
 

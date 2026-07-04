@@ -94,7 +94,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   if (audio) {
     const fa = gui.addFolder('Audio');
     fa.add(audio, 'master', 0, 1, 0.01).name('master volume');
-    fa.add(audio, 'music', 0, 0.4, 0.01).name('music volume');
+    fa.add(audio, 'music', 0, 0.2, 0.005).name('music volume');
     fa.add(audio, 'sfx', 0, 1, 0.01).name('sfx volume');
     fa.close();
   }

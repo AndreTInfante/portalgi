@@ -9,15 +9,25 @@ export class AudioSystem {
   constructor() {
     this.ctx = null;
     this._master = 1.0;
-    this._music = 0.12;
-    this._sfx = 0.7;
+    this._music = 0.03;
+    this._sfx = 1.0;
+    let m = false;
+    try { m = localStorage.getItem('pgi-muted') === '1'; } catch (e) { /* blocked storage */ }
+    this._muted = m;
     this.stepDist = 0;   // accumulated horizontal travel since the last footstep
     this.lastStepT = 0;
     this.prevPos = null;
   }
 
+  _applyMaster() { if (this.masterGain) this.masterGain.gain.value = this._muted ? 0 : this._master; }
   get master() { return this._master; }
-  set master(v) { this._master = v; if (this.masterGain) this.masterGain.gain.value = v; }
+  set master(v) { this._master = v; this._applyMaster(); }
+  get muted() { return this._muted; }
+  set muted(v) {
+    this._muted = v;
+    this._applyMaster();
+    try { localStorage.setItem('pgi-muted', v ? '1' : '0'); } catch (e) { /* blocked storage */ }
+  }
   get music() { return this._music; }
   set music(v) { this._music = v; if (this.musicGain) this.musicGain.gain.value = v; }
   get sfx() { return this._sfx; }
@@ -29,8 +39,8 @@ export class AudioSystem {
     if (!AC) return;
     this.ctx = new AC();
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = this._master;
     this.masterGain.connect(this.ctx.destination);
+    this._applyMaster();
     this.musicGain = this.ctx.createGain();
     this.musicGain.gain.value = this._music;
     this.musicGain.connect(this.masterGain);

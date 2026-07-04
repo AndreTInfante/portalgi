@@ -19,7 +19,6 @@ import { findCell } from './level.js';
 import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
 import { PerfHarness } from './perf.js';
-import { BUILD } from './build.js';
 import { OccluderSystem } from './occluders.js';
 
 const params = new URLSearchParams(location.search);
@@ -41,7 +40,6 @@ const SHOT_POSES = {
   12: { pos: [0, 1.5, 10.6], look: [0, 1.4, 12.4] },       // debug pane held up in the rotunda
 };
 
-console.log('PortalGI build', BUILD);
 const overlay = document.getElementById('overlay');
 const overlayMsg = document.getElementById('overlay-msg');
 const overlaySub = document.getElementById('overlay-sub');
@@ -180,6 +178,7 @@ async function boot() {
   }
   if (params.has('occluders')) matsys.globals.uOccOn.value = parseFloat(params.get('occluders'));
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
+  perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
   buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf);
 
@@ -684,12 +683,14 @@ async function boot() {
       // framebuffer before each frame; resetting to null draws to the hidden
       // canvas and the headset shows black
     }
+    perf.gpuBegin();
     renderer.render(scene, camera);
+    perf.gpuEnd();
     perf.tick(now);
     if (inXR) drawPerfLabel();
     fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
     const ph = perf.hudText();
-    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cells ${culler.enabled ? culler.visible.size : 'all'} * ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}${ph ? ' * ' + ph : ''} * ${BUILD}`;
+    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cells ${culler.enabled ? culler.visible.size : 'all'} * ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}${ph ? ' * ' + ph : ''}`;
   });
 
   addEventListener('resize', () => {

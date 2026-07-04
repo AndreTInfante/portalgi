@@ -56,6 +56,8 @@ export class PerfHarness {
     scene.add(this.mesh);
 
     this.burn = 0;
+    this.gpuMs = 0;               // rolling real GPU frame time (0 = no timer ext)
+    this._gpu = null;             // { ext, gl, active, pending: [] }
     this.step = 20;               // sweep increment (burn units)
     this.maxLevel = 600;
     this.threshold = 5;           // % dropped frames = tipped over
@@ -110,7 +112,8 @@ export class PerfHarness {
       const r = b.results[i];
       const d = i === 0 ? 'baseline'
         : `${r.sust - base.sust >= 0 ? '+' : ''}${r.sust - base.sust}u vs ${base.name}`;
-      lines.push(`${r.name.padEnd(10)} ${String(r.sust).padStart(4)}u  (${d})`);
+      const gpu = r.gpu > 0 ? ` gpu${r.gpu.toFixed(1)}` : '';
+      lines.push(`${r.name.padEnd(10)} ${String(r.sust).padStart(4)}u${gpu}  (${d})`);
     }
     this.batchReport = lines.join('\n');
     console.log(this.batchReport);
@@ -133,6 +136,43 @@ export class PerfHarness {
     this.burn = Math.max(0, Math.round(n));
     this.mat.uniforms.uBurn.value = this.burn;
     this.mesh.visible = this.burn > 0;
+  }
+
+  // real GPU frame timing via EXT_disjoint_timer_query_webgl2, where the
+  // browser exposes it (post-Spectre it often does not - probe, don't assume;
+  // everything degrades silently to the burn-sweep when absent)
+  attachGpuTimer(renderer) {
+    const gl = renderer.getContext();
+    const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    console.log(`perf: GPU timer queries ${ext ? 'AVAILABLE' : 'absent'} on this browser`);
+    if (ext) this._gpu = { ext, gl, active: null, pending: [] };
+  }
+
+  gpuBegin() {
+    const g = this._gpu;
+    if (!g || g.active || g.pending.length > 6) return;
+    g.active = g.gl.createQuery();
+    g.gl.beginQuery(g.ext.TIME_ELAPSED_EXT, g.active);
+  }
+
+  gpuEnd() {
+    const g = this._gpu;
+    if (!g || !g.active) return;
+    g.gl.endQuery(g.ext.TIME_ELAPSED_EXT);
+    g.pending.push(g.active);
+    g.active = null;
+    // harvest oldest finished query (results land a few frames later)
+    while (g.pending.length) {
+      const q = g.pending[0];
+      if (!g.gl.getQueryParameter(q, g.gl.QUERY_RESULT_AVAILABLE)) break;
+      const disjoint = g.gl.getParameter(g.ext.GPU_DISJOINT_EXT);
+      if (!disjoint) {
+        const ms = g.gl.getQueryParameter(q, g.gl.QUERY_RESULT) / 1e6;
+        this.gpuMs = this.gpuMs ? this.gpuMs * 0.9 + ms * 0.1 : ms;
+      }
+      g.gl.deleteQuery(q);
+      g.pending.shift();
+    }
   }
 
   medianMs() {
@@ -233,7 +273,7 @@ export class PerfHarness {
     this.sweep = null;
     this.setBurn(0);
     if (this.batch) { // batch mode: collect and move on
-      this.batch.results.push({ name: s.config, sust: sustainable, tip });
+      this.batch.results.push({ name: s.config, sust: sustainable, tip, gpu: this.gpuMs });
       this.batch.i++;
       this._batchNext();
       return;
@@ -254,8 +294,10 @@ export class PerfHarness {
   hudText() {
     const med = this.medianMs();
     const fps = med > 0 ? (1000 / med).toFixed(0) : '--';
-    if (this.sweep) return `${fps}fps ${this._hud}`;
-    if (this.burn > 0) return `${fps}fps burn ${this.burn}u`;
-    return this._hud ? `${fps}fps ${this._hud}` : '';
+    const gpu = this.gpuMs > 0 ? ` gpu${this.gpuMs.toFixed(1)}ms` : '';
+    if (this.sweep) return `${fps}fps${gpu} ${this._hud}`;
+    if (this.burn > 0) return `${fps}fps${gpu} burn ${this.burn}u`;
+    const idle = this._hud ? `${fps}fps${gpu} ${this._hud}` : (gpu ? `${fps}fps${gpu}` : '');
+    return idle;
   }
 }

@@ -362,7 +362,7 @@ export class Lightmapper {
 
   totalSteps() {
     const acc = this.finalPasses > 1 ? 1 + this.finalPasses * this.strips : 0;
-    return 2 + this.iterations * this.strips + acc + 2;
+    return 2 + this.iterations * (this.strips + 1) + acc + 2;
   }
 
   *bakeSteps() {
@@ -380,11 +380,14 @@ export class Lightmapper {
     renderer.clear();
     renderer.render(this.bakeScene, this.cam);
     yield;
-    // shading iterations: read lmB (previous), write lmA, swap
+    // shading iterations: read the DILATED previous map (lmC), write lmA, swap.
+    // Gather rays hitting near a chart border take bilinear taps that straddle
+    // into the pad ring - reading it un-dilated (black) under-gathered every
+    // chart seam a little more each iteration (the dark seam lines)
     renderer.setRenderTarget(this.lmB);
     renderer.clear();
     for (let it = 0; it < this.iterations; it++) {
-      this.ptUniforms.uPrev.value = this.lmB.texture;
+      this.ptUniforms.uPrev.value = it === 0 ? this.lmB.texture : this.lmC.texture;
       this.ptUniforms.uGather.value = it === 0 ? 0 : 1;
       this.ptUniforms.uSeed.value = 0.173 + it * 0.619;
       for (let s = 0; s < this.strips; s++) {
@@ -392,6 +395,9 @@ export class Lightmapper {
         yield;
       }
       const t = this.lmA; this.lmA = this.lmB; this.lmB = t; // newest -> lmB
+      this.dilateMat.uniforms.uSrc.value = this.lmB.texture;
+      this.runFs(this.lmC, this.dilateMat);
+      yield;
     }
     // after the loop the newest data sits in lmB; one more swap puts it in lmA
     const t = this.lmA; this.lmA = this.lmB; this.lmB = t;

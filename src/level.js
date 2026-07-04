@@ -155,8 +155,13 @@ export class GeoBuilder {
 }
 
 // Shelf-pack every chart of every builder into one lightmap atlas and write
-// per-vertex uv2 (half-texel inset so bilinear stays inside the chart; the
-// 2px pad ring gets filled by dilation after the bake).
+// per-vertex uv2. Vertices map to the chart RECT edges, so border texel
+// centers sample the surface half a texel INSIDE the mesh edge - mapping
+// edges onto texel centers (the old scheme) made border coverage knife-edge
+// (dashed dark seams from alternating fill-rule coverage) and baked the
+// extreme corner point of every lighting gradient. Runtime bilinear at a
+// mesh edge blends the border texel with its dilated gutter copy = same
+// value, so seams stay continuous. (2px pad ring is filled by dilation.)
 export function packLightmapCharts(level, density = 16, atlasW = 1024) {
   const PAD = 2;
   const entries = [];
@@ -185,8 +190,8 @@ export function packLightmapCharts(level, density = 16, atlasW = 1024) {
     for (let i = 0; i < e.ch.count; i++) {
       const vi = e.ch.start + i;
       const lx = g.lc[vi * 2] / e.ch.w, ly = g.lc[vi * 2 + 1] / e.ch.h;
-      g.uv2[vi * 2] = (e.x + PAD + 0.5 + lx * (e.pw - 1)) / atlasW;
-      g.uv2[vi * 2 + 1] = (e.y + PAD + 0.5 + ly * (e.ph - 1)) / atlasH;
+      g.uv2[vi * 2] = (e.x + PAD + lx * e.pw) / atlasW;
+      g.uv2[vi * 2 + 1] = (e.y + PAD + ly * e.ph) / atlasH;
     }
   }
   level.lightmapSize = [atlasW, atlasH];

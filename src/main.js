@@ -39,6 +39,10 @@ const SHOT_POSES = {
   10: { pos: [4.4, 1.7, 22.5], look: [7.5, 1.2, 22.5] },   // cornell box
   11: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.1, 22.5] }, // exhibit hall B
   12: { pos: [0, 1.5, 10.6], look: [0, 1.4, 12.4] },       // debug pane held up in the rotunda
+  // seam-artifact investigation close-ups (cell-boundary seams)
+  13: { pos: [10.6, 1.5, -9.4], look: [12.3, 1.2, -11.6] }, // L-bend convex corner
+  14: { pos: [14.3, 1.7, -8.8], look: [14.3, 0.0, -12.6] }, // L1/L2 floor seam (virtual portal)
+  15: { pos: [0, 1.6, 2.4], look: [0, -0.2, 4.3] },         // gallery->corridor doorway floor strip
 };
 
 const overlay = document.getElementById('overlay');

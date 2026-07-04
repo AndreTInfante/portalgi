@@ -20,6 +20,7 @@ import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
 import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
+import { AudioSystem } from './audio.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -132,6 +133,14 @@ async function boot() {
 
   const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
   const props = new Props(scene, level, matsys, modelProps);
+  const audio = new AudioSystem();
+  props.onImpact = (pos, speed, p) => audio.impact(pos, speed, p.radius);
+  if (!SHOT && !BAKE) {
+    // AudioContext needs a user gesture; every route into the demo passes one
+    document.addEventListener('pointerdown', () => audio.unlock());
+    document.addEventListener('keydown', () => audio.unlock());
+    renderer.xr.addEventListener('sessionstart', () => audio.unlock());
+  }
   const wires = buildPortalWires(scene, level);
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
   // everything with capsule proxies (statues AND furniture) is OUT of the
@@ -197,7 +206,7 @@ async function boot() {
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf);
+  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf, audio);
 
   if (!SHOT && !BAKE) {
     renderer.domElement.addEventListener('mousedown', e => {
@@ -684,6 +693,10 @@ async function boot() {
         player.update(dt, level.colliders);
         props.update(dt, player);
       }
+      // listener follows the (XR) camera; footsteps from horizontal travel.
+      // VR passes walking=true - the speed gate in audio ignores head sway
+      audio.update(dt, inXR ? renderer.xr.getCamera() : camera, player.pos,
+        inXR || (player.locked && !player.noclip));
     }
     // portal-frustum culling: only cells reachable through on-screen portals
     // draw (reflections are atlas-based and immune). All-visible during bakes.

@@ -145,7 +145,15 @@ export class Props {
       if (passable) continue;
       pos.addScaledVector(pl.n, rad - d);
       const vn = pl.n.dot(p.vel);
-      if (vn < 0) p.vel.addScaledVector(pl.n, -vn * (1 + REST));
+      if (vn < 0) {
+        p.vel.addScaledVector(pl.n, -vn * (1 + REST));
+        // audible thunk; the cooldown stops the held-prop carry spring from
+        // machine-gunning it while a prop is dragged along a wall
+        if (this.onImpact && vn < -0.5) {
+          const t = performance.now();
+          if (t - (p.impactT || 0) > 120) { p.impactT = t; this.onImpact(pos, -vn, p); }
+        }
+      }
       if (pl.n.y > 0.5) onFloor = true;
     }
     return onFloor;

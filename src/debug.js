@@ -32,7 +32,7 @@ export function buildPortalWires(scene, level) {
   return group;
 }
 
-export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onStaticImposters, perf) {
+export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onStaticImposters, perf, audio) {
   const gui = new GUI({ title: 'PortalGI' });
   const g = matsys.globals;
   const proxy = {
@@ -90,6 +90,13 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
       console.log('occluder params:', j);
       if (navigator.clipboard) navigator.clipboard.writeText(j).catch(() => {});
     } }, 'dump').name('DUMP values (console+clipboard)');
+  }
+  if (audio) {
+    const fa = gui.addFolder('Audio');
+    fa.add(audio, 'master', 0, 1, 0.01).name('master volume');
+    fa.add(audio, 'music', 0, 0.4, 0.01).name('music volume');
+    fa.add(audio, 'sfx', 0, 1, 0.01).name('sfx volume');
+    fa.close();
   }
   if (perf) {
     const fp = gui.addFolder('Perf');

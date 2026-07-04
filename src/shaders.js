@@ -155,12 +155,14 @@ uniform float uDistRough;   // roughness growth per meter of path length
 // roughness-scaled edge blend, then either terminate on the local cubemap or
 // hop into the neighbor cell. A straight ray can never revisit a convex cell,
 // so this always makes forward progress.
-vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, out float stepsUsed) {
+vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, out float stepsUsed) {
   // roughness-scaled hop budget: a reflection too blurry to resolve an image
   // can't resolve a second portal either. Anything reflective keeps >= 1 hop
   // (portal-boundary artifacts appear at 0); the rough > 0.65 irradiance
   // early-out at the call site is the 0-hop rung of the same ladder.
-  int maxHops = uMaxSteps;
+  // hopCap: callers whose contribution is faint (glass fresnel reflection,
+  // ~4-10% of the mix) cap their depth instead of paying the full budget.
+  int maxHops = min(uMaxSteps, hopCap);
   if (uRoughHops > 0.5) {
     if (rough > 0.35) maxHops = min(uMaxSteps, 1);
     else if (rough > 0.12) maxHops = min(uMaxSteps, 2);
@@ -474,19 +476,20 @@ void main() {
   float steps = 0.0;
   vec3 color;
 ${GLASS ? /* glsl */`
-  // glass: chrome sampled the opposite way
+  // glass: chrome sampled the opposite way. The fresnel reflection is a
+  // faint overlay over the dominant fake refraction: 1 hop is plenty for it
   vec3 R = reflect(-V, N);
   float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
-  vec3 refl = traceSpec(uCell, P, R, uRough, steps);
+  vec3 refl = traceSpec(uCell, P, R, uRough, 1, steps);
   float s2;
-  vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, s2) * vec3(0.90, 0.97, 0.93);
+  vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, s2) * vec3(0.90, 0.97, 0.93);
   color = mix(thru, refl, F);
 ` : PANE ? /* glsl */`
   // debug pane: continue the eye ray straight through with zero roughness -
   // a direct, unrefracted window into the hull cubemap structure (a -R trick
   // here would mirror the lateral ray component and act like an inverting
   // lens). Faint green cast marks the glass.
-  color = traceSpec(uCell, P, -V, 0.0, steps) * vec3(0.93, 1.0, 0.96);
+  color = traceSpec(uCell, P, -V, 0.0, 8, steps) * vec3(0.93, 1.0, 0.96);
 ` : /* glsl */`
   vec3 albedo = texture(uMap, vUv).rgb * uTint;
   if (uDebugMode == 4) albedo = vec3(0.75);
@@ -519,7 +522,7 @@ ${PROP ? /* glsl */`
     // result is indistinguishable from one cosine-convolved irradiance tap
     // along R - skip the whole hull walk (Tier 1)
     vec3 pre = (rough > 0.65) ? sampleIrr(uCell, R)
-                              : traceSpec(uCell, P, R, rough, steps);
+                              : traceSpec(uCell, P, R, rough, 8, steps);
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
   }
 `}

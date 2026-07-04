@@ -249,11 +249,14 @@ ${useUbo ? /* glsl */`
           if ((silMask & (1 << e)) != 0) blendD = min(blendD, d);
         }
         if (insideD > 0.0) {
-          // edge blending only on the FIRST crossing: it exists to anti-alias
-          // partition edges the eye can resolve; deeper crossings are tiny on
-          // screen and blending doubles the atlas samples
+          // edge blending at EVERY crossing: restricting it to the first hop
+          // made the seam treatment depend on which cell the shaded surface
+          // belongs to - a visible side-dependent gap when walking through
+          // doorway-through-doorway views (in-headset report). The deep
+          // partial samples stay single-tap, so this costs half its original
+          // price.
           float bw = uBlendBase + uBlendRough * effR * max(tHit, 0.3);
-          blend = (uBlendOn < 0.5 || i > 0) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
+          blend = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
           nextCell = int(ph.y);
           break;
         }
@@ -268,7 +271,7 @@ ${useUbo ? /* glsl */`
       acc += w * sampleSpec(cell, localDir, lod);
       return acc;
     }
-    if (blend < 0.998) { // only reachable on the first crossing
+    if (blend < 0.998) {
       // transition-band content, weighted (1-blend) and summed against the
       // recursed sample: single-tap is beneath visibility here
       acc += w * (1.0 - blend) * sampleSpec1(cell, localDir, lod);

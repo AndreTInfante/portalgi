@@ -156,6 +156,12 @@ Phase C - measure on device: sweep A/B occluders vs (clamped) smudges at the
 worst view + a chrome-ball-in-hand view; decide the smudge system's fate
 (retire for dynamics / keep as static contact grounding).
 
+Anisotropic capsules (considered 2026-07-04, deferred): full 3-axis
+scaling costs ~2x hit-path ALU (fine) but 3 UBO slots per capsule vs 2
+(capacity 80 -> 53 under the constant-store ceiling). Circular capsules +
+full authored coverage shipped first; revisit if the flat shapes (chairs,
+mirror - the hamburger cases) still read wrong in practice.
+
 Phase D - later: manual capsule authoring for horse/whale/furniture
 (wireframe debug view + GUI nudge + JSON dump), analytic sphere AO into the
 diffuse term for dynamics. Finer-than-material self-skip if groups prove too

@@ -28,7 +28,6 @@ jobs:
         run: |
           mkdir _site
           cp -r index.html src libs assets baked _site/
-          echo "export const BUILD = '${GITHUB_SHA::7}';" > _site/src/build.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

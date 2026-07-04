@@ -12,12 +12,15 @@
 //   uOccSph[i]      = world shape sphere
 import * as THREE from 'three';
 
-// budget raised after the 2026-07-03 on-device A/B measured the whole system
-// at ~0.23ms worst-view: headroom for richer fits and denser scenes
-export const MAX_OCC_PROPS = 64;
-export const MAX_SPHERES = 256; // vec4 slots: 128 capsules
-export const MAX_PER_CELL = 16;
-export const MAX_SPH_PER_PROP = 8;
+// SIZE IS A PLATFORM CONSTRAINT, not a tuning knob: raising these to
+// 64/256/16/8 (~15.7KB total UBO with HullData) regressed EVERY on-device
+// config incl. steps0, which runs none of the occluder code - consistent
+// with Adreno demoting all uniform-block reads to the slow path once the
+// fast constant store overflows. These sizes (~13KB total) measured good.
+export const MAX_OCC_PROPS = 40;
+export const MAX_SPHERES = 160; // vec4 slots: 80 capsules
+export const MAX_PER_CELL = 10;
+export const MAX_SPH_PER_PROP = 5;
 
 export function buildOccluderGroup(numCells) {
   const group = new THREE.UniformsGroup();
@@ -91,7 +94,7 @@ function fitCapsules(root) {
 // vertex-band fit for big merged static meshes (statue + plinth are one
 // geometry): k spheres stacked along the longest bbox axis, radii from
 // percentile-trimmed extents per band so outliers don't inflate them
-function fitCapsulesVerts(mesh, k = 5) {
+function fitCapsulesVerts(mesh, k = 3) {
   const pos = mesh.geometry.getAttribute('position');
   const v = new THREE.Vector3();
   const pts = [];

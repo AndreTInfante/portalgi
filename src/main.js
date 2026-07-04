@@ -281,7 +281,7 @@ async function boot() {
       const tick = () => {
         if (steps.next().done) {
           matsys.globals.uLightmap.value = lightmapper.texture;
-          matsys.globals.uUseLightmap.value = 1.0;
+          matsys.setUseLightmap(true);
           state.baking = false;
           resolve(rebake());
           return;
@@ -315,7 +315,7 @@ async function boot() {
       ]);
       matsys.globals.uAtlas.value = atlasTex;
       matsys.globals.uLightmap.value = lmTex;
-      matsys.globals.uUseLightmap.value = 1.0;
+      matsys.setUseLightmap(true);
       usedBaked = true;
     } catch (e) {
       errEl.textContent += `baked load failed (${e.message}); baking live\n`;

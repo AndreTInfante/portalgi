@@ -46,7 +46,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     get exposure() { return Math.log2(g.uExposure.value); }, set exposure(v) { g.uExposure.value = Math.pow(2, v); },
     get view() { return g.uDebugMode.value; }, set view(v) { g.uDebugMode.value = v; },
     get portals() { return wires.visible; }, set portals(v) { wires.visible = v; },
-    get lightmap() { return g.uUseLightmap.value > 0.5; }, set lightmap(v) { g.uUseLightmap.value = v ? 1 : 0; },
+    get lightmap() { return g.uUseLightmap.value > 0.5; }, set lightmap(v) { matsys.setUseLightmap(v); },
   };
   const f1 = gui.addFolder('Traversal');
   f1.add(proxy, 'steps', 0, 6, 1).name('portal hops (0=PCCM)');

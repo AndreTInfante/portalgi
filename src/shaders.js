@@ -353,7 +353,14 @@ void main() {
 }
 `;
 
-export function sceneFrag(numCells, useUbo = true) {
+// One PRUNED program per material mode (0 static, 2 glass, 3 pane, 4 prop):
+// the uber-shader ran every pixel at worst-case register pressure (52% wave
+// occupancy measured on-device) for code paths it could never take. Unused
+// helper functions are stripped by the GLSL compiler once the CALLS are
+// template-removed. Statics compile their pre-lightmap fallback only under
+// the LM_FALLBACK define (materials toggle it with the lightmap state).
+export function sceneFrag(numCells, useUbo = true, mode = 0) {
+  const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   return /* glsl */`
 precision highp float;
 layout(location = 0) out vec4 fragOut;
@@ -465,69 +472,68 @@ void main() {
     N = normalize(T * nTS.x + B * nTS.y + Ng * nTS.z);
   }
   float NoV = max(dot(N, V), 0.0);
-
+  float steps = 0.0;
+  vec3 color;
+${GLASS ? /* glsl */`
+  // glass: chrome sampled the opposite way
+  vec3 R = reflect(-V, N);
+  float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
+  vec3 refl = traceSpec(uCell, P, R, uRough, steps);
+  float s2;
+  vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, s2) * vec3(0.90, 0.97, 0.93);
+  color = mix(thru, refl, F);
+` : PANE ? /* glsl */`
+  // debug pane: continue the eye ray straight through with zero roughness -
+  // a direct, unrefracted window into the hull cubemap structure (a -R trick
+  // here would mirror the lateral ray component and act like an inverting
+  // lens). Faint green cast marks the glass.
+  color = traceSpec(uCell, P, -V, 0.0, steps) * vec3(0.93, 1.0, 0.96);
+` : /* glsl */`
   vec3 albedo = texture(uMap, vUv).rgb * uTint;
   if (uDebugMode == 4) albedo = vec3(0.75);
   vec3 orm = texture(uOrmMap, vUv).rgb;
   float rough = clamp(orm.g * uRoughFactor, 0.03, 1.0);
   float metal = clamp(orm.b * uMetalFactor, 0.0, 1.0);
   float ao = orm.r;
-
-  // blendedIrr costs ~25 fetches: only the lightmap-off fallback and the
-  // irradiance debug view actually consume it - skip it otherwise (Tier 1)
-  vec3 irr = vec3(0.0);
-  if (uDebugMode == 3 || (uMode == 0 && uUseLightmap < 0.5)) irr = blendedIrr(uCell, P, N);
-  float steps = 0.0;
-  vec3 color;
-
-  if (uMode == 2) {                      // glass: chrome sampled the opposite way
-    vec3 R = reflect(-V, N);
-    float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
-    vec3 refl = traceSpec(uCell, P, R, uRough, steps);
-    float s2;
-    vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, s2) * vec3(0.90, 0.97, 0.93);
-    color = mix(thru, refl, F);
-  } else if (uMode == 3) {               // debug pane: continue the eye ray straight
-    // through with zero roughness - a direct, unrefracted window into the hull
-    // cubemap structure (a -R trick here would mirror the lateral ray component
-    // and act like an inverting lens). Faint green cast marks the glass.
-    color = traceSpec(uCell, P, -V, 0.0, steps) * vec3(0.93, 1.0, 0.96);
-  } else {                               // metallic-roughness PBR, diffuse source by mode:
-    // mode 0 (static): path-traced lightmap (shadows/AO/global lights), or the
-    //   analytic + blended-irradiance fallback when the lightmap is off
-    // mode 4 (dynamic): probe-grid irradiance with the 0.2s handoff crossfade
-    vec3 diffuseL;
-    if (uMode == 4) {
-      diffuseL = probeDiffuse(uCell, P, N);
-      if (uPrevMix > 0.001 && uCellPrev >= 0) {
-        diffuseL = mix(diffuseL, probeDiffuse(uCellPrev, P, N), uPrevMix);
-      }
-    } else {
-      diffuseL = uUseLightmap > 0.5 ? texture(uLightmap, vUv2).rgb
-                                    : (directLight(P, N) + irr);
-    }
-    vec3 F0 = mix(vec3(0.04), albedo, metal);
-    color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
-    if (uBake < 0.5) {                   // split-sum: prefiltered radiance - env BRDF
-      vec3 R = reflect(-V, N);
-      // very rough surfaces (most wall/ceiling area): the traversal's max-lod
-      // result is indistinguishable from one cosine-convolved irradiance tap
-      // along R - skip the whole hull walk (Tier 1)
-      vec3 pre = (rough > 0.65) ? sampleIrr(uCell, R)
-                                : traceSpec(uCell, P, R, rough, steps);
-      color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
-    }
+  vec3 diffuseL;
+${PROP ? /* glsl */`
+  // probe-grid irradiance with the 0.2s cell-handoff crossfade
+  diffuseL = probeDiffuse(uCell, P, N);
+  if (uPrevMix > 0.001 && uCellPrev >= 0) {
+    diffuseL = mix(diffuseL, probeDiffuse(uCellPrev, P, N), uPrevMix);
   }
-
+` : /* glsl */`
+#ifdef LM_FALLBACK
+  // pre-lightmap boot / lightmap-off debug: analytic lights + cross-portal
+  // blended irradiance (compiled in only while actually needed - it is ~25
+  // fetches of register pressure otherwise)
+  diffuseL = directLight(P, N) + blendedIrr(uCell, P, N);
+#else
+  diffuseL = texture(uLightmap, vUv2).rgb;
+#endif
+`}
+  vec3 F0 = mix(vec3(0.04), albedo, metal);
+  color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
+  ${STATIC ? 'if (uBake < 0.5) {' : '{'}  // split-sum: prefiltered radiance - env BRDF
+    vec3 R = reflect(-V, N);
+    // very rough surfaces (most wall/ceiling area): the traversal's max-lod
+    // result is indistinguishable from one cosine-convolved irradiance tap
+    // along R - skip the whole hull walk (Tier 1)
+    vec3 pre = (rough > 0.65) ? sampleIrr(uCell, R)
+                              : traceSpec(uCell, P, R, rough, steps);
+    color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
+  }
+`}
+${STATIC ? /* glsl */`
   if (uBake > 0.5) {                     // HDR capture pass: linear, no tonemap
     fragOut = vec4(color, 1.0);
     return;
   }
-
+  if (uDebugMode == 3) color = sampleIrr(uCell, N);
+  if (uDebugMode == 5) color = texture(uLightmap, vUv2).rgb;
+` : ''}
   if (uDebugMode == 1) color = mix(color, hsv2rgb(vec3(fract(float(uCell) * 0.618), 0.6, 0.9)), 0.45);
   if (uDebugMode == 2) color = heatmap(steps / 5.0);
-  if (uDebugMode == 3) color = irr;
-  if (uDebugMode == 5) color = texture(uLightmap, vUv2).rgb;
 
   fragOut = vec4(pow(acesTonemap(color * uExposure), vec3(1.0 / 2.2)), 1.0);
 }

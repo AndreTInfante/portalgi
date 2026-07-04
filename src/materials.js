@@ -12,7 +12,11 @@ const USE_HULL_UBO = true;
 
 export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   const numCells = level.cells.length;
-  const frag = sceneFrag(numCells, USE_HULL_UBO);
+  // one pruned program per material mode (statics carry no probe code, props
+  // no lightmap code, glass/pane almost nothing) - the single uber-program
+  // capped wave occupancy at a measured 52%
+  const fragByMode = {};
+  const fragFor = m => fragByMode[m] || (fragByMode[m] = sceneFrag(numCells, USE_HULL_UBO, m));
 
   let hullGroup = null;
   if (USE_HULL_UBO) {
@@ -78,10 +82,11 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   const allMaterials = [];
   function makeMaterial(cellId, opts = {}) {
     const { lp, lc, n } = lightUniforms(cellId);
+    const mode = opts.mode || 0;
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: SCENE_VERT,
-      fragmentShader: frag,
+      fragmentShader: fragFor(mode),
       // FrontSide: winding is normal-oriented at emit time; DoubleSide was a
       // crutch that doubled binning/hidden-surface work on tiled GPUs (Tier 1)
       side: THREE.FrontSide,
@@ -109,8 +114,28 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
       },
     });
     if (hullGroup) mat.uniformsGroups = occ ? [hullGroup, occ.group] : [hullGroup];
+    mat.userData.mode = mode;
+    // statics boot with the pre-lightmap fallback compiled in; setUseLightmap
+    // strips it (and its register pressure) once the lightmap exists
+    if (mode === 0 && !lightmapOn) mat.defines = { LM_FALLBACK: '' };
     allMaterials.push(mat);
     return mat;
+  }
+
+  // couples the lightmap uniform with the statics' LM_FALLBACK define: the
+  // fallback path (analytic lights + blendedIrr) only exists in the compiled
+  // program while it can actually be taken
+  let lightmapOn = false;
+  function setUseLightmap(on) {
+    if (on === lightmapOn) return;
+    lightmapOn = on;
+    globals.uUseLightmap.value = on ? 1.0 : 0.0;
+    for (const m of allMaterials) {
+      if (m.userData.mode !== 0) continue;
+      if (on) delete m.defines.LM_FALLBACK;
+      else (m.defines || (m.defines = {})).LM_FALLBACK = '';
+      m.needsUpdate = true;
+    }
   }
 
   // Props take NO analytic lights. Specular continuity across a cell handoff
@@ -124,7 +149,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     mat.uniforms.uCell.value = cellId;
   }
 
-  return { globals, makeMaterial, setMaterialCell, allMaterials, occ };
+  return { globals, makeMaterial, setMaterialCell, setUseLightmap, allMaterials, occ };
 }
 
 // Instantiate all static level meshes into the scene (layer 0 = baked/static).

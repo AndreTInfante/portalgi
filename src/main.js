@@ -22,6 +22,7 @@ import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
 import { AudioSystem } from './audio.js';
 import { TouchControls, isTouchDevice } from './touch.js';
+import { PhysicsWorld } from './physics.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -188,7 +189,8 @@ void main() {
   const modelProps = await loadModelProps(matsys, manager);
 
   const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
-  const props = new Props(scene, level, matsys, modelProps);
+  const physics = new PhysicsWorld(level); // cannon-es: props vs level/furniture/each other
+  const props = new Props(scene, level, matsys, modelProps, physics);
   const audio = new AudioSystem();
   props.onImpact = (pos, speed, p) => audio.impact(pos, speed, p.radius);
   if (!SHOT && !BAKE) {

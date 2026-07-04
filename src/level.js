@@ -588,6 +588,10 @@ export function buildLevel() {
     }
   }
 
+  // physics colliders for cannon-es: every emitted wall piece (door holes
+  // included), each ceiling, and the furniture colliders become static boxes
+  const staticBoxes = [];
+
   // ---- meshes: floors, ceilings, walls (with holes)
   for (const cell of cells) {
     if (cell.hollow) continue; // sky imposter: hull planes only, no geometry
@@ -601,7 +605,14 @@ export function buildLevel() {
     // sky cells have no ceiling geometry: the hull ceiling PLANE still exists,
     // so traversal exits up into this cell's cubemap (which sees the sky dome),
     // and bake rays / sun shadow rays pass through the opening unblocked
-    if (!cell.sky) cb.polygon(floorPts.map(p => [p[0], cell.ceilY, p[2]]), [0, -1, 0], uvf);
+    if (!cell.sky) {
+      cb.polygon(floorPts.map(p => [p[0], cell.ceilY, p[2]]), [0, -1, 0], uvf);
+      const g = cell.probeGrid; // bbox of the footprint (close enough for a lid)
+      staticBoxes.push({
+        c: [g.min[0] + g.size[0] / 2, cell.ceilY + 0.15, g.min[2] + g.size[2] / 2],
+        half: [g.size[0] / 2, 0.15, g.size[2] / 2],
+      });
+    }
     for (const edge of cell.edges) {
       if (edge.open) continue;
       // concrete walls use the wall-styled set (form-tie panels); the plain
@@ -615,6 +626,15 @@ export function buildLevel() {
       const emitWall = (sa, sb, ya, yb) => {
         if (sb - sa < 1e-4 || yb - ya < 1e-4) return;
         const P = (s, y) => [edge.a[0] + u[0] * s, y, edge.a[1] + u[1] * s];
+        // physics box: full wall thickness behind the visible surface, so the
+        // two cells' boxes for a shared wall coincide and doorways stay open
+        const sm = (sa + sb) / 2, hx = (sb - sa) / 2;
+        staticBoxes.push({
+          c: [edge.a[0] + u[0] * sm - edge.n.x * WALL_T / 2, (ya + yb) / 2,
+              edge.a[1] + u[1] * sm - edge.n.z * WALL_T / 2],
+          half: [hx, (yb - ya) / 2, WALL_T / 2],
+          rotY: Math.atan2(-u[1], u[0]), // box local x along the edge
+        });
         // plaster v spans the full wall height once (baseboard stays at the floor)
         const vv = edge.mat === 'plaster' ? y => (y - cell.floorY) / h * 0.999 : y => y * 0.4;
         const uu = s => s * (edge.mat === 'plaster' ? 0.25 : 0.4);
@@ -771,8 +791,12 @@ export function buildLevel() {
     }
   }
 
+  // NOTE colliders (benches/pedestals/statues) become physics boxes in
+  // PhysicsWorld, NOT here: statues register their colliders in
+  // addStaticModels, which runs after buildLevel
+
   return {
-    cells, paintings, panels, colliders, doors,
+    cells, paintings, panels, colliders, doors, staticBoxes,
     spawn: { pos: new THREE.Vector3(-4, 0, 2), yaw: -Math.PI / 2 },
   };
 }

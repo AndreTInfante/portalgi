@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from '../libs/loaders/GLTFLoader.js';
 import { OrbitControls } from '../libs/controls/OrbitControls.js';
+import { TransformControls } from '../libs/controls/TransformControls.js';
 import GUI from 'lil-gui';
 import { MODEL_DEFS, STATIC_MODEL_DEFS } from './models.js';
 import { OCCLUDER_PROXIES } from './proxies.js';
@@ -96,9 +97,12 @@ export async function startProxyEditor(renderer) {
   // item's LOCAL group so authored coords drive them directly
   const ensureHelpers = item => {
     while (item.helpers.length < item.caps.length) {
+      const capIdx = item.helpers.length;
+      const itemIdx = items.indexOf(item);
       const mk = geo => {
         const m = new THREE.Mesh(geo, item.capMat);
         m.matrixAutoUpdate = false;
+        m.userData.pick = { itemIdx, capIdx }; // capsule picking
         item.local.add(m);
         return m;
       };
@@ -129,10 +133,65 @@ export async function startProxyEditor(renderer) {
   };
   for (const item of items) poseHelpers(item);
 
-  // ------------------------------------------------------------------- GUI
+  // --------------------------------------------------- capsule gizmo + pick
   const gui = new GUI({ title: 'Proxy editor' });
   let sel = 0;
+  let selCap = 0;
   let capFolder = null;
+
+  const selMat = new THREE.MeshStandardMaterial({
+    transparent: true, opacity: 0.85, roughness: 0.5, depthWrite: false,
+    emissive: 0x1a5f38, emissiveIntensity: 0.8,
+  });
+  // gizmo proxy: midpoint position, Y-axis along the capsule, scale (r,len,r);
+  // it lives in the item's LOCAL group so edits stay in the authoring frame
+  const gizmoProxy = new THREE.Object3D();
+  const tc = new TransformControls(camera, renderer.domElement);
+  tc.setSize(0.8);
+  scene.add(tc);
+  tc.addEventListener('dragging-changed', e => { controls.enabled = !e.value; });
+
+  const capsuleToProxy = () => {
+    const c = items[sel].caps[selCap];
+    const dir = new THREE.Vector3().subVectors(c.b, c.a);
+    const len = dir.length();
+    gizmoProxy.position.addVectors(c.a, c.b).multiplyScalar(0.5);
+    gizmoProxy.quaternion.setFromUnitVectors(UP, len > 1e-5 ? dir.normalize() : UP);
+    gizmoProxy.scale.set(c.r, Math.max(len, 1e-4), c.r);
+  };
+  const proxyToCapsule = () => {
+    const item = items[sel];
+    const c = item.caps[selCap];
+    const r = (Math.abs(gizmoProxy.scale.x) + Math.abs(gizmoProxy.scale.z)) / 2;
+    c.r = Math.max(0.02, r);
+    gizmoProxy.scale.set(c.r, gizmoProxy.scale.y, c.r);
+    const half = Math.max(Math.abs(gizmoProxy.scale.y), 1e-4) / 2;
+    const dir = new THREE.Vector3(0, 1, 0).applyQuaternion(gizmoProxy.quaternion);
+    c.a.copy(gizmoProxy.position).addScaledVector(dir, -half);
+    c.b.copy(gizmoProxy.position).addScaledVector(dir, half);
+    poseHelpers(item);
+  };
+  tc.addEventListener('objectChange', proxyToCapsule);
+
+  const highlightCapsule = () => {
+    for (const it of items) {
+      for (let i = 0; i < it.helpers.length; i++) {
+        const m = (it === items[sel] && i === selCap) ? selMat : it.capMat;
+        const h = it.helpers[i];
+        h.cyl.material = m; h.sa.material = m; h.sb.material = m;
+      }
+    }
+    selMat.color.setRGB(...items[sel].color);
+  };
+
+  const attachGizmo = () => {
+    const item = items[sel];
+    selCap = Math.min(selCap, item.caps.length - 1);
+    item.local.add(gizmoProxy);
+    capsuleToProxy();
+    tc.attach(gizmoProxy);
+    highlightCapsule();
+  };
 
   const frameSelected = () => {
     const item = items[sel];
@@ -142,13 +201,22 @@ export async function startProxyEditor(renderer) {
     camera.position.set(p.x + item.def.size * 1.6, item.def.size * 0.9, p.z + item.def.size * 1.9);
   };
 
-  const select = i => {
+  const select = (i, opts = {}) => {
     sel = i;
+    if (opts.cap !== undefined) selCap = opts.cap;
+    selCap = Math.min(selCap, items[sel].caps.length - 1);
     for (let k = 0; k < items.length; k++) {
       items[k].capMat.opacity = k === sel ? 0.8 : 0.3;
     }
-    frameSelected();
+    if (opts.frame !== false) frameSelected();
     rebuildCapGui();
+    attachGizmo();
+  };
+  let guiSquelch = false; // setValue() refires onChange; squelch programmatic sets
+  const syncDropdown = idx => {
+    guiSquelch = true;
+    gui.controllers.find(c => c.property === 'm')?.setValue(idx);
+    guiSquelch = false;
   };
 
   const rebuildCapGui = () => {
@@ -164,29 +232,42 @@ export async function startProxyEditor(renderer) {
     capFolder.add(item, 'meshVisible').name('show mesh').onChange(v => {
       item.inner.visible = v; // helpers live outside the gltf subgroup
     });
+    // gizmo mode row (also keys: W translate / E rotate / R scale)
+    const modes = {
+      'translate (W)': () => tc.setMode('translate'),
+      'rotate (E)': () => tc.setMode('rotate'),
+      'scale (R)': () => tc.setMode('scale'),
+    };
+    for (const [n, fn] of Object.entries(modes)) capFolder.add({ [n]: fn }, n);
     item.caps.forEach((c, i) => {
       const f = capFolder.addFolder(`capsule ${i}`);
+      const sync = () => { poseHelpers(item); if (i === selCap) capsuleToProxy(); };
       const bind = (vec, axis, label) => f.add(vec, axis).name(label).step(0.01)
-        .onChange(() => poseHelpers(item));
+        .listen().onChange(sync);
       bind(c.a, 'x', 'ax'); bind(c.a, 'y', 'ay'); bind(c.a, 'z', 'az');
       bind(c.b, 'x', 'bx'); bind(c.b, 'y', 'by'); bind(c.b, 'z', 'bz');
-      f.add(c, 'r', 0.02, 1.6, 0.01).onChange(() => poseHelpers(item));
-      if (i > 0) f.close();
+      f.add(c, 'r', 0.02, 1.6, 0.01).listen().onChange(sync);
+      f.add({ sel: () => select(sel, { cap: i, frame: false }) }, 'sel').name('select (gizmo)');
+      if (i !== selCap) f.close();
     });
     capFolder.add({ add: () => {
       if (item.caps.length >= MAX_SPH_PER_PROP) return;
       const last = item.caps[item.caps.length - 1];
       item.caps.push({ a: last.a.clone(), b: last.b.clone().add(new THREE.Vector3(0, 0.1, 0)), r: last.r });
       poseHelpers(item);
-      rebuildCapGui();
+      select(sel, { cap: item.caps.length - 1, frame: false });
     } }, 'add').name('+ capsule (dup last)');
     capFolder.add({ del: () => {
-      if (item.caps.length > 1) { item.caps.pop(); poseHelpers(item); rebuildCapGui(); }
-    } }, 'del').name('- capsule');
+      if (item.caps.length > 1) {
+        item.caps.splice(selCap, 1);
+        poseHelpers(item);
+        select(sel, { cap: Math.max(0, selCap - 1), frame: false });
+      }
+    } }, 'del').name('- selected capsule');
   };
 
   gui.add({ m: 0 }, 'm', Object.fromEntries(items.map((it, i) => [`${it.kind === 'statics' ? 'statue' : 'prop'}: ${it.def.slug}`, i])))
-    .name('model').onChange(select);
+    .name('model').onChange(v => { if (!guiSquelch) select(v); });
   gui.add({ dump: () => {
     const rnd = x => Math.round(x * 1000) / 1000;
     const out = { statics: {}, props: {} };
@@ -206,28 +287,38 @@ export async function startProxyEditor(renderer) {
     alert('proxies JSON copied to clipboard (and console)');
   } }, 'dump').name('DUMP proxies.js JSON');
 
-  // click to select
+  // click to select: capsules first (any item's), then whole models
   const ray = new THREE.Raycaster();
   renderer.domElement.addEventListener('pointerdown', ev => {
-    if (ev.button !== 0) return;
+    if (ev.button !== 0 || tc.dragging) return;
     const ndc = new THREE.Vector2(
       (ev.clientX / innerWidth) * 2 - 1, -(ev.clientY / innerHeight) * 2 + 1);
     ray.setFromCamera(ndc, camera);
+    const isGizmo = o => { let n = o; while (n) { if (n === tc) return true; n = n.parent; } return false; };
     for (const hit of ray.intersectObjects(scene.children, true)) {
+      if (isGizmo(hit.object)) return; // let the gizmo own its clicks
+      const pick = hit.object.userData.pick;
+      if (pick) { // capsule hit
+        select(pick.itemIdx, { cap: pick.capIdx, frame: false });
+        syncDropdown(pick.itemIdx);
+        return;
+      }
       const idx = items.findIndex(it => {
         let n = hit.object;
         while (n) { if (n === it.holder) return true; n = n.parent; }
         return false;
       });
       if (idx >= 0) {
-        // keep the camera where it is on click-select; just retarget the GUI
-        const keepCam = camera.position.clone();
-        select(idx);
-        camera.position.copy(keepCam);
-        gui.controllers.find(c => c.property === 'm')?.setValue(idx);
-        break;
+        select(idx, { frame: false });
+        syncDropdown(idx);
+        return;
       }
     }
+  });
+  addEventListener('keydown', ev => {
+    if (ev.key === 'w' || ev.key === 'W') tc.setMode('translate');
+    if (ev.key === 'e' || ev.key === 'E') tc.setMode('rotate');
+    if (ev.key === 'r' || ev.key === 'R') tc.setMode('scale');
   });
 
   select(0);

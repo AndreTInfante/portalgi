@@ -62,6 +62,7 @@ export class Props {
         cell: mp.cell,
         asleep: true,
         debugPane: false,
+        slug: mp.slug, // authored occluder proxy key (proxies.js)
       });
     }
   }

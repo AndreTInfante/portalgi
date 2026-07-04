@@ -11,16 +11,25 @@
 //   uOccMeta[prop]  = (firstSphere, sphereCount, -, -)
 //   uOccSph[i]      = world shape sphere
 import * as THREE from 'three';
+import { OCCLUDER_PROXIES } from './proxies.js';
 
-// SIZE IS A PLATFORM CONSTRAINT, not a tuning knob: raising these to
-// 64/256/16/8 (~15.7KB total UBO with HullData) regressed EVERY on-device
-// config incl. steps0, which runs none of the occluder code - consistent
-// with Adreno demoting all uniform-block reads to the slow path once the
-// fast constant store overflows. These sizes (~13KB total) measured good.
+// [[ax,ay,az],[bx,by,bz],r] -> {a: Vector3, b: Vector3, r}
+const capsFromData = data => data.map(([a, b, r]) => ({
+  a: new THREE.Vector3(...a), b: new THREE.Vector3(...b), r,
+}));
+
+// TOTAL SIZE IS A PLATFORM CONSTRAINT, not a tuning knob: raising the block
+// to ~15.7KB total UBO (with HullData) regressed EVERY on-device config
+// incl. steps0, which runs none of the occluder code - consistent with
+// Adreno demoting all uniform-block reads to the slow path once the fast
+// constant store overflows. ~13KB total measured good. Capacity within the
+// budget comes from packing only VISIBLE cells (+ portal neighbors) per
+// frame instead of reserving slots for the whole level: the same bytes now
+// support 16 entries/cell and 8 capsules/entry in the rooms that matter.
 export const MAX_OCC_PROPS = 40;
 export const MAX_SPHERES = 160; // vec4 slots: 80 capsules
-export const MAX_PER_CELL = 10;
-export const MAX_SPH_PER_PROP = 5;
+export const MAX_PER_CELL = 16;
+export const MAX_SPH_PER_PROP = 8;
 
 export function buildOccluderGroup(numCells) {
   const group = new THREE.UniformsGroup();
@@ -135,7 +144,9 @@ export class OccluderSystem {
     this._nextGroup = 1;
     for (const p of props.list) {
       if (p.debugPane) continue; // clear glass occludes nothing
-      const spheres = fitCapsules(p.mesh);
+      // authored prop-local proxies beat the auto-fit (proxies.js)
+      const authored = p.slug && OCCLUDER_PROXIES.props[p.slug];
+      const spheres = authored ? capsFromData(authored) : fitCapsules(p.mesh);
       if (spheres.length) {
         // occluder blob color ~ the prop's diffuse albedo (procedural textures
         // carry a linear average; model textures fall back to a neutral)
@@ -171,12 +182,15 @@ export class OccluderSystem {
     return mat.uniforms.uOccSelf.value;
   }
 
-  // static exhibit mesh (world-space geometry): vertex-band fit
+  // static exhibit mesh (world-space geometry): authored world-space proxies
+  // (proxies.js) beat the vertex-band fit
   addStatic(mesh, cellId, col) {
-    const caps = fitCapsulesVerts(mesh);
+    const authored = mesh.userData.slug && OCCLUDER_PROXIES.statics[mesh.userData.slug];
+    const caps = authored ? capsFromData(authored) : fitCapsulesVerts(mesh);
     if (!caps.length) return;
     this.statics.push({
       cell: cellId, col, group: this._groupOf(mesh.material),
+      slug: mesh.userData.slug,
       world: caps.map(s => [
         new THREE.Vector4(s.a.x, s.a.y, s.a.z, s.r),
         new THREE.Vector4(s.b.x, s.b.y, s.b.z, 0),
@@ -197,10 +211,15 @@ export class OccluderSystem {
     });
   }
 
-  update() {
+  // activeCells: the culler's visible set, or null for all (bakes, cull=0).
+  // Only cells a reflection ray can actually start in (visible) or reach in
+  // one hop (their portal neighbors, precomputed by the caller) need slots
+  // this frame - that is what buys 16 entries/cell inside the UBO budget.
+  update(activeCells) {
     const occ = this.occ;
     const byCell = new Map();
     const push = (cellId, item) => {
+      if (activeCells && !activeCells.has(cellId)) return;
       let list = byCell.get(cellId);
       if (!list) byCell.set(cellId, list = []);
       list.push(item);

@@ -173,6 +173,7 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       }));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key
+      if (o.slug) mesh.userData.slug = o.slug; // authored occluder proxy key
       group.add(mesh);
     }
   }

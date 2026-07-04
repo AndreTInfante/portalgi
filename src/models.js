@@ -56,7 +56,7 @@ export async function addStaticModels(level) {
           geo: gb,
           opts: {
             texMap: src.map, texNrm: src.normalMap, texOrm: src.roughnessMap || src.metalnessMap,
-            avg: [0.42, 0.4, 0.36], roughFactor: 1,
+            avg: [0.42, 0.4, 0.36], roughFactor: 1, slug: def.slug,
           },
         });
       });
@@ -128,7 +128,7 @@ export async function loadModelProps(matsys, manager) {
       if (def.hangCeil !== undefined) y = def.hangCeil - (box.max.y - center.y) - 0.02;
       if (def.yCenter !== undefined) y = def.yCenter;
       root.position.set(def.x, y, def.z);
-      out.push({ root, mats, radius, rFloor, cell: def.cell });
+      out.push({ root, mats, radius, rFloor, cell: def.cell, slug: def.slug });
     } catch (e) {
       console.error(`model load failed: ${def.slug}`, e);
     }

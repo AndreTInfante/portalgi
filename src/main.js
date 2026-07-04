@@ -20,6 +20,7 @@ import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
 import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
+import { OccluderEditor } from './occedit.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -186,7 +187,11 @@ async function boot() {
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf);
+  const gui = buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf);
+  // ?occedit=1: capsule authoring mode (wireframes + GUI + proxies.js dump)
+  const occEditor = (occluders && params.get('occedit') === '1')
+    ? new OccluderEditor(scene, occluders) : null;
+  if (occEditor) occEditor.attachGui(gui);
 
   if (!SHOT && !BAKE) {
     renderer.domElement.addEventListener('mousedown', e => {
@@ -654,6 +659,7 @@ async function boot() {
       : { pos: player.pos, quat: null, viewDir: heading, vel: new THREE.Vector3(), eye: headPos.clone(), mode: 'ray' };
   }
 
+  const occActive = new Set();
   let last = performance.now(), fpsAvg = 0;
   renderer.setAnimationLoop(() => {
     const now = performance.now();
@@ -679,7 +685,21 @@ async function boot() {
       culler.compute(inXR ? renderer.xr.getCamera() : camera, inXR ? headPos : player.pos);
     }
     culler.apply(staticGroup, props, state.baking);
-    if (occluders && !state.baking) occluders.update();
+    if (occluders && !state.baking) {
+      // occluder slots only for cells reflections can reach this frame:
+      // the visible set plus one ring of portal neighbors (first-hop targets)
+      let active = null;
+      if (culler.enabled) {
+        occActive.clear();
+        for (const c of culler.visible) {
+          occActive.add(c);
+          for (const po of level.cells[c].portals) occActive.add(po.neighbor);
+        }
+        active = occActive;
+      }
+      occluders.update(active);
+      if (occEditor) occEditor.updateFrame();
+    }
     if (!inXR) {
       player.applyToCamera(camera);
       const aimed = !props.held && props.aim(player.pos, player.viewDir);

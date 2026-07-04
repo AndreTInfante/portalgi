@@ -74,7 +74,7 @@ export class AudioSystem {
     if (!walking || speed < 0.7) { this.stepDist = Math.max(0, this.stepDist - dt); return; }
     this.stepDist += dist;
     const t = this.ctx.currentTime;
-    if (this.stepDist > 0.85 && t - this.lastStepT > 0.24) {
+    if (this.stepDist > 1.1 && t - this.lastStepT > 0.31) {
       this.stepDist = 0;
       this.lastStepT = t;
       this._step();
@@ -106,15 +106,15 @@ export class AudioSystem {
     src.start(t, Math.random() * 0.7, decay + 0.05);
   }
 
-  // hard-soled step on stone: a bright heel tick plus a small low body
+  // step on stone: mostly low-end body with a soft mid tap (no bright tick)
   _step() {
     const t = this.ctx.currentTime;
     const v = 0.8 + Math.random() * 0.4;
     this._noiseBurst(this.sfxGain, t, {
-      freq: 1700 + Math.random() * 900, q: 1.4, gain: 0.045 * v, decay: 0.03,
+      freq: 700 + Math.random() * 300, q: 1.2, gain: 0.02 * v, decay: 0.03,
     });
     this._noiseBurst(this.sfxGain, t, {
-      freq: 130 + Math.random() * 50, q: 1.0, gain: 0.10 * v, decay: 0.09,
+      freq: 110 + Math.random() * 40, q: 1.0, gain: 0.14 * v, decay: 0.11,
     });
   }
 
@@ -138,12 +138,12 @@ export class AudioSystem {
     osc.frequency.setValueAtTime(f0, t);
     osc.frequency.exponentialRampToValueAtTime(f0 * 0.6, t + 0.12);
     const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.35 * amp, t);
+    g.gain.setValueAtTime(0.5 * amp, t);
     g.gain.exponentialRampToValueAtTime(1e-4, t + 0.14);
     osc.connect(g).connect(pan);
     osc.start(t); osc.stop(t + 0.16);
     this._noiseBurst(pan, t, {
-      freq: 650, q: 0.8, gain: 0.18 * amp, decay: 0.045, type: 'lowpass',
+      freq: 650, q: 0.8, gain: 0.25 * amp, decay: 0.045, type: 'lowpass',
     });
   }
 }

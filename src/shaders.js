@@ -82,8 +82,45 @@ uniform float uOccHops;    // LOD: occluders evaluated for the first N cells of 
 uniform float uOccDensity;
 uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
+uniform float uOccAO;      // contact-AO strength from the same capsules
 uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shades:
                            // an occluder never occludes the surfaces it approximates
+
+// closed-form contact AO (Quilez sphere occlusion at the closest axis point):
+// the same capsules that occlude reflections darken nearby diffuse. Proxied
+// statics are OUT of the lightmap BVH - this is their only shadow, exactly
+// one representation per object per lighting domain.
+float capsuleAO(int cell, vec3 P, vec3 N) {
+  int cnt = int(uOccCell[cell].y);
+  if (cnt == 0) return 1.0;
+  int first = int(uOccCell[cell].x);
+  float aoc = 1.0;
+  for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
+    if (pi >= cnt) break;
+    vec4 b = uOccBound[first + pi];
+    vec3 dc = b.xyz - P;
+    float rb = b.w + 0.7;                        // AO reach beyond the bound
+    if (dot(dc, dc) > rb * rb) continue;
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
+    if ((packed & 63) == uOccSelf) continue;     // own-group skip
+    int sc = (packed >> 6) & 7;
+    int sf = packed >> 9;
+    for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
+      if (si >= sc) break;
+      vec4 A = uOccSph[sf + si * 2];
+      vec3 u = uOccSph[sf + si * 2 + 1].xyz - A.xyz;
+      float cc = dot(u, u);
+      float t = cc > 1e-6 ? clamp(dot(P - A.xyz, u) / cc, 0.0, 1.0) : 0.0;
+      vec3 d = A.xyz + u * t - P;                // to the nearest axis point
+      float d2 = max(dot(d, d), 1e-4);
+      float o1 = clamp(dot(N, d * inversesqrt(d2)), 0.0, 1.0) * (A.w * A.w) / d2;
+      aoc *= 1.0 - min(o1 * uOccAO, 0.85);      // never pitch black
+    }
+    if (aoc < 0.15) break;
+  }
+  return aoc;
+}
 
 // transmittance through this cell's occluders (CAPSULES: two vec4 slots,
 // (a,r)+(b,-); a==b is a sphere) along ray segment [0, tMax].
@@ -100,13 +137,18 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
   int cnt = int(uOccCell[cell].y);
   if (cnt == 0) return trans;
   int first = int(uOccCell[cell].x);
+  // low-end knee: GGX blur is strongly nonlinear at small roughness (alpha ~
+  // rough^2), so near-mirror surfaces (chrome/glass ~0.04) widen almost
+  // nothing - linear widening made their blobs ghostly-faint while their
+  // reflection image stayed crisp. Mid-rough floors (>= 0.15) are unchanged.
+  float wr = rough * clamp(rough * 6.667, 0.0, 1.0);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
     vec4 b = uOccBound[first + pi];
     vec3 oc = b.xyz - o;
     float tc = clamp(dot(oc, d), 0.0, tMax);
     vec3 pc = oc - d * tc;
-    float rb = b.w + uOccWiden * rough * (tBase + tc) + 0.05;
+    float rb = b.w + uOccWiden * wr * (tBase + tc) + 0.05;
     if (dot(pc, pc) > rb * rb) continue;          // entry-level reject
     vec4 colw = uOccColor[first + pi];
     int packed = int(colw.w + 0.5);
@@ -127,7 +169,7 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       float ts = clamp(sg * bb - dw, 0.0, tMax);
       if (cc > 1e-6) sg = clamp((e + ts * bb) / cc, 0.0, 1.0);
       vec3 ps = w0 + d * ts - u * sg;
-      float rw = A.w + uOccWiden * rough * (tBase + ts);
+      float rw = A.w + uOccWiden * wr * (tBase + ts);
       float q = 1.0 - dot(ps, ps) / (rw * rw);    // 0 at the widened silhouette
       if (q <= 0.0) continue;
       float cover = (A.w * A.w) / (rw * rw);      // blur spreads, peak dims
@@ -514,6 +556,11 @@ ${PROP ? /* glsl */`
   diffuseL = texture(uLightmap, vUv2).rgb;
 #endif
 `}
+${useUbo ? /* glsl */`
+  // live contact AO from the occluder capsules (props AND proxied statics -
+  // the statics cast nothing in the lightmap by design)
+  if (uOccOn > 0.5) diffuseL *= capsuleAO(uCell, P, N);
+` : ''}
   vec3 F0 = mix(vec3(0.04), albedo, metal);
   color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
   ${STATIC ? 'if (uBake < 0.5) {' : '{'}  // split-sum: prefiltered radiance - env BRDF

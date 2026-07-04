@@ -67,7 +67,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     f2.add({ fb: 1.0 }, 'fb', 0.7, 1.2, 0.05).name('eye buffer scale (re-enter VR)')
       .onChange(v => window.__setFbScale(v));
   }
-  if (onStaticImposters) f2.add({ si: false }, 'si').name('static imposters (rebakes)').onChange(onStaticImposters);
+  if (onStaticImposters) f2.add({ si: true }, 'si').name('statues via proxies (rebakes)').onChange(onStaticImposters);
   {
     const fo = gui.addFolder('Occluders');
     const op = {
@@ -81,6 +81,8 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     fo.add(op, 'density', 0, 3, 0.01);
     fo.add(op, 'widen', 0, 2, 0.01).name('cone / rough-m (fade)');
     fo.add(op, 'tint', 0, 1, 0.01).name('diffuse re-emit');
+    fo.add({ get ao() { return g.uOccAO.value; }, set ao(v) { g.uOccAO.value = v; } },
+      'ao', 0, 1.5, 0.01).name('contact AO');
     fo.add(op, 'hops', 0, 4, 1).name('LOD (cells of walk)');
     fo.add({ dump: () => {
       const j = JSON.stringify({ density: g.uOccDensity.value,

@@ -194,6 +194,18 @@ export class OccluderSystem {
   // (proxies.js, transformed by the def's proxyFrame) beat the vertex-band fit
   addStatic(mesh, cellId, col) {
     const authored = mesh.userData.slug && OCCLUDER_PROXIES.statics[mesh.userData.slug];
+    // statues load as multiple submeshes, one addStatic each: an authored
+    // slug registers ONCE, and later submeshes join the first entry's group
+    // (else each submesh gets occluded/AO'd by its twin's identical capsules)
+    if (authored) {
+      const existing = this.statics.find(s => s.slug === mesh.userData.slug);
+      if (existing) {
+        if (mesh.material.uniforms && mesh.material.uniforms.uOccSelf) {
+          mesh.material.uniforms.uOccSelf.value = existing.group;
+        }
+        return;
+      }
+    }
     let caps;
     if (authored) {
       const f = mesh.userData.proxyFrame || { x: 0, z: 0, rotY: 0 };

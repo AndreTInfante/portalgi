@@ -134,9 +134,10 @@ async function boot() {
   const props = new Props(scene, level, matsys, modelProps);
   const wires = buildPortalWires(scene, level);
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
-  // ?si=1: exclude static exhibits from captures before the initial bake
-  // (A/B: statues represented by their baked capture vs occluder blob only)
-  if (params.get('si') === '1') {
+  // proxied statics are OUT of the cubemap captures by default: one
+  // representation per object (capsules in reflections, capsule AO in
+  // diffuse, lightmap receive-only). ?si=0 re-includes them for A/B.
+  if (params.get('si') !== '0') {
     for (const mm of staticModelMeshes) mm.layers.set(3);
   }
   const onStaticImposters = v => {

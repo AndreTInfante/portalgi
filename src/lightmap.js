@@ -192,7 +192,13 @@ export class Lightmapper {
     // Emissive fixtures are EXCLUDED: emitters must not cast shadows (or
     // self-occlude their own area-light samples); they illuminate via NEE and
     // render emissive-only (their unwritten lightmap texels stay black).
+    // CAST arrays feed the BVH + per-face bounce records; GATHER arrays feed
+    // the uv2-space G-buffer (which texels receive light). Objects with
+    // volumetric occluder proxies (o.proxyFrame - the statues) RECEIVE baked
+    // light but do NOT cast: their shadows come from live capsule AO, so one
+    // representation per object per lighting domain.
     const pos = [], nrm = [], uv2 = [], alb = [], emi = [];
+    const gpos = [], gnrm = [], guv2 = [];
     for (const cell of level.cells) {
       for (const [, b] of cell.builders) {
         const g = b.geo;
@@ -207,7 +213,12 @@ export class Lightmapper {
         a = [a[0] * tint[0], a[1] * tint[1], a[2] * tint[2]];
         const e = o.emissive || [0, 0, 0];
         const nv = g.pos.length / 3;
+        const casts = !o.proxyFrame;
         for (let i = 0; i < nv; i++) {
+          gpos.push(g.pos[i * 3], g.pos[i * 3 + 1], g.pos[i * 3 + 2]);
+          gnrm.push(g.nrm[i * 3], g.nrm[i * 3 + 1], g.nrm[i * 3 + 2]);
+          guv2.push(g.uv2[i * 2], g.uv2[i * 2 + 1]);
+          if (!casts) continue;
           pos.push(g.pos[i * 3], g.pos[i * 3 + 1], g.pos[i * 3 + 2]);
           nrm.push(g.nrm[i * 3], g.nrm[i * 3 + 1], g.nrm[i * 3 + 2]);
           uv2.push(g.uv2[i * 2], g.uv2[i * 2 + 1]);
@@ -220,6 +231,10 @@ export class Lightmapper {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
     geo.setAttribute('lmuv', new THREE.Float32BufferAttribute(uv2, 2));
+    const geoGather = new THREE.BufferGeometry();
+    geoGather.setAttribute('position', new THREE.Float32BufferAttribute(gpos, 3));
+    geoGather.setAttribute('normal', new THREE.Float32BufferAttribute(gnrm, 3));
+    geoGather.setAttribute('lmuv', new THREE.Float32BufferAttribute(guv2, 2));
     this.triCount = pos.length / 9;
 
     // BVH (this reorders/creates the index; face records must be built AFTER)
@@ -262,7 +277,7 @@ export class Lightmapper {
       glslVersion: THREE.GLSL3, vertexShader: GBUF_VERT, fragmentShader: GBUF_FRAG,
       uniforms: { uWhich: { value: 0 } }, side: THREE.DoubleSide, depthTest: false, depthWrite: false,
     });
-    this.bakeMesh = new THREE.Mesh(geo, this.gbufMat);
+    this.bakeMesh = new THREE.Mesh(geoGather, this.gbufMat);
     this.bakeMesh.frustumCulled = false;
     this.bakeScene = new THREE.Scene();
     this.bakeScene.add(this.bakeMesh);

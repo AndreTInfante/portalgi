@@ -19,6 +19,7 @@ import { findCell } from './level.js';
 import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
 import { PerfHarness } from './perf.js';
+import { BUILD } from './build.js';
 import { OccluderSystem } from './occluders.js';
 
 const params = new URLSearchParams(location.search);
@@ -40,6 +41,7 @@ const SHOT_POSES = {
   12: { pos: [0, 1.5, 10.6], look: [0, 1.4, 12.4] },       // debug pane held up in the rotunda
 };
 
+console.log('PortalGI build', BUILD);
 const overlay = document.getElementById('overlay');
 const overlayMsg = document.getElementById('overlay-msg');
 const overlaySub = document.getElementById('overlay-sub');
@@ -687,7 +689,7 @@ async function boot() {
     if (inXR) drawPerfLabel();
     fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;
     const ph = perf.hudText();
-    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cells ${culler.enabled ? culler.visible.size : 'all'} * ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}${ph ? ' * ' + ph : ''}`;
+    fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cells ${culler.enabled ? culler.visible.size : 'all'} * ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}${ph ? ' * ' + ph : ''} * ${BUILD}`;
   });
 
   addEventListener('resize', () => {

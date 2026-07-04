@@ -62,8 +62,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
                                  // A/B (0.23ms vs 2.1ms for planar smudges, worst view)
     uOccHops: { value: 1 },     // hop-2 occlusion measured ~0.9ms for through-
                                 // doorway blobs only (GUI dial to restore)
-    uOccDensity: { value: 1.2 },
-    uOccWiden: { value: 0.5 },   // cone growth per rough-meter: drives spread AND fade
+    uOccDensity: { value: 1.6 },  // user-tuned 2026-07-04
+    uOccWiden: { value: 1.5 },    // user-tuned 2026-07-04   // cone growth per rough-meter: drives spread AND fade
     uOccTint: { value: 0.8 },    // user-tuned: it's ~AO + optically-correct ambient
   };
 
@@ -174,6 +174,7 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key
       if (o.slug) mesh.userData.slug = o.slug; // authored occluder proxy key
+      if (o.proxyFrame) mesh.userData.proxyFrame = o.proxyFrame;
       group.add(mesh);
     }
   }

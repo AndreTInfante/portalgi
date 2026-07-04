@@ -20,7 +20,6 @@ import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
 import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
-import { OccluderEditor } from './occedit.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -71,7 +70,14 @@ const rig = new THREE.Group();
 rig.add(camera);
 scene.add(rig);
 
-boot();
+// ?proxyedit=1: standalone occluder-capsule authoring gallery instead of the
+// demo (loads every prop/statue model, solid capsule overlays, proxies.js dump)
+if (params.get('proxyedit') === '1') {
+  document.getElementById('overlay').classList.add('hidden');
+  import('./proxyedit.js').then(m => m.startProxyEditor(renderer));
+} else {
+  boot();
+}
 
 async function boot() {
   if (params.has('mark')) { // headless heartbeat: upload progress/errors for CI polling
@@ -187,11 +193,7 @@ async function boot() {
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  const gui = buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf);
-  // ?occedit=1: capsule authoring mode (wireframes + GUI + proxies.js dump)
-  const occEditor = (occluders && params.get('occedit') === '1')
-    ? new OccluderEditor(scene, occluders) : null;
-  if (occEditor) occEditor.attachGui(gui);
+  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf);
 
   if (!SHOT && !BAKE) {
     renderer.domElement.addEventListener('mousedown', e => {
@@ -698,7 +700,6 @@ async function boot() {
         active = occActive;
       }
       occluders.update(active);
-      if (occEditor) occEditor.updateFrame();
     }
     if (!inXR) {
       player.applyToCamera(camera);

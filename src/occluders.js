@@ -17,6 +17,12 @@ import { OCCLUDER_PROXIES } from './proxies.js';
 const capsFromData = data => data.map(([a, b, r]) => ({
   a: new THREE.Vector3(...a), b: new THREE.Vector3(...b), r,
 }));
+// authored statics live in a grounded/unrotated local frame (proxies.js):
+// world = T(x, 0, z) * R(rotY) * local
+const capToWorld = (v, f) => {
+  const c = Math.cos(f.rotY), s = Math.sin(f.rotY);
+  return new THREE.Vector3(f.x + c * v.x + s * v.z, v.y, f.z - s * v.x + c * v.z);
+};
 
 // TOTAL SIZE IS A PLATFORM CONSTRAINT, not a tuning knob: raising the block
 // to ~15.7KB total UBO (with HullData) regressed EVERY on-device config
@@ -64,7 +70,7 @@ export function buildOccluderGroup(numCells) {
 // a single stretched capsule along the long axis, compact ones degenerate to
 // a sphere (a == b). Local space; largest 5 kept.
 // (Hero statics get a manual authoring pass later - see the design doc.)
-function fitCapsules(root) {
+export function fitCapsules(root) {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
   const v = new THREE.Vector3();
@@ -146,14 +152,16 @@ export class OccluderSystem {
       if (p.debugPane) continue; // clear glass occludes nothing
       // authored prop-local proxies beat the auto-fit (proxies.js)
       const authored = p.slug && OCCLUDER_PROXIES.props[p.slug];
-      const spheres = authored ? capsFromData(authored) : fitCapsules(p.mesh);
+      const spheres = authored ? capsFromData(authored.capsules) : fitCapsules(p.mesh);
       if (spheres.length) {
-        // occluder blob color ~ the prop's diffuse albedo (procedural textures
-        // carry a linear average; model textures fall back to a neutral)
+        // occluder blob color: authored albedo, else the prop's diffuse
+        // estimate (procedural textures carry a linear average; model
+        // textures fall back to a neutral)
         const t = p.mats[0] && p.mats[0].uniforms.uTint ? p.mats[0].uniforms.uTint.value : null;
         const avg = p.mats[0] && p.mats[0].uniforms.uMap &&
           p.mats[0].uniforms.uMap.value && p.mats[0].uniforms.uMap.value.userData.avg;
-        const col = avg && t ? [avg[0] * t.x, avg[1] * t.y, avg[2] * t.z]
+        const col = (authored && authored.color) ? authored.color
+          : avg && t ? [avg[0] * t.x, avg[1] * t.y, avg[2] * t.z]
           : t ? [t.x * 0.5, t.y * 0.5, t.z * 0.5] : [0.35, 0.33, 0.3];
         // occlusion group: "an occluder never occludes the surfaces it
         // approximates". All of a prop's materials share one group
@@ -182,11 +190,20 @@ export class OccluderSystem {
     return mat.uniforms.uOccSelf.value;
   }
 
-  // static exhibit mesh (world-space geometry): authored world-space proxies
-  // (proxies.js) beat the vertex-band fit
+  // static exhibit mesh (world-space geometry): authored local-frame proxies
+  // (proxies.js, transformed by the def's proxyFrame) beat the vertex-band fit
   addStatic(mesh, cellId, col) {
     const authored = mesh.userData.slug && OCCLUDER_PROXIES.statics[mesh.userData.slug];
-    const caps = authored ? capsFromData(authored) : fitCapsulesVerts(mesh);
+    let caps;
+    if (authored) {
+      const f = mesh.userData.proxyFrame || { x: 0, z: 0, rotY: 0 };
+      caps = capsFromData(authored.capsules).map(c => ({
+        a: capToWorld(c.a, f), b: capToWorld(c.b, f), r: c.r,
+      }));
+      if (authored.color) col = authored.color;
+    } else {
+      caps = fitCapsulesVerts(mesh);
+    }
     if (!caps.length) return;
     this.statics.push({
       cell: cellId, col, group: this._groupOf(mesh.material),

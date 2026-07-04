@@ -10,7 +10,7 @@ import { GeoBuilder } from './level.js';
 // world - lightmap charts (their photoscan UVs are unique, so the whole mesh
 // is one chart), the path tracer BVH (shadows + bounce), and the cubemap
 // captures (reflections). This is the lightmapped-prop path.
-const STATIC_MODEL_DEFS = [
+export const STATIC_MODEL_DEFS = [
   { slug: 'horse_statue_01', size: 2.2, cell: 2, x: 0, z: 13.3, rotY: Math.PI },
   { slug: 'bronze_whale_statue', size: 2.4, cell: 8, x: 13.4, z: -15.8, rotY: Math.PI / 5 },
 ];
@@ -57,6 +57,9 @@ export async function addStaticModels(level) {
           opts: {
             texMap: src.map, texNrm: src.normalMap, texOrm: src.roughnessMap || src.metalnessMap,
             avg: [0.42, 0.4, 0.36], roughFactor: 1, slug: def.slug,
+            // authored occluder capsules are in the grounded/unrotated local
+            // frame; this is the transform back to world (see proxies.js)
+            proxyFrame: { x: def.x, z: def.z, rotY: def.rotY || 0 },
           },
         });
       });
@@ -72,7 +75,7 @@ export async function addStaticModels(level) {
   }));
 }
 
-const MODEL_DEFS = [
+export const MODEL_DEFS = [
   { slug: 'horse_statue_01', size: 0.85, cell: 10, x: -1.8, z: 21, ped: true },
   { slug: 'carved_wooden_elephant', size: 0.62, cell: 10, x: 1.8, z: 21, ped: true },
   { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -1.8, z: 24, ped: true },

@@ -178,6 +178,7 @@ export const REAL_SETS = {
   // keep the plain slab above via the concrete/concreteWall key split)
   concreteWall: { slug: 'concrete_wall_009', res: '2k' },
   walnut: { slug: 'dark_wood', res: '1k' },
+  brick: { slug: 'red_bricks_04', res: '2k' }, // courtyard paving
   // mild flatten reins in the photo's stains without going flat-procedural
   // (also feeds plasterPlain = ceilings/jambs)
   plaster: { slug: 'painted_plaster_wall', res: '1k', target: [230, 226, 219], flatten: 0.65, norFlat: 0.7 },
@@ -342,7 +343,7 @@ export function buildTextures() {
   const cornellGreen = flat(70, 145, 55, 0.95);
 
   return { plaster, plasterPlain, wood, marble, concrete, concreteWall: concrete,
-    walnut, white, cornellWhite, cornellRed, cornellGreen };
+    brick: concrete, walnut, white, cornellWhite, cornellRed, cornellGreen };
 }
 // name, aspect (w/h), display height in meters
 export const PAINTINGS = [

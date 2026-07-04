@@ -438,6 +438,7 @@ uniform vec3 uEmissive;
 uniform float uRough;
 uniform vec3 uLightPos[8];
 uniform vec3 uLightColor[8]; // premultiplied by intensity (and crossing weight, for props)
+uniform vec4 uLightDir[8];   // spot axis + cos(outer); w = -2 -> point light
 uniform int uLightCount;
 uniform float uBake;
 uniform float uExposure;
@@ -552,6 +553,21 @@ ${PROP ? /* glsl */`
   diffuseL = probeDiffuse(uCell, P, N);
   if (uPrevMix > 0.001 && uCellPrev >= 0) {
     diffuseL = mix(diffuseL, probeDiffuse(uCellPrev, P, N), uPrevMix);
+  }
+  // analytic SPOT direct on props: the probe grid averages a room's light but
+  // cannot represent a narrow beam, so props in a spotlight stayed flat.
+  // Point lights (w = -2) skip - their energy is already in the probes. Cone
+  // math matches the lightmapper's (soft 0.08-cos shoulder), unshadowed.
+  for (int li = 0; li < 8; li++) {
+    if (li >= uLightCount) break;
+    if (uLightDir[li].w < -1.5) continue;
+    vec3 Lv = uLightPos[li] - P;
+    float ld2 = dot(Lv, Lv);
+    vec3 Lnn = Lv * inversesqrt(ld2);
+    float ndl = dot(N, Lnn);
+    if (ndl <= 0.0) continue;
+    float spot = smoothstep(uLightDir[li].w, uLightDir[li].w + 0.08, dot(-Lnn, uLightDir[li].xyz));
+    diffuseL += uLightColor[li] * (spot * ndl / max(ld2, 0.05));
   }
 ` : /* glsl */`
 #ifdef LM_FALLBACK

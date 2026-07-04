@@ -7,6 +7,8 @@ import { findCell } from './level.js';
 
 const GRAVITY = 9.8;
 const REST = 0.35;
+const tmpV1 = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3();
+const tmpQ2 = new THREE.Quaternion();
 const HOLD_DIST = 0.12;  // rigid-attach rest offset in front of the hand (VR)
 const CARRY_DIST = 1.9;  // ray-carry distance in front of the eye (desktop)
 
@@ -48,6 +50,8 @@ export class Props {
       return {
         mesh, mats: [mat], radius: r, rFloor: r,
         vel: new THREE.Vector3(),
+        angVel: new THREE.Vector3(),
+        round: def.shape === 'sphere', // rolls; boxy props damp their spin fast
         cell: 0,
         asleep: true,
         debugPane: !!def.debugPane,
@@ -59,6 +63,8 @@ export class Props {
       this.list.push({
         mesh: mp.root, mats: mp.mats, radius: mp.radius, rFloor: mp.rFloor,
         vel: new THREE.Vector3(),
+        angVel: new THREE.Vector3(),
+        round: false,
         cell: mp.cell,
         asleep: true,
         debugPane: false,
@@ -72,6 +78,7 @@ export class Props {
   // anything else = the desktop ray-carry spring. The desktop Player instance
   // itself is a valid carrier (no quat/mode -> ray path).
   update(dt, carrier) {
+    this.collidePairs(dt);
     for (const p of this.list) {
       if (p === this.held) {
         this.updateHeld(p, dt, carrier);
@@ -82,8 +89,15 @@ export class Props {
         if (onFloor) {
           p.vel.x *= Math.pow(0.05, dt); // ground friction
           p.vel.z *= Math.pow(0.05, dt);
+          if (p.round) {
+            // rolling couples spin to travel (w = up x v / r); the visual
+            // sells the physics
+            tmpV1.set(p.vel.z / p.radius, 0, -p.vel.x / p.radius);
+            p.angVel.lerp(tmpV1, Math.min(1, dt * 6));
+          }
           if (p.vel.lengthSq() < 0.02) { p.vel.set(0, 0, 0); p.asleep = true; }
         }
+        this.spin(p, dt, onFloor);
       }
       const pos = p.mesh.position;
       const prevCell = p.cell;
@@ -93,6 +107,70 @@ export class Props {
         this.matsys.setMaterialCell(m, p.cell); // arms a 0.2s diffuse crossfade on change
         const u = m.uniforms;
         if (u.uPrevMix.value > 0) u.uPrevMix.value = Math.max(0, u.uPrevMix.value - dt / 0.2);
+      }
+    }
+  }
+
+  // integrate angular velocity into orientation; boxy props kill their spin
+  // quickly on the ground (no orientation constraints - fast damping stands in
+  // for "settling flat"), round ones keep rolling
+  spin(p, dt, onFloor) {
+    const w = p.angVel.lengthSq();
+    if (w < 1e-5) return;
+    const mag = Math.sqrt(w);
+    tmpQ2.setFromAxisAngle(tmpV1.copy(p.angVel).divideScalar(mag), mag * dt);
+    p.mesh.quaternion.premultiply(tmpQ2);
+    const damp = onFloor && !p.round ? 0.002 : onFloor ? 0.6 : 0.25;
+    p.angVel.multiplyScalar(Math.pow(damp, dt));
+  }
+
+  // sphere-sphere prop collisions: positional separation + impulse along the
+  // contact normal (mass ~ r^3), tangential slip becomes tumble. The held
+  // prop acts kinematic: it displaces others but is not displaced.
+  collidePairs(dt) {
+    const L = this.list;
+    for (let i = 0; i < L.length; i++) {
+      for (let j = i + 1; j < L.length; j++) {
+        const a = L[i], b = L[j];
+        if (a.asleep && b.asleep) continue;
+        if (a.debugPane || b.debugPane) continue;
+        const n = tmpV1.copy(b.mesh.position).sub(a.mesh.position);
+        const rSum = a.radius + b.radius;
+        const d2 = n.lengthSq();
+        if (d2 >= rSum * rSum || d2 < 1e-8) continue;
+        const d = Math.sqrt(d2);
+        n.divideScalar(d);
+        const overlap = rSum - d;
+        const ma = a === this.held ? 1e6 : a.radius ** 3;
+        const mb = b === this.held ? 1e6 : b.radius ** 3;
+        const wa = mb / (ma + mb), wb = ma / (ma + mb);
+        a.mesh.position.addScaledVector(n, -overlap * wa);
+        b.mesh.position.addScaledVector(n, overlap * wb);
+        const rel = tmpV2.copy(a.vel).sub(b.vel);
+        const vn = rel.dot(n);
+        if (vn > 0) {
+          const imp = vn * (1 + REST);
+          a.vel.addScaledVector(n, -imp * wa);
+          b.vel.addScaledVector(n, imp * wb);
+          // tangential slip -> tumble on both bodies
+          tmpV2.addScaledVector(n, -vn); // rel velocity tangent
+          tmpV3.crossVectors(n, tmpV2);
+          a.angVel.addScaledVector(tmpV3, 0.6 / Math.max(a.radius, 0.08));
+          b.angVel.addScaledVector(tmpV3, 0.6 / Math.max(b.radius, 0.08));
+          if (a.asleep) a.asleep = false;
+          if (b.asleep) b.asleep = false;
+          if (this.onImpact && vn > 0.5) {
+            const big = a.radius > b.radius ? a : b;
+            const t = performance.now();
+            if (t - (big.impactT || 0) > 120) {
+              big.impactT = t;
+              this.onImpact(tmpV2.copy(a.mesh.position).addScaledVector(n, a.radius), vn, big);
+            }
+          }
+        } else if (a.asleep !== b.asleep) {
+          // resting overlap from a push: wake the sleeper so it can settle
+          (a.asleep ? a : b).asleep = false;
+        }
       }
     }
   }
@@ -150,6 +228,10 @@ export class Props {
       pos.addScaledVector(pl.n, rad - d);
       const vn = pl.n.dot(p.vel);
       if (vn < 0) {
+        // tangential slip at the contact becomes tumble (pre-reflection vel)
+        tmpV3.copy(p.vel).addScaledVector(pl.n, -vn);
+        tmpV1.crossVectors(pl.n, tmpV3);
+        p.angVel.addScaledVector(tmpV1, 0.5 / Math.max(p.radius, 0.08));
         p.vel.addScaledVector(pl.n, -vn * (1 + REST));
         // thunk only on NEW contact with this plane: the held-prop carry spring
         // re-penetrates every frame while pressed into a wall, and per-plane
@@ -226,6 +308,8 @@ export class Props {
   throwHeld(dir, playerVel) {
     if (!this.held) return;
     this.held.vel.copy(dir).multiplyScalar(9).add(playerVel);
+    // a touch of spin makes thrown props read as free bodies immediately
+    this.held.angVel.set((Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 4);
     this.held.asleep = false;
     this.held = null;
     this.hold = null;

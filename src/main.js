@@ -21,6 +21,7 @@ import { PortalCuller } from './culling.js';
 import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
 import { AudioSystem } from './audio.js';
+import { TouchControls, isTouchDevice } from './touch.js';
 
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
@@ -43,6 +44,10 @@ const SHOT_POSES = {
   13: { pos: [10.6, 1.5, -9.4], look: [12.3, 1.2, -11.6] }, // L-bend convex corner
   14: { pos: [14.3, 1.7, -8.8], look: [14.3, 0.0, -12.6] }, // L1/L2 floor seam (virtual portal)
   15: { pos: [0, 1.6, 2.4], look: [0, -0.2, 4.3] },         // gallery->corridor doorway floor strip
+  // lighting-variety rooms
+  16: { pos: [13.2, 1.6, 0], look: [17.5, 1.3, 0] },        // pillar hall -> courtyard door (sun pool)
+  17: { pos: [17.4, 1.6, -1.8], look: [21.5, 2.6, 1.6] },   // inside the courtyard (sky + sun)
+  18: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.0, 22.5] },  // hall B spot-lit exhibits
 };
 
 const overlay = document.getElementById('overlay');
@@ -136,6 +141,46 @@ async function boot() {
   const manager = new THREE.LoadingManager();
   const paintingTexs = loadPaintingTextures(manager);
   const staticGroup = buildStaticMeshes(scene, level, matsys, textures, paintingTexs);
+  // sky dome (CC0 Poly Haven, tonemapped): pure visual - not a builder, so it
+  // is absent from the lightmap bake and BVH, but present in cubemap captures
+  // (reflections + traversal exits through the courtyard's open ceiling see
+  // it) and in the player's view. Illumination comes from the analytic sun
+  // point + the sky NEE panel instead. The material speaks the scene's HDR
+  // convention: capture pass (uBake) writes linear radiance at uGain x the
+  // LDR jpg (an LDR dome capped reflections at 1.0 - sky read dim vs lit
+  // plaster at ~3+), display pass tonemaps with the shared exposure.
+  {
+    const skyTex = new THREE.TextureLoader(manager)
+      .load('./assets/textures/sky/kloofendal_48d_partly_cloudy_puresky.jpg');
+    skyTex.colorSpace = THREE.SRGBColorSpace;
+    const dome = new THREE.Mesh(
+      new THREE.SphereGeometry(70, 48, 24),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        uniforms: {
+          uMap: { value: skyTex },
+          uGain: { value: params.has('skygain') ? parseFloat(params.get('skygain')) : 4.0 },
+          uExposure: matsys.globals.uExposure, // shared identity with the scene
+          uBake: matsys.globals.uBake,
+        },
+        vertexShader: /* glsl */`
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        fragmentShader: /* glsl */`
+varying vec2 vUv;
+uniform sampler2D uMap;
+uniform float uGain, uExposure, uBake;
+vec3 aces(vec3 x) { return clamp(x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+void main() {
+  vec3 c = texture2D(uMap, vUv).rgb * uGain; // approx HDR re-expansion of the LDR sky
+  gl_FragColor = uBake > 0.5 ? vec4(c, 1.0)
+    : vec4(pow(aces(c * uExposure), vec3(1.0 / 2.2)), 1.0);
+}`,
+      }));
+    dome.position.set(19.6, 0, 0); // centered on the courtyard
+    dome.rotation.y = params.has('skyrot') ? parseFloat(params.get('skyrot')) : 1.6;
+    scene.add(dome);
+  }
   const culler = new PortalCuller(level);
   if (params.get('cull') === '0') culler.enabled = false;
 
@@ -157,6 +202,11 @@ async function boot() {
     muteEl.classList.remove('hidden');
     drawMute();
     muteEl.addEventListener('click', () => { audio.muted = !audio.muted; drawMute(); });
+    document.getElementById('about').classList.remove('hidden');
+    // phones/tablets: floating joystick + swipe-look + tap-to-grab. The
+    // desktop mousedown/keyboard handlers all gate on pointer lock, which
+    // never engages on touch, so the two schemes don't fight
+    if (isTouchDevice()) new TouchControls(player, props, camera, renderer.domElement);
   }
   const wires = buildPortalWires(scene, level);
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
@@ -356,6 +406,14 @@ async function boot() {
       usedBaked = true;
     } catch (e) {
       errEl.textContent += `baked load failed (${e.message}); baking live\n`;
+      // stale manifest also means stale lmSettings (offline-quality!) -- reload
+      // on the live path with defaults instead of live-baking at bake quality
+      const p = new URLSearchParams(location.search);
+      if (p.get('baked') !== '0') {
+        p.set('baked', '0');
+        location.search = p.toString();
+        return;
+      }
     }
   }
   if (!usedBaked) {

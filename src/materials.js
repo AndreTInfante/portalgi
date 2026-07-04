@@ -72,19 +72,27 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
 
   function lightUniforms(cellId) {
     const cell = level.cells[cellId];
-    const lp = [], lc = [];
+    const lp = [], lc = [], ld = [];
     for (let i = 0; i < 8; i++) {
       const l = cell.lights[i];
       lp.push(new THREE.Vector3(...(l ? l.pos : [0, 0, 0])));
       lc.push(l ? new THREE.Vector3(l.color[0] * l.intensity, l.color[1] * l.intensity, l.color[2] * l.intensity)
                 : new THREE.Vector3());
+      // spot axis + cos(outer); w = -2 marks a point light (props skip those:
+      // their energy is already averaged into the probes)
+      if (l && l.dir) {
+        const d = new THREE.Vector3(...l.dir).normalize();
+        ld.push(new THREE.Vector4(d.x, d.y, d.z, Math.cos((l.cone || 35) * Math.PI / 180)));
+      } else {
+        ld.push(new THREE.Vector4(0, -1, 0, -2));
+      }
     }
-    return { lp, lc, n: Math.min(cell.lights.length, 8) };
+    return { lp, lc, ld, n: Math.min(cell.lights.length, 8) };
   }
 
   const allMaterials = [];
   function makeMaterial(cellId, opts = {}) {
-    const { lp, lc, n } = lightUniforms(cellId);
+    const { lp, lc, ld, n } = lightUniforms(cellId);
     const mode = opts.mode || 0;
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -113,6 +121,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
         uSpecBoost: { value: opts.specBoost !== undefined ? opts.specBoost : 1 },
         uLightPos: { value: lp },
         uLightColor: { value: lc },
+        uLightDir: { value: ld },
         uLightCount: { value: n },
       },
     });
@@ -150,6 +159,13 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     mat.uniforms.uCellPrev.value = cur;
     mat.uniforms.uPrevMix.value = 1.0;
     mat.uniforms.uCell.value = cellId;
+    // props evaluate the local SPOT lights analytically (probes can't carry a
+    // narrow beam) - the light set must follow the prop across cells
+    const { lp, lc, ld, n } = lightUniforms(cellId);
+    mat.uniforms.uLightPos.value = lp;
+    mat.uniforms.uLightColor.value = lc;
+    mat.uniforms.uLightDir.value = ld;
+    mat.uniforms.uLightCount.value = n;
   }
 
   return { globals, makeMaterial, setMaterialCell, setUseLightmap, allMaterials, occ };

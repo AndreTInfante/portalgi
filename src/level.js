@@ -254,6 +254,18 @@ const CELL_DEFS = [
     floor: { key: 'cornellWhite', roughFactor: 1 } },
   { name: 'hallB', fp: rect(-10.5, 19.9, -3.8, 25.1), h: 4.0,
     floor: { key: 'marble', roughFactor: 0.7 } },
+  // open-air courtyard east of the pillar hall: no ceiling geometry (the hull
+  // still has a ceiling PLANE carrying a portal up into the sky cell below).
+  // Lit by the sun point + a sky NEE panel.
+  { name: 'courtyard', fp: rect(16.6, -4.5, 24.6, 4.5), h: 4.6, sky: true,
+    edges: [{ mat: 'concrete' }, { mat: 'concrete' }, { mat: 'concrete' }, { mat: 'concrete' }],
+    floor: { key: 'brick', roughFactor: 0.9 } },
+  // sky imposter: a huge hollow cell above the courtyard's ceiling portal.
+  // Reflections that exit the courtyard upward hop here and sample ITS cubemap
+  // (just the dome) reprojected onto a ~80m hull - sky parallax reads as
+  // infinity instead of "painted on the 4.6m ceiling". No geometry at all.
+  { name: 'sky', fp: rect(-20, -40, 100, 40), h: 60, y0: 4.6, hollow: true,
+    floor: { key: 'white', roughFactor: 1 } },
 ];
 
 // doorways: c = point between the two parallel walls; w/h = opening size
@@ -266,6 +278,7 @@ const DOOR_DEFS = [
   { a: 2, b: 10, c: [0, 18.31], w: 1.4, h: 2.4 },
   { a: 10, b: 11, c: [3.65, 22.5], w: 1.3, h: 2.2 },
   { a: 10, b: 12, c: [-3.65, 22.5], w: 1.4, h: 2.4 },
+  { a: 4, b: 13, c: [16.45, 0], w: 2.4, h: 2.8 }, // pillar hall east -> courtyard
 ];
 
 // analytic point lights per cell (no shadow maps; per-cell light lists keep light
@@ -288,7 +301,22 @@ const LIGHT_DEFS = [
   [{ p: [16.6, 0.6, -23.2], c: [1.0, 0.22, 0.05], i: 6 }],
   [{ p: [0, 3.6, 20.6], c: NEUT, i: 8 }, { p: [0, 3.6, 24.3], c: NEUT, i: 8 }],
   [], // cornell: lit purely by its ceiling area light (the point of the test)
-  [{ p: [-7.15, 3.6, 20.9], c: NEUT, i: 8 }, { p: [-7.15, 3.6, 24.1], c: NEUT, i: 8 }],
+  // hall B: dim spot-lit exhibit room - no ceiling panels, every light is a
+  // warm accent cone on one exhibit; ambience comes purely from GI bounce
+  [
+    { p: [-9.4, 3.85, 22.5], c: WARM, i: 9, d: [-0.92, -2.25, 0], cone: 32 },   // mirror
+    { p: [-7.1, 3.85, 23.5], c: WARM, i: 8, d: [0, -2.9, 1.05], cone: 30 },     // console
+    { p: [-8.5, 3.85, 21.7], c: NEUT, i: 9, d: [0, -2.7, 0.8], cone: 26 },      // pedestal W
+    { p: [-6.6, 3.85, 20.6], c: NEUT, i: 9, d: [0.8, -2.7, 0.4], cone: 26 },    // pedestal N
+    { p: [-6.6, 3.85, 24.4], c: NEUT, i: 9, d: [0.8, -2.7, -0.4], cone: 26 },   // pedestal S
+    { p: [-8.6, 3.85, 23.6], c: WARM, i: 7, d: [-0.7, -3.15, 0.6], cone: 34 },  // barber chair
+    { p: [-8.6, 3.85, 21.4], c: WARM, i: 7, d: [-0.7, -3.15, -0.6], cone: 34 }, // arm chair
+    { p: [-5.5, 3.85, 22.5], c: WARM, i: 7, d: [0.7, -3.15, 0], cone: 34 },     // lounge chair
+  ],
+  // courtyard: the sun - a far, hot point whose rays enter through the open
+  // ceiling; global shadow rays keep it out of every roofed room, and the
+  // slant pools light through the doorway into the pillar hall
+  [{ p: [34, 22, -10], c: [1.0, 0.92, 0.78], i: 3000 }],
 ];
 
 const PANEL_DEFS = [
@@ -308,8 +336,10 @@ const PANEL_DEFS = [
   { cell: 10, x: 0, z: 20.6, sx: 1.6, sz: 1.2, i: 5 },
   { cell: 10, x: 0, z: 24.3, sx: 1.6, sz: 1.2, i: 5 },
   { cell: 11, x: 6.4, z: 22.5, sx: 1.4, sz: 1.4, i: 110 }, // cornell area light
-  { cell: 12, x: -7.15, z: 20.9, sx: 1.6, sz: 1.2, i: 5 },
-  { cell: 12, x: -7.15, z: 24.1, sx: 1.6, sz: 1.2, i: 5 },
+  // hall B panels removed: the spot-lit room's light is all accent cones
+  // sky: NEE area light for the courtyard's open ceiling. noGeo - the visual
+  // sky is the HDRI dome mesh (main.js), not an emissive slab
+  { cell: 13, x: 20.6, z: 0, sx: 7.4, sz: 8.4, y: 4.55, i: 2.2, color: [0.55, 0.72, 1.0], noGeo: true },
 ];
 
 // paintings: index into PAINTINGS, wall-mounted (pos on wall surface, normal into room)
@@ -321,7 +351,7 @@ const PAINTING_DEFS = [
   { cell: 0, tex: 3, pos: [-6, 1.62, 0], n: [1, 0] },
   { cell: 1, tex: 1, pos: [1.2, 1.55, 6.8], n: [-1, 0], scale: 0.7 },
   { cell: 3, tex: 7, pos: [12.5, 1.7, 5], n: [0, -1] },
-  { cell: 4, tex: 3, pos: [16.3, 1.62, 1.5], n: [-1, 0] },
+  { cell: 4, tex: 3, pos: [16.3, 1.62, 3.1], n: [-1, 0] }, // clear of the courtyard door (z +-1.2)
   { cell: 5, tex: 1, pos: [8.5, 1.62, -5], n: [0, 1] },
   { cell: 6, tex: 0, pos: [10.5, 1.55, 0], n: [-1, 0], scale: 0.6 },
   { cell: 7, tex: 4, pos: [8, 1.62, -5.3], n: [0, -1] },
@@ -333,6 +363,12 @@ const PAINTING_DEFS = [
 ];
 
 const BENCH_DEFS = [
+  // courtyard perimeter (Andre: "feels a bit like a prison" without them)
+  { cell: 13, x: 18.9, z: 3.8, rot: 0 },
+  { cell: 13, x: 22.3, z: 3.8, rot: 0 },
+  { cell: 13, x: 18.9, z: -3.8, rot: 0 },
+  { cell: 13, x: 22.3, z: -3.8, rot: 0 },
+  { cell: 13, x: 23.9, z: 0, rot: Math.PI / 2 },
   { cell: 0, x: 0, z: -2.8, rot: 0 },
   { cell: 3, x: 11.3, z: 3.2, rot: 0 },
   { cell: 6, x: 8.2, z: 0, rot: Math.PI / 2 },
@@ -365,7 +401,7 @@ export function buildLevel() {
   const cells = CELL_DEFS.map((def, id) => {
     const fp = def.fp;
     const c2 = centroid2(fp);
-    const floorY = 0, ceilY = def.h;
+    const floorY = def.y0 || 0, ceilY = floorY + def.h;
     const planes = [];
     const addPlane = (n, d) => {
       for (let i = 0; i < planes.length; i++) {
@@ -402,9 +438,12 @@ export function buildLevel() {
     };
     return {
       id, name: def.name, fp, floorY, ceilY, planes, edges,
-      floor: def.floor,
+      floor: def.floor, sky: !!def.sky, hollow: !!def.hollow,
       capture: new THREE.Vector3(c2[0], floorY + Math.min(2.1, (ceilY - floorY) * 0.55), c2[1]),
-      lights: (LIGHT_DEFS[id] || []).map(l => ({ pos: l.p.slice(), color: l.c.slice(), intensity: l.i })),
+      lights: (LIGHT_DEFS[id] || []).map(l => ({
+        pos: l.p.slice(), color: l.c.slice(), intensity: l.i,
+        dir: l.d ? l.d.slice() : null, cone: l.cone, // spot: aim axis + outer degrees
+      })),
       portals: [],
       builders: new Map(),
       probeGrid,
@@ -503,6 +542,25 @@ export function buildLevel() {
     return { def, sides };
   });
 
+  // ---- sky imposter portal: the courtyard's open ceiling PLANE carries a
+  // portal into the huge hollow sky cell, so reflections that exit upward hop
+  // there and sample its cubemap (just the dome) against an ~80m hull -
+  // sky parallax reads as infinity instead of painted on the 4.6m ceiling
+  {
+    const cy = cells.find(c => c.sky), sk = cells.find(c => c.hollow);
+    const y = cy.ceilY;
+    const corners = cy.fp.map(q => new THREE.Vector3(q[0], y, q[1]));
+    const edgePlanes = cy.edges.map(e => ({
+      n: new THREE.Vector3(e.n.x, 0, e.n.z),
+      d: -(e.n.x * e.a[0] + e.n.z * e.a[1]),
+    }));
+    const ceilIdx = cy.planes.findIndex(p => p.n.y < -0.9);
+    const floorIdx = sk.planes.findIndex(p => p.n.y > 0.9);
+    // all four aperture edges are wall-top silhouettes -> blend all (mask 15)
+    cy.portals.push({ planeIndex: ceilIdx, neighbor: sk.id, corners, edgePlanes, virtual: true, blendMask: 15 });
+    sk.portals.push({ planeIndex: floorIdx, neighbor: cy.id, corners, edgePlanes, virtual: true, blendMask: 15 });
+  }
+
   // ---- open (virtual) portals: pair up open edges with identical reversed endpoints
   const near = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]) < 1e-3;
   for (const cell of cells) {
@@ -532,6 +590,7 @@ export function buildLevel() {
 
   // ---- meshes: floors, ceilings, walls (with holes)
   for (const cell of cells) {
+    if (cell.hollow) continue; // sky imposter: hull planes only, no geometry
     const fb = getBuilder(cell, 'floor',
       { mapKey: cell.floor.key, roughFactor: cell.floor.roughFactor,
         specBoost: cell.floor.specBoost });
@@ -539,7 +598,10 @@ export function buildLevel() {
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
     const floorPts = cell.fp.map(p => [p[0], cell.floorY, p[1]]);
     fb.polygon(floorPts, [0, 1, 0], uvf); // one chart per floor: no lightmap seams inside
-    cb.polygon(floorPts.map(p => [p[0], cell.ceilY, p[2]]), [0, -1, 0], uvf);
+    // sky cells have no ceiling geometry: the hull ceiling PLANE still exists,
+    // so traversal exits up into this cell's cubemap (which sees the sky dome),
+    // and bake rays / sun shadow rays pass through the opening unblocked
+    if (!cell.sky) cb.polygon(floorPts.map(p => [p[0], cell.ceilY, p[2]]), [0, -1, 0], uvf);
     for (const edge of cell.edges) {
       if (edge.open) continue;
       // concrete walls use the wall-styled set (form-tie panels); the plain
@@ -665,12 +727,49 @@ export function buildLevel() {
     const y = p.y !== undefined ? p.y : cell.ceilY - 0.06;
     const c = p.color || [1, 0.96, 0.88];
     const e = p.i;
-    getBuilder(cell, `panel${idx}`, {
-      mapKey: 'white', tint: [0.03, 0.03, 0.03],
-      emissive: [e * c[0], e * c[1], e * c[2]],
-    }).box(p.x, y, p.z, p.sx, 0.08, p.sz, 1);
+    if (!p.noGeo) { // noGeo: area light only (the courtyard sky has no slab)
+      getBuilder(cell, `panel${idx}`, {
+        mapKey: 'white', tint: [0.03, 0.03, 0.03],
+        emissive: [e * c[0], e * c[1], e * c[2]],
+      }).box(p.x, y, p.z, p.sx, 0.08, p.sz, 1);
+    }
     return { cell: p.cell, x: p.x, y, z: p.z, sx: p.sx, sz: p.sz, intensity: p.i, color: c };
   });
+
+  // spot fixtures: a black cylinder (octagonal prism, reads round at 12cm)
+  // aimed along the beam, emissive white cap on the business end, thin stem to
+  // the ceiling. The glow is purely visual (face emissive isn't gathered by
+  // the path tracer; the light itself is the analytic cone) - body and cap are
+  // separate builders so only the cap glows
+  for (const cell of cells) {
+    for (const l of cell.lights) {
+      if (!l.dir) continue;
+      const p = l.pos;
+      const d = V.norm(l.dir);
+      const u = Math.abs(d[1]) < 0.9 ? V.norm(V.cross([0, 1, 0], d)) : [1, 0, 0];
+      const v = V.norm(V.cross(d, u));
+      const R = 0.062, L = 0.2, N = 8;
+      const ring = (center, r) => Array.from({ length: N }, (_, k) => {
+        const a = ((k + 0.5) / N) * Math.PI * 2;
+        return V.mad(V.mad(center, u, Math.cos(a) * r), v, Math.sin(a) * r);
+      });
+      const r0 = ring(V.mad(p, d, -L), R), r1 = ring(V.mad(p, d, -0.004), R);
+      const body = getBuilder(cell, 'spotbody', { mapKey: 'white', tint: [0.04, 0.04, 0.04] });
+      for (let k = 0; k < N; k++) {
+        const k2 = (k + 1) % N;
+        const am = ((k + 1) / N) * Math.PI * 2; // face mid-angle
+        const n = V.mad(V.mad([0, 0, 0], u, Math.cos(am)), v, Math.sin(am));
+        body.quad([r0[k], r0[k2], r1[k2], r1[k]], n, [[0, 0], [0.05, 0], [0.05, 0.2], [0, 0.2]]);
+      }
+      body.polygon([...r0].reverse(), [-d[0], -d[1], -d[2]], () => [0, 0]); // back cap
+      const mid = V.mad(p, d, -L * 0.7); // stem into the barrel's back half
+      body.box(mid[0], (mid[1] + cell.ceilY) / 2, mid[2],
+        0.028, Math.max(0.02, cell.ceilY - mid[1]), 0.028, 1);
+      getBuilder(cell, 'spotlens', {
+        mapKey: 'white', tint: [0.02, 0.02, 0.02], emissive: [5.5, 5.2, 4.6],
+      }).polygon(ring(p, R * 0.86), d, () => [0, 0]); // glowing cap at the emit point
+    }
+  }
 
   return {
     cells, paintings, panels, colliders, doors,

@@ -2,10 +2,12 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>PortalGI POC — portal-linked convex-hull cubemaps</title>
 <style>
-  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; height: 100%; }
-  canvas { display: block; }
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; height: 100%;
+    overscroll-behavior: none; }
+  canvas { display: block; touch-action: none; }
   #hud { position: fixed; inset: 0; pointer-events: none; font-family: system-ui, sans-serif; }
   #crosshair {
     position: absolute; left: 50%; top: 50%; width: 6px; height: 6px;
@@ -37,6 +39,22 @@
     text-shadow: 0 1px 2px #000; user-select: none; opacity: 0.85;
   }
   #mute:hover { opacity: 1; }
+  #about {
+    position: absolute; right: 300px; top: 9px; pointer-events: auto;
+    font: 13px system-ui, sans-serif; line-height: 1; padding: 5px 10px;
+    color: rgba(255,255,255,0.9); background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(255,255,255,0.25); border-radius: 12px;
+    text-decoration: none; user-select: none;
+  }
+  #about:hover { background: rgba(0,0,0,0.55); }
+  /* floating virtual joystick (touch devices; spawned where the thumb lands) */
+  #joy-base, #joy-nub {
+    position: absolute; border-radius: 50%; pointer-events: none;
+    transform: translate(-50%, -50%);
+  }
+  #joy-base { width: 110px; height: 110px; border: 2px solid rgba(255,255,255,0.35);
+    background: rgba(255,255,255,0.06); }
+  #joy-nub { width: 44px; height: 44px; background: rgba(255,255,255,0.4); }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -46,7 +64,13 @@
   <div id="fps"></div>
   <div id="err"></div>
   <div id="mute" class="hidden" title="toggle audio"></div>
+  <!-- BLOG_URL: swap for the write-up once it's published -->
+  <a id="about" class="hidden" target="_blank" rel="noopener"
+     href="https://github.com/AndreTInfante/portalgi">what am I looking at?</a>
   <div id="help" class="hidden">WASD move &nbsp;·&nbsp; mouse look &nbsp;·&nbsp; click / E grab &nbsp;·&nbsp; click throw &nbsp;·&nbsp; RMB drop &nbsp;·&nbsp; V noclip &nbsp;·&nbsp; B re-bake &nbsp;·&nbsp; Esc release mouse</div>
+  <div id="touch-help" class="hidden">left thumb to move &nbsp;·&nbsp; swipe to look &nbsp;·&nbsp; tap an object to pick up / drop</div>
+  <div id="joy-base" class="hidden"></div>
+  <div id="joy-nub" class="hidden"></div>
   <div id="overlay"><div id="overlay-msg">Loading…</div><small id="overlay-sub"></small></div>
 </div>
 <script type="importmap">

@@ -18,6 +18,7 @@ export class Player {
     this.cell = findCell(level.cells, this.pos);
     this.noclip = false;
     this.keys = new Set();
+    this.moveAxis = null; // analog input {x: strafe, y: forward} in -1..1 (touch joystick)
     this.locked = false;
     this.lookLocked = false; // hold-E prop rotation owns the mouse while set
     this.interactive = !opts.headless;
@@ -68,6 +69,10 @@ export class Player {
     if (k.has('KeyD')) wish.add(right);
     if (k.has('KeyA')) wish.sub(right);
     if (wish.lengthSq() > 0) wish.normalize().multiplyScalar(speed);
+    if (this.moveAxis && (this.moveAxis.x !== 0 || this.moveAxis.y !== 0)) {
+      wish.addScaledVector(fwd, this.moveAxis.y * speed);
+      wish.addScaledVector(right, this.moveAxis.x * speed);
+    }
     if (this.noclip) {
       wish.y = (k.has('Space') ? speed : 0) - (k.has('ControlLeft') ? speed : 0);
       if (k.has('KeyW') || k.has('KeyS')) {

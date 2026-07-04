@@ -59,8 +59,9 @@ uniform sampler2D uPos;
 uniform sampler2D uNrm;
 uniform sampler2D uPrev;
 uniform sampler2D uFace;   // 3 texels/face: uv2 triplet, albedo, emissive
-uniform vec3 uLightPos[16];
-uniform vec3 uLightCol[16];
+uniform vec3 uLightPos[24];
+uniform vec3 uLightCol[24];
+uniform vec4 uLightDir[24]; // spot: xyz = axis, w = cos(outer); w = -2 -> point
 uniform int uNLights;
 uniform vec4 uPanelA[24];  // center.xyz, half sx
 uniform vec4 uPanelB[24];  // half sz, emissive rgb
@@ -107,14 +108,21 @@ void main() {
   uint seed = uint(tx.x) * 1973u ^ uint(tx.y) * 9277u ^ uint(uSeed * 26699.0);
 
   vec3 direct = vec3(0.0);
-  for (int i = 0; i < 16; i++) {
+  for (int i = 0; i < 24; i++) {
     if (i >= uNLights) break;
     vec3 L = uLightPos[i] - Po;
     float d2 = dot(L, L);
-    float ndl = dot(N, normalize(L));
+    vec3 Ln = normalize(L);
+    float ndl = dot(N, Ln);
     if (ndl <= 0.0) continue;
+    // spot cone: soft edge over ~7 degrees inside the outer angle
+    float spot = 1.0;
+    if (uLightDir[i].w > -1.5) {
+      spot = smoothstep(uLightDir[i].w, uLightDir[i].w + 0.08, dot(-Ln, uLightDir[i].xyz));
+      if (spot <= 0.0) continue;
+    }
     if (occluded(Po, uLightPos[i])) continue;
-    direct += uLightCol[i] * (ndl / max(d2, 0.05)); // true inverse-square
+    direct += uLightCol[i] * (spot * ndl / max(d2, 0.05)); // true inverse-square
   }
   for (int i = 0; i < 24; i++) {
     if (i >= uNPanels) break;
@@ -283,19 +291,26 @@ export class Lightmapper {
     this.bakeScene.add(this.bakeMesh);
     this.cam = new THREE.Camera();
 
-    // lights: unique analytic points + panel area lights
-    const lp = [], lc = [];
+    // lights: unique analytic points/spots + panel area lights
+    const lp = [], lc = [], ld = [];
     const seen = new Set();
     for (const cell of level.cells) {
       for (const l of cell.lights) {
-        const key = l.pos.join(',');
+        const key = l.pos.join(',') + (l.dir ? '|' + l.dir.join(',') : '');
         if (seen.has(key)) continue;
         seen.add(key);
         lp.push(new THREE.Vector3(...l.pos));
         lc.push(new THREE.Vector3(l.color[0] * l.intensity, l.color[1] * l.intensity, l.color[2] * l.intensity));
+        if (l.dir) {
+          const d = new THREE.Vector3(...l.dir).normalize();
+          ld.push(new THREE.Vector4(d.x, d.y, d.z, Math.cos((l.cone || 35) * Math.PI / 180)));
+        } else {
+          ld.push(new THREE.Vector4(0, -1, 0, -2)); // w = -2: point light, no cone
+        }
       }
     }
-    while (lp.length < 16) { lp.push(new THREE.Vector3()); lc.push(new THREE.Vector3()); }
+    if (lp.length > 24) throw new Error('too many unique lights (max 24)');
+    while (lp.length < 24) { lp.push(new THREE.Vector3()); lc.push(new THREE.Vector3()); ld.push(new THREE.Vector4(0, -1, 0, -2)); }
     const pa = [], pb = [];
     for (const pn of level.panels) {
       const c = pn.color, e = pn.intensity;
@@ -314,6 +329,7 @@ export class Lightmapper {
       uFace: { value: this.faceTex },
       uLightPos: { value: lp },
       uLightCol: { value: lc },
+      uLightDir: { value: ld },
       uNLights: { value: seen.size },
       uPanelA: { value: pa },
       uPanelB: { value: pb },

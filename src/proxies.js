@@ -96,7 +96,7 @@ export const OCCLUDER_PROXIES = {
       ],
     },
     ClassicConsole_01: {
-      color: [0.35, 0.33, 0.3],
+      color: [0.03, 0.03, 0.03], // black end table
       capsules: [
         [[-0.218, 0, 0], [0.218, 0, 0], 0.457],
       ],

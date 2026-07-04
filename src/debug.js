@@ -55,7 +55,9 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   f1.add(proxy, 'blendBase', 0, 0.4, 0.01).name('blend width base');
   f1.add(proxy, 'blendRough', 0, 3, 0.05).name('blend - rough-dist');
   f1.add(proxy, 'distRough', 0, 1, 0.01).name('rough growth /m');
-  f1.add(proxy, 'irrBlend', 0, 6, 0.05).name('irr portal blend (m)');
+  // blendedIrr is compiled into the static program only in lightmap-off
+  // fallback mode (shader variants); this dial is inert during normal play
+  f1.add(proxy, 'irrBlend', 0, 6, 0.05).name('irr blend (lm-off only)');
   const f2 = gui.addFolder('Display');
   f2.add(proxy, 'exposure', -5, 2, 0.1).name('exposure (EV)');
   f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5 });

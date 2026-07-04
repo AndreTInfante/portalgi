@@ -51,7 +51,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uMaxSteps: { value: 3 },
     uRoughHops: { value: 1.0 },
     uBlendOn: { value: 1.0 },
-    uBlendBase: { value: 0.04 },
+    uBlendBase: { value: 0.0 }, // sharp reflections get zero-width blend
+                                // (cone footprint is 0; the old 0.04 floor
+                                // over-blurred portals - user-tuned 2026-07-04)
     uBlendRough: { value: 1.0 }, // ~cone footprint radius per (roughness - meter); silhouette edges only
     uDistRough: { value: 0.12 },
     uIrrBlend: { value: 3.0 },

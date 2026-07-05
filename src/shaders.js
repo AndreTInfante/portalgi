@@ -88,9 +88,11 @@ uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
 uniform float uOccAO;      // contact-AO strength from the same capsules
 uniform float uOccShadow;  // dynamic directional shadow strength (capsule shadow rays)
-uniform float uOccMaxCast; // shadow rays march only the closest N dynamic casters
-                           // (the CPU packs them distance-sorted, so a plain
-                           // count cap keeps exactly the most relevant ones)
+uniform float uOccShadowBudget; // shadow-march CAPSULE budget: casters are packed
+                           // closest-first and consume budget by their capsule
+                           // count - cost-based, so six 1-blob gallery props all
+                           // fit while one 8-blob cart spends most of it (Andre:
+                           // entries are not the unit of work, blobs are)
 uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shades:
                            // an occluder never occludes the surfaces it approximates
 
@@ -146,7 +148,7 @@ float capsuleAO(int cell, vec3 P, vec3 N) {
 // capsule radius widens along the ray and coverage dims as r^2/rw^2, so
 // small or distant occluders fade out instead of printing hard streaks.
 float capsuleShadow(int cell, vec3 P, vec3 N) {
-  int dyn = min(int(uOccCell[cell].z), int(uOccMaxCast));
+  int dyn = int(uOccCell[cell].z);
   if (dyn == 0) return 1.0;
   vec3 acc = vec3(0.0);
   float wsum = 0.0;
@@ -180,18 +182,24 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
   // the MAX coverage over capsules, not the product (the product printed
   // extra darkening wherever authored capsules overlap)
   float occl = 0.0;
+  int budget = int(uOccShadowBudget);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= dyn) break;
+    // capsule-count budget, spent CLOSEST-FIRST and BEFORE the per-pixel
+    // bound reject: the caster set must be identical for every pixel in the
+    // cell or shadows would pop at reject boundaries
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
+    int sc = (packed >> 6) & 7;
+    budget -= sc;
+    if (budget < 0) break;
     vec4 b = uOccBound[first + pi];
     vec3 dc = b.xyz - P;
     float tb = clamp(dot(dc, dir), 0.0, span);
     vec3 q = dc - dir * tb;
     float rb = b.w + 0.6;                        // penumbra margin
     if (dot(q, q) > rb * rb) continue;
-    vec4 colw = uOccColor[first + pi];
-    int packed = int(colw.w + 0.5);
     if ((packed & 63) == uOccSelf) continue;     // own-group skip
-    int sc = (packed >> 6) & 7;
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;

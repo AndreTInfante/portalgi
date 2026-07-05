@@ -74,8 +74,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     uOccWiden: { value: 1.5 },    // user-tuned 2026-07-04   // cone growth per rough-meter: drives spread AND fade
     uOccTint: { value: 0.8 },    // user-tuned: it's ~AO + optically-correct ambient
     uOccAO: { value: 0.8 },      // contact-AO strength from the same capsules
-    uOccShadow: { value: 0.85 }, // dynamic capsule shadow-ray strength
-    uOccMaxCast: { value: 4 },   // shadow rays march the closest N casters only
+    uOccShadow: { value: 0.85 },      // dynamic capsule shadow-ray strength
+    uOccShadowBudget: { value: 14 },  // capsule budget, spent closest-first
   };
 
   function lightUniforms(cellId) {

@@ -7,6 +7,7 @@ import * as CANNON from '../libs/cannon-es.js';
 import { findCell } from './level.js';
 
 const REST = 0.35;
+const tmpD = new THREE.Vector3();
 const HOLD_DIST = 0.12;  // rigid-attach rest offset in front of the hand (VR)
 const CARRY_DIST = 1.9;  // ray-carry distance in front of the eye (desktop)
 
@@ -134,9 +135,27 @@ export class Props {
       // hull flips mid-doorway. collide() already keeps the prop out of walls.
       const target = carrier.pos.clone().addScaledVector(carrier.viewDir, CARRY_DIST);
       p.vel.copy(target.sub(p.mesh.position).multiplyScalar(14));
-      p.mesh.position.addScaledVector(p.vel, step);
+      // step cap: an uncapped carry spring could sweep a prop clean through
+      // the pillar between two hull clamps (fast look-turns tunneled it)
+      tmpD.copy(p.vel).multiplyScalar(step);
+      if (tmpD.length() > 0.4) tmpD.setLength(0.4);
+      p.mesh.position.add(tmpD);
     }
     this.collide(p);
+    // held props respect the furniture/statue colliders too - the kinematic
+    // body ignores cannon statics, and the gravity gun could shove props
+    // through benches; same circle pushout the player uses
+    const pos = p.mesh.position;
+    for (const c of this.level.colliders) {
+      if (c.h !== undefined && pos.y - p.rFloor > c.h) continue; // clear above it
+      const dx = pos.x - c.x, dz = pos.z - c.z;
+      const min = (c.rx !== undefined ? Math.max(c.rx, c.rz) : c.r) + p.radius * 0.7;
+      const dist = Math.hypot(dx, dz);
+      if (dist < min && dist > 1e-5) {
+        pos.x += dx / dist * (min - dist);
+        pos.z += dz / dist * (min - dist);
+      }
+    }
     if (p.debugPane) p.mesh.lookAt(carrier.eye || carrier.pos);
   }
 

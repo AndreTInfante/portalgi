@@ -143,8 +143,9 @@ function fitCapsulesVerts(mesh, k = 3) {
 }
 
 export class OccluderSystem {
-  constructor(occ, props) {
+  constructor(occ, props, level = null) {
     this.occ = occ;
+    this.level = level; // portal topology for near-portal caster duplication
     this.entries = [];
     this.sv = new THREE.Vector3();
     this._nextGroup = 1;
@@ -169,8 +170,14 @@ export class OccluderSystem {
         for (const m of p.mats) {
           if (m.uniforms && m.uniforms.uOccSelf) m.uniforms.uOccSelf.value = group;
         }
+        // local reach: how far any capsule surface extends from the prop
+        // origin (drives the near-portal duplication test)
+        let reach = 0;
+        for (const s of spheres) {
+          reach = Math.max(reach, s.a.length() + s.r, s.b.length() + s.r);
+        }
         this.entries.push({
-          p, group, spheres, col,
+          p, group, spheres, col, reach,
           // two vec4 slots per capsule: (a, r) and (b, spare)
           world: spheres.map(() => [new THREE.Vector4(), new THREE.Vector4()]),
         });
@@ -267,7 +274,26 @@ export class OccluderSystem {
       }
       // dyn: props pack at the HEAD of each cell's list so the shadow rays
       // can march just them (uOccCell.z) - statics' shadows are baked
-      push(e.p.cell, { world: e.world, col: e.col, group: e.group, dyn: true });
+      const item = { world: e.world, col: e.col, group: e.group, dyn: true };
+      push(e.p.cell, item);
+      // near a portal, register in the neighbor too: shadows, contact AO and
+      // reflection occlusion clipped hard at portal planes when a caster
+      // could live in only one cell (worst in the pillar-hall ring). The
+      // margin covers the shadow's likely stretch; duplicates stay rare.
+      if (this.level) {
+        const cell = this.level.cells[e.p.cell];
+        const pos = mesh.position;
+        const margin = e.reach * scale + 1.2;
+        for (const po of cell.portals) {
+          const pl = cell.planes[po.planeIndex];
+          if (pl.n.dot(pos) + pl.d > margin) continue; // far from this portal
+          let edgeDist = Infinity;
+          for (const ep of po.edgePlanes) {
+            edgeDist = Math.min(edgeDist, ep.n.dot(pos) + ep.d);
+          }
+          if (edgeDist > -margin) push(po.neighbor, item);
+        }
+      }
     }
     for (const s of this.statics) {
       push(s.cell, { world: s.world, col: s.col, group: s.group });

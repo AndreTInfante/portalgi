@@ -179,7 +179,10 @@ void main() {
 }`,
       }));
     dome.position.set(19.6, 0, 0); // centered on the courtyard
-    dome.rotation.y = params.has('skyrot') ? parseFloat(params.get('skyrot')) : 1.6;
+    // 0.0 aligns the HDRI's sun (u = 0.601 in the equirect, measured) with
+    // the analytic sun's azimuth: az = pi - 2*pi*u + rot for three's sphere
+    // UV mapping, solved for atan2(-10, 13.4). ?skyrot= still overrides.
+    dome.rotation.y = params.has('skyrot') ? parseFloat(params.get('skyrot')) : 0.0;
     scene.add(dome);
   }
   const culler = new PortalCuller(level);
@@ -228,7 +231,7 @@ void main() {
   // analytic occluders: dynamic props as capsule sets inside the traversal,
   // plus furniture/statues (NOT the hall pillar: it is hull geometry, its
   // reflection is traversed for real)
-  const occluders = matsys.occ ? new OccluderSystem(matsys.occ, props) : null;
+  const occluders = matsys.occ ? new OccluderSystem(matsys.occ, props, level) : null;
   if (occluders) {
     const walnutAvg = textures.walnut.map.userData.avg;
     // the furniture material of a cell = the surfaces its capsule pieces

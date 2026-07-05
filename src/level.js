@@ -561,6 +561,7 @@ export function buildLevel() {
     sk.portals.push({ planeIndex: floorIdx, neighbor: cy.id, corners, edgePlanes, virtual: true, blendMask: 15 });
   }
 
+
   // ---- open (virtual) portals: pair up open edges with identical reversed endpoints
   const near = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]) < 1e-3;
   for (const cell of cells) {
@@ -585,6 +586,36 @@ export function buildLevel() {
         if (found) break;
       }
       if (!found) throw new Error(`unpaired open edge in ${cell.name}`);
+    }
+  }
+
+  // ---- shadow-light continuity (AFTER all portal pairing, incl. the virtual
+  // pillar-ring/L-room portals): every cell's RUNTIME light list also carries
+  // its portal neighbors' lights (deduped, strongest 8 by intensity/d^2 to the
+  // cell center). The capsule shadow rays aim at this list's weighted average;
+  // with own-cell lights only, the shadow direction snapped at every portal
+  // plane. Physically honest too - light crosses doorways (the pillar-hall
+  // cell by the courtyard door gains the sun, so the beam casts prop
+  // shadows). Also feeds the props' analytic spot direct across doorways.
+  // (The path tracer dedups lights globally, so bakes are unaffected.)
+  {
+    const orig = cells.map(c => c.lights);
+    for (const cell of cells) {
+      const key = l => l.pos.join(',') + (l.dir ? '|' + l.dir.join(',') : '');
+      const seen = new Set(orig[cell.id].map(key));
+      const merged = orig[cell.id].slice();
+      for (const po of cell.portals) {
+        for (const l of orig[po.neighbor]) {
+          if (seen.has(key(l))) continue;
+          seen.add(key(l));
+          merged.push(l);
+        }
+      }
+      const cx = cell.capture;
+      const w = l => l.intensity / Math.max(0.5,
+        (l.pos[0] - cx.x) ** 2 + (l.pos[1] - cx.y) ** 2 + (l.pos[2] - cx.z) ** 2);
+      merged.sort((a, b) => w(b) - w(a));
+      cell.lights = merged.slice(0, 8);
     }
   }
 

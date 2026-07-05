@@ -37,14 +37,17 @@ void main() {
   gl_Position = vec4(lmuv * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
+// NOTE: three's GLSL3 ShaderMaterial path provides NO gl_FragColor compat
+// define - each fragment shader declares its own out (sceneFrag does too)
 const GBUF_FRAG = /* glsl */`
 precision highp float;
+layout(location = 0) out vec4 oCol;
 varying vec3 vPos;
 varying vec3 vNrm;
 uniform float uWhich; // 0 = position, 1 = normal + occlusion group in alpha
 uniform float uGroup;
 void main() {
-  gl_FragColor = uWhich < 0.5 ? vec4(vPos, 1.0) : vec4(normalize(vNrm), uGroup);
+  oCol = uWhich < 0.5 ? vec4(vPos, 1.0) : vec4(normalize(vNrm), uGroup);
 }`;
 
 // capsule contact AO: Quilez sphere occlusion at the nearest axis point,
@@ -69,6 +72,7 @@ float capAO(vec3 P, vec3 N, vec4 A, vec3 Bp, float aoK, float aoClamp) {
 // accumulates batches of MAX_ENT entries into one white-cleared target.
 const BASE_FRAG = /* glsl */`
 precision highp float;
+layout(location = 0) out vec4 oCol;
 uniform sampler2D uPosG;
 uniform sampler2D uNrmG;
 uniform int uNEnt;
@@ -81,7 +85,7 @@ ${AO_BODY}
 void main() {
   ivec2 tx = ivec2(gl_FragCoord.xy);
   vec4 pw = texelFetch(uPosG, tx, 0);
-  if (pw.a < 0.5) { gl_FragColor = vec4(1.0); return; } // gutters: dilated after
+  if (pw.a < 0.5) { oCol = vec4(1.0); return; } // gutters: dilated after
   vec3 P = pw.xyz;
   vec4 ng = texelFetch(uNrmG, tx, 0);
   float aoc = 1.0;
@@ -98,7 +102,7 @@ void main() {
       aoc *= capAO(P, ng.xyz, uCapA[first + si], uCapB[first + si].xyz, uAO, uAOClamp);
     }
   }
-  gl_FragColor = vec4(aoc, aoc, aoc, 1.0);
+  oCol = vec4(aoc, aoc, aoc, 1.0);
 }`;
 
 // per-frame: dynamic props' AO x shadow over the baseline. Shadow direction
@@ -108,6 +112,7 @@ void main() {
 // direction).
 const DYN_FRAG = /* glsl */`
 precision highp float;
+layout(location = 0) out vec4 oCol;
 uniform sampler2D uPosG;
 uniform sampler2D uNrmG;
 uniform sampler2D uBase;
@@ -123,7 +128,7 @@ void main() {
   ivec2 tx = ivec2(gl_FragCoord.xy);
   float base = texelFetch(uBase, tx, 0).r;
   vec4 pw = texelFetch(uPosG, tx, 0);
-  if (pw.a < 0.5) { gl_FragColor = vec4(base, base, base, 1.0); return; }
+  if (pw.a < 0.5) { oCol = vec4(base, base, base, 1.0); return; }
   vec3 P = pw.xyz;
   vec3 N = texelFetch(uNrmG, tx, 0).xyz;
   float aoc = 1.0;
@@ -173,19 +178,20 @@ void main() {
     }
   }
   float v = base * aoc * shad;
-  gl_FragColor = vec4(v, v, v, 1.0);
+  oCol = vec4(v, v, v, 1.0);
 }`;
 
 // flood uncovered texels (chart gutters at layer resolution) from covered
 // neighbors so bilinear taps at chart borders never mix toward blank white
 const DILATE_FRAG = /* glsl */`
 precision highp float;
+layout(location = 0) out vec4 oCol;
 uniform sampler2D uSrc;
 uniform sampler2D uPosG; // coverage mask
 void main() {
   ivec2 tx = ivec2(gl_FragCoord.xy);
   if (texelFetch(uPosG, tx, 0).a > 0.5) {
-    gl_FragColor = vec4(texelFetch(uSrc, tx, 0).r);
+    oCol = vec4(texelFetch(uSrc, tx, 0).r);
     return;
   }
   float sum = 0.0, n = 0.0;
@@ -195,7 +201,7 @@ void main() {
       if (texelFetch(uPosG, q, 0).a > 0.5) { sum += texelFetch(uSrc, q, 0).r; n += 1.0; }
     }
   }
-  gl_FragColor = vec4(n > 0.0 ? sum / n : 1.0);
+  oCol = vec4(n > 0.0 ? sum / n : 1.0);
 }`;
 
 export class DynOccLayer {

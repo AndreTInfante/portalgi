@@ -16,7 +16,13 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   // no lightmap code, glass/pane almost nothing) - the single uber-program
   // capped wave occupancy at a measured 52%
   const fragByMode = {};
-  const fragFor = m => fragByMode[m] || (fragByMode[m] = sceneFrag(numCells, USE_HULL_UBO, m));
+  // debug variants compile in the traversal step accumulator + debug views;
+  // shipping programs carry none of that register pressure
+  let debugCompiled = false;
+  const fragFor = (m, dbg = debugCompiled) => {
+    const k = m + (dbg ? 'd' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg));
+  };
 
   let hullGroup = null;
   if (USE_HULL_UBO) {
@@ -154,6 +160,18 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   // Props take NO analytic lights. Specular continuity across a cell handoff
   // is inherent (coincident portals + traversal); diffuse crossfades from the
   // previous cell's irradiance over ~0.2s (decayed each frame by the caller).
+  // swap every material between shipping and debug-instrumented programs
+  // (same pattern as setUseLightmap: a rebuild hitch when toggling the GUI
+  // view is the price of debug-free shipping programs)
+  function setDebugCompiled(on) {
+    if (on === debugCompiled) return;
+    debugCompiled = on;
+    for (const m of allMaterials) {
+      m.fragmentShader = fragFor(m.userData.mode, on);
+      m.needsUpdate = true;
+    }
+  }
+
   function setMaterialCell(mat, cellId) {
     const cur = mat.uniforms.uCell.value;
     if (cur === cellId) return;
@@ -169,7 +187,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     mat.uniforms.uLightCount.value = n;
   }
 
-  return { globals, makeMaterial, setMaterialCell, setUseLightmap, allMaterials, occ };
+  return { globals, makeMaterial, setMaterialCell, setUseLightmap, setDebugCompiled, allMaterials, occ };
 }
 
 // Instantiate all static level meshes into the scene (layer 0 = baked/static).

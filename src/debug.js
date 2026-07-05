@@ -44,7 +44,13 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     get distRough() { return g.uDistRough.value; }, set distRough(v) { g.uDistRough.value = v; },
     get irrBlend() { return g.uIrrBlend.value; }, set irrBlend(v) { g.uIrrBlend.value = v; },
     get exposure() { return Math.log2(g.uExposure.value); }, set exposure(v) { g.uExposure.value = Math.pow(2, v); },
-    get view() { return g.uDebugMode.value; }, set view(v) { g.uDebugMode.value = v; },
+    get view() { return g.uDebugMode.value; },
+    set view(v) {
+      g.uDebugMode.value = v;
+      // debug views live in separate programs (step accumulator = register
+      // pressure); swapping causes a one-off rebuild hitch, like 'use lightmap'
+      if (matsys.setDebugCompiled) matsys.setDebugCompiled(v > 0);
+    },
     get portals() { return wires.visible; }, set portals(v) { wires.visible = v; },
     get lightmap() { return g.uUseLightmap.value > 0.5; }, set lightmap(v) { matsys.setUseLightmap(v); },
   };

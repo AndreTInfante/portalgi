@@ -145,7 +145,10 @@ async function boot() {
   if (params.has('rhops')) matsys.globals.uRoughHops.value = parseFloat(params.get('rhops'));
   if (params.has('occd')) matsys.globals.uOccDensity.value = parseFloat(params.get('occd'));
   if (params.has('blend')) matsys.globals.uBlendOn.value = parseFloat(params.get('blend'));
-  if (params.has('debug')) matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
+  if (params.has('debug')) {
+    matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
+    matsys.setDebugCompiled(parseInt(params.get('debug')) > 0);
+  }
   if (params.has('irr')) matsys.globals.uIrrBlend.value = parseFloat(params.get('irr'));
 
   const manager = new THREE.LoadingManager();
@@ -159,11 +162,12 @@ async function boot() {
   // convention: capture pass (uBake) writes linear radiance at uGain x the
   // LDR jpg (an LDR dome capped reflections at 1.0 - sky read dim vs lit
   // plaster at ~3+), display pass tonemaps with the shared exposure.
+  let dome = null;
   {
     const skyTex = new THREE.TextureLoader(manager)
       .load('./assets/textures/sky/kloofendal_48d_partly_cloudy_puresky.jpg');
     skyTex.colorSpace = THREE.SRGBColorSpace;
-    const dome = new THREE.Mesh(
+    dome = new THREE.Mesh(
       new THREE.SphereGeometry(70, 48, 24),
       new THREE.ShaderMaterial({
         side: THREE.BackSide,
@@ -283,7 +287,7 @@ void main() {
   // (Tier 2 item 3; ground-truth ~1.9ms at the gallery worst view).
   // Applies at session START - re-enter VR after changing the GUI slider
   renderer.xr.setFramebufferScaleFactor(
-    params.has('fbscale') ? parseFloat(params.get('fbscale')) : 1.0);
+    params.has('fbscale') ? parseFloat(params.get('fbscale')) : 0.9);
   window.__setFbScale = v => renderer.xr.setFramebufferScaleFactor(v);
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
@@ -555,23 +559,27 @@ void main() {
     const g = matsys.globals;
     const saved = {
       steps: g.uMaxSteps.value, rh: g.uRoughHops.value, occ: g.uOccOn.value,
+      sh: g.uOccShadow.value,
     };
-    const set = (steps, rh, occ) => () => {
+    const set = (steps, rh, occ, sh) => () => {
       g.uMaxSteps.value = steps;
       g.uRoughHops.value = rh;
       g.uOccOn.value = occ;
+      g.uOccShadow.value = sh;
     };
     return {
       configs: [
-        { name: 'occ-off', apply: set(3, 1, 0) },  // baseline first
-        { name: 'occluders', apply: set(3, 1, 1) },
-        { name: 'flat-hops', apply: set(3, 0, 0) },
-        { name: 'steps0', apply: set(0, 1, 0) },
+        { name: 'occ-off', apply: set(3, 1, 0, 0) },  // baseline first
+        { name: 'occluders', apply: set(3, 1, 1, 0) },
+        { name: 'shadows', apply: set(3, 1, 1, 0.85) }, // occluders + shadow rays
+        { name: 'flat-hops', apply: set(3, 0, 0, 0) },
+        { name: 'steps0', apply: set(0, 1, 0, 0) },
       ],
       restore: () => {
         g.uMaxSteps.value = saved.steps;
         g.uRoughHops.value = saved.rh;
         g.uOccOn.value = saved.occ;
+        g.uOccShadow.value = saved.sh;
       },
     };
   };
@@ -766,6 +774,7 @@ void main() {
   }
 
   const occActive = new Set();
+  const skyCells = [level.cells.find(c => c.sky).id, level.cells.find(c => c.hollow).id];
   let last = performance.now(), fpsAvg = 0;
   renderer.setAnimationLoop(() => {
     const now = performance.now();
@@ -795,6 +804,11 @@ void main() {
       culler.compute(inXR ? renderer.xr.getCamera() : camera, inXR ? headPos : player.pos);
     }
     culler.apply(staticGroup, props, state.baking);
+    // the dome is not in staticGroup and its radius-70 sphere contains every
+    // camera, so nothing else ever culls it: it was binned in every room,
+    // both eyes. Only sky-adjacent cells can actually see it.
+    dome.visible = state.baking || !culler.enabled ||
+      culler.visible.has(skyCells[0]) || culler.visible.has(skyCells[1]);
     if (occluders && !state.baking) {
       // occluder slots only for cells reflections can reach this frame:
       // the visible set plus one ring of portal neighbors (first-hop targets)

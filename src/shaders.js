@@ -62,7 +62,11 @@ float roughToLod(float r) {
 // portal-hull traversal; hull records come from a std140 uniform block
 // (constant-register reads - the dependent texelFetch path is kept as a
 // fallback should UniformsGroup misbehave on some driver)
-const traceGlsl = (numCells, useUbo) => /* glsl */`
+// dbg: compile in the step-count accumulator + debug views. The accumulator
+// threads live state through the whole traversal loop - exactly the class of
+// register pressure that measurably tipped wave occupancy (see the
+// re-emission accumulator note) - so shipping programs compile it OUT.
+const traceGlsl = (numCells, useUbo, dbg = false) => /* glsl */`
 ${useUbo ? /* glsl */`
 layout(std140) uniform HullData {
   vec4 uHull[${numCells * HULL_TEX_W}];
@@ -287,7 +291,7 @@ uniform float uDistRough;   // roughness growth per meter of path length
 // roughness-scaled edge blend, then either terminate on the local cubemap or
 // hop into the neighbor cell. A straight ray can never revisit a convex cell,
 // so this always makes forward progress.
-vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, out float stepsUsed) {
+vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap${dbg ? ', out float stepsUsed' : ''}) {
   // roughness-scaled hop budget: a reflection too blurry to resolve an image
   // can't resolve a second portal either. Anything reflective keeps >= 1 hop
   // (portal-boundary artifacts appear at 0); the rough > 0.65 irradiance
@@ -310,7 +314,7 @@ vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, out float 
   vec3 acc = vec3(0.0);
   float w = 1.0;
   float tTot = 0.0;
-  stepsUsed = 0.0;
+  ${dbg ? 'stepsUsed = 0.0;' : ''}
   for (int i = 0; i <= 8; i++) {
     h0 = hfetch(cell, 0);
     pc = int(h0.w);
@@ -406,7 +410,7 @@ ${useUbo ? /* glsl */`
       acc += w * (1.0 - blend) * sampleSpec(cell, localDir, lod);
       w *= blend;
     }
-    stepsUsed += 1.0;
+    ${dbg ? 'stepsUsed += 1.0;' : ''}
     pos = hitP + dir * 1e-3;
     cell = nextCell;
     tTot = tHit;
@@ -492,7 +496,7 @@ void main() {
 // helper functions are stripped by the GLSL compiler once the CALLS are
 // template-removed. Statics compile their pre-lightmap fallback only under
 // the LM_FALLBACK define (materials toggle it with the lightmap state).
-export function sceneFrag(numCells, useUbo = true, mode = 0) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   return /* glsl */`
 precision highp float;
@@ -530,7 +534,7 @@ uniform int uDebugMode;   // 0 off, 1 cell tint, 2 step heatmap, 3 irradiance, 4
 ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
-${traceGlsl(numCells, useUbo)}
+${traceGlsl(numCells, useUbo, dbg)}
 ${TONEMAP_GLSL}
 
 // Diffuse for dynamic objects: per-cell irradiance PROBE GRID, trilinear over
@@ -606,26 +610,26 @@ void main() {
     N = normalize(T * nTS.x + B * nTS.y + Ng * nTS.z);
   }
   float NoV = max(dot(N, V), 0.0);
-  float steps = 0.0;
+  ${dbg ? 'float steps = 0.0;' : ''}
   vec3 color;
 ${GLASS ? /* glsl */`
   // glass: chrome sampled the opposite way. The fresnel reflection is a
   // faint overlay over the dominant fake refraction: 1 hop is plenty for it
   vec3 R = reflect(-V, N);
   float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
-  vec3 refl = traceSpec(uCell, P, R, uRough, 1, steps);
-  float s2;
-  vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, s2) * vec3(0.90, 0.97, 0.93);
+  vec3 refl = traceSpec(uCell, P, R, uRough, 1${dbg ? ', steps' : ''});
+  ${dbg ? 'float s2;' : ''}
+  vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
   color = mix(thru, refl, F);
 ` : PANE ? /* glsl */`
   // debug pane: continue the eye ray straight through with zero roughness -
   // a direct, unrefracted window into the hull cubemap structure (a -R trick
   // here would mirror the lateral ray component and act like an inverting
   // lens). Faint green cast marks the glass.
-  color = traceSpec(uCell, P, -V, 0.0, 8, steps) * vec3(0.93, 1.0, 0.96);
+  color = traceSpec(uCell, P, -V, 0.0, 8${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
 ` : /* glsl */`
   vec3 albedo = texture(uMap, vUv).rgb * uTint;
-  if (uDebugMode == 4) albedo = vec3(0.75);
+  ${dbg ? 'if (uDebugMode == 4) albedo = vec3(0.75);' : ''}
   vec3 orm = texture(uOrmMap, vUv).rgb;
   float rough = clamp(orm.g * uRoughFactor, 0.03, 1.0);
   float metal = clamp(orm.b * uMetalFactor, 0.0, 1.0);
@@ -682,7 +686,7 @@ ${useUbo ? /* glsl */`
     // result is indistinguishable from one cosine-convolved irradiance tap
     // along R - skip the whole hull walk (Tier 1)
     vec3 pre = (rough > 0.65) ? sampleIrr(uCell, R)
-                              : traceSpec(uCell, P, R, rough, 8, steps);
+                              : traceSpec(uCell, P, R, rough, 8${dbg ? ', steps' : ''});
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
   }
 `}
@@ -691,12 +695,15 @@ ${STATIC ? /* glsl */`
     fragOut = vec4(color, 1.0);
     return;
   }
+` : ''}
+${dbg ? /* glsl */`
+${STATIC ? `
   if (uDebugMode == 3) color = sampleIrr(uCell, N);
   if (uDebugMode == 5) color = texture(uLightmap, vUv2).rgb;
 ` : ''}
   if (uDebugMode == 1) color = mix(color, hsv2rgb(vec3(fract(float(uCell) * 0.618), 0.6, 0.9)), 0.45);
   if (uDebugMode == 2) color = heatmap(steps / 5.0);
-
+` : ''}
   fragOut = vec4(pow(acesTonemap(color * uExposure), vec3(1.0 / 2.2)), 1.0);
 }
 `;

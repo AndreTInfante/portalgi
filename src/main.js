@@ -27,6 +27,14 @@ import { PhysicsWorld } from './physics.js';
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
 const BAKE = params.has('bake');
+// the offline bake PUTs its artifacts back to serve.mjs - it can only work
+// from the local dev server. Fail FAST (before minutes of path tracing)
+// instead of dying on the save with an opaque 'failed to fetch'.
+if (BAKE && !['127.0.0.1', 'localhost'].includes(location.hostname)) {
+  document.getElementById('overlay-msg').textContent =
+    'Offline bake needs the local dev server (serve.mjs) - open http://127.0.0.1:8123/?bake=1';
+  throw new Error('bake on non-local origin');
+}
 
 const SHOT_POSES = {
   1: { pos: [-4.4, 1.6, 2.8], look: [1.5, 0.9, -0.5] },   // gallery: props + gloss floor

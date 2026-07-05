@@ -5,7 +5,69 @@
 // body is kinematic; hull planes keep it out of walls, portal-aware).
 import * as CANNON from '../libs/cannon-es.js';
 import * as THREE from 'three';
+import { ConvexHull } from '../libs/math/ConvexHull.js';
 import { OCCLUDER_PROXIES } from './proxies.js';
+
+// prop-local convex hull of the REAL mesh vertices -> cannon ConvexPolyhedron.
+// Replaces the capsule-compound approximation (authored capsules are tuned
+// for reflection blobs, not contact: chairs wobbled on sphere strings). The
+// hull's bottom face spans the leg tips, so furniture gets its flat resting
+// base for free. Points are quantized to a 4cm grid before hulling to keep
+// the vertex count (and cannon's convex-convex narrowphase) small.
+export function convexFromMesh(root) {
+  root.updateMatrixWorld(true);
+  // body space = root position+rotation WITHOUT scale (cannon shapes carry
+  // no scale, but the body tracks mesh position/quaternion only) - any root
+  // scale must bake into the hull points
+  const rootInv = new THREE.Matrix4()
+    .compose(root.position, root.quaternion, new THREE.Vector3(1, 1, 1))
+    .invert();
+  const v = new THREE.Vector3();
+  const seen = new Set();
+  const pts = [];
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    const pos = o.geometry.getAttribute('position');
+    const m = new THREE.Matrix4().multiplyMatrices(rootInv, o.matrixWorld);
+    const step = Math.max(1, Math.floor(pos.count / 600));
+    for (let i = 0; i < pos.count; i += step) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m);
+      const k = ((Math.round(v.x * 25) + 512) << 20) |
+                ((Math.round(v.y * 25) + 512) << 10) |
+                 (Math.round(v.z * 25) + 512);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      pts.push(v.clone());
+    }
+  });
+  if (pts.length < 8) return null;
+  try {
+    const hull = new ConvexHull().setFromPoints(pts);
+    const idOf = new Map();
+    const verts = [];
+    const faces = [];
+    for (const f of hull.faces) {
+      const idx = [];
+      let e = f.edge;
+      do {
+        const pt = e.head().point;
+        let id = idOf.get(pt);
+        if (id === undefined) {
+          id = verts.length;
+          idOf.set(pt, id);
+          verts.push(new CANNON.Vec3(pt.x, pt.y, pt.z));
+        }
+        idx.push(id);
+        e = e.next;
+      } while (e !== f.edge);
+      faces.push(idx);
+    }
+    return new CANNON.ConvexPolyhedron({ vertices: verts, faces });
+  } catch (err) {
+    console.warn('physics: convex hull failed, capsule fallback:', err.message);
+    return null;
+  }
+}
 
 const FIXED_DT = 1 / 90;
 
@@ -57,17 +119,21 @@ export class PhysicsWorld {
   }
 
   // dynamic body for a prop: sphere for balls, box for cubes/pane, and for
-  // gltf exhibits a compound of spheres strung along the HAND-AUTHORED
-  // occluder capsules (proxies.js) - physics matches what reflections and AO
-  // already represent, and tight shapes fit through doorways (the full-bbox
-  // box wedged the coffee cart in doors). Bbox box is the no-proxy fallback.
+  // gltf exhibits a CONVEX HULL of the real mesh (convexFromMesh above) -
+  // contact matches what the eye sees, and the hull base is flat across the
+  // leg tips so furniture rests straight. Authored occluder capsules remain
+  // the fallback (they stay the reflection/AO representation regardless);
+  // bbox box is the last resort.
   addProp(p, onImpact) {
     const body = new CANNON.Body({ mass: Math.max(0.3, p.radius ** 3 * 40) });
     const proxy = p.slug && OCCLUDER_PROXIES.props[p.slug];
+    const hull = !p.round && !p.boxHalf && p.slug ? convexFromMesh(p.mesh) : null;
     if (p.round) {
       body.addShape(new CANNON.Sphere(p.radius));
     } else if (p.boxHalf) {
       body.addShape(new CANNON.Box(new CANNON.Vec3(...p.boxHalf)));
+    } else if (hull) {
+      body.addShape(hull);
     } else if (proxy) {
       for (const [a, b, r] of proxy.capsules) {
         const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);

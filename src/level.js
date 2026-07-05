@@ -381,7 +381,9 @@ const LIGHT_DEFS = [
   // energy is probe-averaged, but probes cannot carry direct sun - props
   // stood in full sunlight looking dull). The 42deg cone covers the whole
   // courtyard + the door beam, so the bake is unchanged.
-  [{ p: [34, 22, -10], c: [1.0, 0.92, 0.78], i: 6500, d: [-13.4, -22, 10], cone: 42 }],
+  // soft 0.8m at ~30m ~= 1.5deg angular sun: courtyard shadows get 3-10cm
+  // penumbras (2-3 lightmap texels) instead of texel-stair hard edges
+  [{ p: [34, 22, -10], c: [1.0, 0.92, 0.78], i: 6500, d: [-13.4, -22, 10], cone: 42, soft: 0.8 }],
 ];
 
 const PANEL_DEFS = [
@@ -510,6 +512,7 @@ export function buildLevel() {
       lights: (LIGHT_DEFS[id] || []).map(l => ({
         pos: l.p.slice(), color: l.c.slice(), intensity: l.i,
         dir: l.d ? l.d.slice() : null, cone: l.cone, // spot: aim axis + outer degrees
+        soft: l.soft, // emitter radius (m) for baked penumbras; default in lightmap.js
         cell: id, // home cell: only LOCAL spots feed prop direct (no shadow
                   // rays vs walls - the borrowed sun lit props through them)
       })),

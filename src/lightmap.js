@@ -62,6 +62,7 @@ uniform sampler2D uFace;   // 3 texels/face: uv2 triplet, albedo, emissive
 uniform vec3 uLightPos[24];
 uniform vec3 uLightCol[24];
 uniform vec4 uLightDir[24]; // spot: xyz = axis, w = cos(outer); w = -2 -> point
+uniform float uLightRad[24]; // finite emitter radius (m) - penumbra prefilter
 uniform int uNLights;
 uniform vec4 uPanelA[24];  // center.xyz, half sx
 uniform vec4 uPanelB[24];  // half sz, emissive rgb
@@ -126,8 +127,20 @@ void main() {
       spot = smoothstep(uLightDir[i].w, uLightDir[i].w + 0.08, dot(-Ln, uLightDir[i].xyz));
       if (spot <= 0.0) continue;
     }
-    if (occluded(Po, uLightPos[i])) continue;
-    direct += uLightCol[i] * (spot * ndl / max(d2, 0.05)); // true inverse-square
+    // shadow prefilter (Andre's sampling-theorem read, 2026-07-05): a point
+    // emitter bakes a step-function shadow edge the texel grid cannot
+    // represent - stair aliasing at reconstruction. Jittering the shadow
+    // target over the light's finite radius band-limits the SIGNAL: penumbras
+    // span 2-3 texels and bilinear reconstructs them cleanly. Softer shadows
+    // traded for aliasing, by design. 4 rays/iteration; iterations accumulate.
+    float vis = 0.0;
+    for (int s = 0; s < 4; s++) {
+      vec3 jp = uLightPos[i] +
+        (vec3(rnd(seed), rnd(seed), rnd(seed)) - 0.5) * (2.0 * uLightRad[i]);
+      if (!occluded(Po, jp)) vis += 1.0;
+    }
+    if (vis <= 0.0) continue;
+    direct += uLightCol[i] * (spot * ndl / max(d2, 0.05)) * (vis * 0.25);
   }
   for (int i = 0; i < 24; i++) {
     if (i >= uNPanels) break;
@@ -297,7 +310,7 @@ export class Lightmapper {
     this.cam = new THREE.Camera();
 
     // lights: unique analytic points/spots + panel area lights
-    const lp = [], lc = [], ld = [];
+    const lp = [], lc = [], ld = [], lr = [];
     const seen = new Set();
     for (const cell of level.cells) {
       for (const l of cell.lights) {
@@ -306,6 +319,9 @@ export class Lightmapper {
         seen.add(key);
         lp.push(new THREE.Vector3(...l.pos));
         lc.push(new THREE.Vector3(l.color[0] * l.intensity, l.color[1] * l.intensity, l.color[2] * l.intensity));
+        // finite emitter radius: shadow rays jitter over it, so baked shadow
+        // edges arrive band-limited for the texel grid (see the direct loop)
+        lr.push(l.soft !== undefined ? l.soft : 0.12);
         if (l.dir) {
           const d = new THREE.Vector3(...l.dir).normalize();
           ld.push(new THREE.Vector4(d.x, d.y, d.z, Math.cos((l.cone || 35) * Math.PI / 180)));
@@ -315,7 +331,7 @@ export class Lightmapper {
       }
     }
     if (lp.length > 24) throw new Error('too many unique lights (max 24)');
-    while (lp.length < 24) { lp.push(new THREE.Vector3()); lc.push(new THREE.Vector3()); ld.push(new THREE.Vector4(0, -1, 0, -2)); }
+    while (lp.length < 24) { lp.push(new THREE.Vector3()); lc.push(new THREE.Vector3()); ld.push(new THREE.Vector4(0, -1, 0, -2)); lr.push(0); }
     const pa = [], pb = [];
     for (const pn of level.panels) {
       const c = pn.color, e = pn.intensity;
@@ -335,6 +351,7 @@ export class Lightmapper {
       uLightPos: { value: lp },
       uLightCol: { value: lc },
       uLightDir: { value: ld },
+      uLightRad: { value: lr },
       uNLights: { value: seen.size },
       uPanelA: { value: pa },
       uPanelB: { value: pb },

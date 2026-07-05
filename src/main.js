@@ -329,8 +329,8 @@ void main() {
   // capsuleShadow ran per receiver pixel). Following the caster instead of
   // the receiver's cell also removes the direction snap at portal crossings.
   const _sdAcc = new THREE.Vector3(), _sdL = new THREE.Vector3(), _sdAxis = new THREE.Vector3();
-  const shadowDirFor = (e) => {
-    const sd = e.shadowDir || (e.shadowDir = new THREE.Vector4());
+  const _sdRaw = new THREE.Vector4();
+  const shadowDirFor = (e, alpha) => {
     const pos = e.p.mesh.position;
     const lights = level.cells[e.p.cell].lights;
     _sdAcc.set(0, 0, 0);
@@ -350,18 +350,34 @@ void main() {
       _sdAcc.addScaledVector(_sdL, w);
       wsum += w;
     }
-    if (wsum < 1e-5) { sd.set(0, 1, 0, 0); return; } // span 0 = no shadow
-    _sdAcc.divideScalar(wsum);
-    const len = Math.max(_sdAcc.length(), 1e-4);
-    sd.set(_sdAcc.x / len, _sdAcc.y / len, _sdAcc.z / len, Math.min(len, 3));
+    if (wsum < 1e-5) _sdRaw.set(0, 1, 0, 0); // span 0 = no shadow
+    else {
+      _sdAcc.divideScalar(wsum);
+      const len = Math.max(_sdAcc.length(), 1e-4);
+      _sdRaw.set(_sdAcc.x / len, _sdAcc.y / len, _sdAcc.z / len, Math.min(len, 3));
+    }
+    // crossfade toward the fresh direction: a prop crossing a portal swaps
+    // its light list and the caster-anchored direction SNAPPED the shadow
+    // (Andre-caught, 2026-07-05). ~0.25s exponential settle, exact snap at
+    // the end so the dynocc change-detector can put the splat back to sleep.
+    const sd = e.shadowDir || (e.shadowDir = new THREE.Vector4().copy(_sdRaw));
+    sd.lerp(_sdRaw, alpha);
+    const dx = sd.x - _sdRaw.x, dy = sd.y - _sdRaw.y, dz = sd.z - _sdRaw.z;
+    if (dx * dx + dy * dy + dz * dz < 1e-6 && Math.abs(sd.w - _sdRaw.w) < 1e-3) {
+      sd.copy(_sdRaw);
+    } else {
+      const n = Math.max(Math.hypot(sd.x, sd.y, sd.z), 1e-4); // renormalize the
+      sd.x /= n; sd.y /= n; sd.z /= n;                        // lerped direction
+    }
   };
   const dynEntries = []; // pooled (72x/s)
-  const updateDynOcc = () => {
+  const updateDynOcc = (dt = 1) => {
     if (!dynOcc) return;
+    const alpha = Math.min(1, dt * 4); // ~0.25s direction settle
     dynEntries.length = 0;
     for (const e of occluders.entries) {
       if (!e.p.mesh.visible) continue;
-      shadowDirFor(e);
+      shadowDirFor(e, alpha);
       dynEntries.push(e);
     }
     dynOcc.update(dynEntries, occDials());
@@ -766,8 +782,10 @@ void main() {
       c.addEventListener('selectstart', () => {
         const car = ctrlCarrier(c);
         const held = props.held;
-        if (held) { // hand-to-hand: take the held prop when this hand is inside it
-          if (!c.userData.holding && held.mesh.position.distanceTo(car.pos) < held.radius + 0.06) {
+        if (held) { // hand-to-hand: take the held prop when this hand is NEAR it
+          // sphere grab, not surface-contact: 0.06 required the hand to be
+          // basically inside the mesh - passing hand to hand fought the user
+          if (!c.userData.holding && held.mesh.position.distanceTo(car.pos) < held.radius + 0.15) {
             const other = renderer.xr.getController(1 - i);
             if (other) other.userData.holding = false;
             props.grabAttach(held, car);
@@ -775,7 +793,7 @@ void main() {
           }
           return;
         }
-        const near = props.touch(car.pos, 0.06); // hand inside a prop: attach in place
+        const near = props.touch(car.pos, 0.15); // hand near a prop: attach in place
         if (near) { props.grabAttach(near, car); c.userData.holding = true; return; }
         const p = props.aim(car.pos, car.viewDir, 3.0);
         if (p) { props.grabBeam(p, car); c.userData.holding = true; }
@@ -968,7 +986,7 @@ void main() {
       // closest-first dyn packing; the capsule budget truncates at pack time
       occluders.update(active, inXR ? headPos : player.pos,
         matsys.globals.uOccBudget.value);
-      updateDynOcc(); // after occluders.update: it reads the fresh e.world
+      updateDynOcc(dt); // after occluders.update: it reads the fresh e.world
     }
     if (!inXR) {
       player.applyToCamera(camera);

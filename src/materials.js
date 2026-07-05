@@ -27,6 +27,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // the next room without a dynamic 8-hop loop's register pressure.
   // ?hop1=0 restores the full march everywhere for A/B.
   const hop1Sys = sysOpts.hop1 !== false;
+  // PROP programs scan at most this many DYNAMIC casters (props interact
+  // with far fewer objects than floors); statics never skipped. ?occdynprop=
+  const occDynCap = sysOpts.occDynProp !== undefined ? sysOpts.occDynProp : 4;
   // one pruned program per material mode (statics carry no probe code, props
   // no lightmap code, glass/pane almost nothing) - the single uber-program
   // capped wave occupancy at a measured 52%
@@ -36,7 +39,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   let debugCompiled = false;
   const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false) => {
     const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1));
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap));
   };
 
   let hullGroup = null;

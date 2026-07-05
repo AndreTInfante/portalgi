@@ -67,7 +67,11 @@ float roughToLod(float r) {
 // threads live state through the whole traversal loop - exactly the class of
 // register pressure that measurably tipped wave occupancy (see the
 // re-emission accumulator note) - so shipping programs compile it OUT.
-const traceGlsl = (numCells, useUbo, dbg = false) => /* glsl */`
+// dynCap: PROP programs cap how many DYNAMIC casters their capsule loops
+// scan (Andre 2026-07-05: props interact with far fewer objects than
+// floors). 999 in every other program - the guards constant-fold away.
+// Statics (packed after the dyn prefix) are never skipped.
+const traceGlsl = (numCells, useUbo, dbg = false, dynCap = 999) => /* glsl */`
 ${useUbo ? /* glsl */`
 layout(std140) uniform HullData {
   vec4 uHull[${numCells * HULL_TEX_W}];
@@ -111,6 +115,7 @@ MP float capsuleAO(int cell, vec3 P, vec3 N, MP float dynFade) {
   MP float aoc = 1.0;
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
+    if (pi >= ${dynCap} && pi < dyn) continue;  // prop-program dyn cap
     // dyn entries (packed closest-first, budget-truncated at pack time) fade
     // with viewer distance; statics (furniture - this is their only shadow)
     // always evaluate at full strength
@@ -157,7 +162,7 @@ MP float capsuleAO(int cell, vec3 P, vec3 N, MP float dynFade) {
 // capsule radius widens along the ray and coverage dims as r^2/rw^2, so
 // small or distant occluders fade out instead of printing hard streaks.
 MP float capsuleShadow(int cell, vec3 P, vec3 N) {
-  int dyn = int(uOccCell[cell].z);
+  int dyn = min(int(uOccCell[cell].z), ${dynCap}); // prop-program dyn cap
   if (dyn == 0) return 1.0;
   int first = int(uOccCell[cell].x);
   // reach pre-reject: the march is capped at 3m, so a pixel farther than
@@ -268,6 +273,7 @@ MP float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBa
   float wr = rough * clamp(rough * 6.667, 0.0, 1.0);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
+    if (pi >= ${dynCap} && pi < dyn) continue;  // prop-program dyn cap
     // dyn prefix (closest-first, budget-truncated at pack time) fades with
     // viewer distance; statics (furniture reflections - captures exclude
     // them) always march
@@ -788,7 +794,7 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   // warp fields replace the recursive walk in STATIC programs only: props/
   // glass/pane are near-mirror small-fill and keep the exact loop; debug
@@ -836,7 +842,7 @@ uniform int uDebugMode;   // 0 off, 1 cell tint, 2 step heatmap, 3 irradiance, 4
 ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
-${traceGlsl(numCells, useUbo, dbg)}
+${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}

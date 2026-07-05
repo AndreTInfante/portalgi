@@ -123,6 +123,10 @@ uniform vec4 uEntD[${MAX_ENT}];  // shadow dir xyz, span (0 = no shadow)
 uniform vec4 uCapA[${MAX_CAPS}];
 uniform vec4 uCapB[${MAX_CAPS}];
 uniform float uAO, uAOClamp, uShadow;
+uniform float uPenSoft; // penumbra width floor (m) ~ 1.5 layer texels: the
+                        // quarter-res grid cannot represent a harder edge -
+                        // rasterizing one printed stair aliasing (Andre).
+                        // Band-limit the SIGNAL: sub-texel shadows dim out.
 ${AO_BODY}
 void main() {
   ivec2 tx = ivec2(gl_FragCoord.xy);
@@ -170,7 +174,10 @@ void main() {
         vec3 dv = (P + dir * s) - (A.xyz + u * t);
         float dist = length(dv);
         float rw = A.w + s * 0.12;
-        float pen = clamp((rw - dist) / max(rw * 0.45, 1e-3), 0.0, 1.0);
+        // transition width floored at uPenSoft: when the floor exceeds rw,
+        // pen peaks below 1 - a shadow narrower than a texel LOSES energy
+        // instead of aliasing (correct prefiltering, not just blur)
+        float pen = clamp((rw - dist) / max(max(rw * 0.45, uPenSoft), 1e-3), 0.0, 1.0);
         pen *= smoothstep(0.0, 0.12, s); // contact handoff to AO
         occl = max(occl, pen * min(1.0, (A.w * A.w) / (rw * rw)));
       }
@@ -363,6 +370,7 @@ export class DynOccLayer {
     mat.uniforms.uAO.value = dials.ao;
     mat.uniforms.uAOClamp.value = dials.aoClamp;
     if (mat.uniforms.uShadow) mat.uniforms.uShadow.value = dials.shadow;
+    if (mat.uniforms.uPenSoft) mat.uniforms.uPenSoft.value = dials.penSoft || 0;
   }
 
   // once at load, after all addStatic/addPiece registration: static proxies
@@ -384,6 +392,12 @@ export class DynOccLayer {
       this._run(this.baseRT, this.dilateMat);
     });
     this._sigValid = false; // dyn layer must rebuild over the new baseline
+    // seed the LAYER with the fresh baseline immediately: during ?bake=1 the
+    // frame loop (state.baking) never runs update() before the cubemap
+    // captures, and an unrendered layerRT reads all-zero - every static
+    // multiplied its diffuse by 0 and the captures came out BLACK
+    // (Andre's rebake, 2026-07-05)
+    this.update([], { ao: 0.8, aoClamp: 0.03, shadow: 0.85, penSoft: 0 });
   }
 
   // per frame with the DYNAMIC entries only (props): splat over the baseline,
@@ -405,6 +419,7 @@ export class DynOccLayer {
       p++;
     };
     test(ne); test(dials.ao); test(dials.aoClamp); test(dials.shadow);
+    test(dials.penSoft || 0);
     let caps = 0;
     for (let e = 0; e < ne; e++) {
       const B = u.uEntB.value[e], M = u.uEntM.value[e], D = u.uEntD.value[e];

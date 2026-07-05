@@ -159,7 +159,9 @@ async function boot() {
     // ?hop1=0: floors/props compile the full march instead of the unrolled
     // single hop (A/B; hop1 should be pixel-identical to ?hop1=0&steps=1)
     { fp16: params.get('fp16') !== '0', texOcc: params.get('texocc') !== '0',
-      hop1: params.get('hop1') !== '0', warp });
+      hop1: params.get('hop1') !== '0', warp,
+      // ?occdynprop=999 restores uncapped prop-program dyn casters (A/B)
+      occDynProp: params.has('occdynprop') ? parseInt(params.get('occdynprop')) : 4 });
   const useLightmap = BAKE || params.get('lm') !== '0';
   const lightmapper = useLightmap ? new Lightmapper(renderer, level, textures, {
     rays: lmSettings.lmrays, iterations: lmSettings.lmit,
@@ -311,7 +313,12 @@ void main() {
   // (constructed here, AFTER every static occluder group id is assigned);
   // props re-splat per frame - but only when one actually moved. The dials
   // stay live for the dyn layer; base-layer dial changes need a reload.
-  const occDialsObj = { ao: 0, aoClamp: 0, shadow: 0 };
+  // splat penumbra floor ~ 1.5 layer texels (layer = quarter lightmap
+  // density): shadows narrower than a texel dim out instead of aliasing.
+  // ?pensoft= overrides (meters; 0 = the old hard-edged splat).
+  const penSoft = params.has('pensoft')
+    ? parseFloat(params.get('pensoft')) : 6 / lmSettings.lmden;
+  const occDialsObj = { ao: 0, aoClamp: 0, shadow: 0, penSoft };
   const occDials = () => {
     occDialsObj.ao = matsys.globals.uOccAO.value;
     occDialsObj.aoClamp = matsys.globals.uOccAOClamp.value;

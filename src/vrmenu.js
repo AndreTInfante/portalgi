@@ -1,22 +1,28 @@
-// In-VR debug menu: a canvas panel on the LEFT hand, toggled with X.
-// Navigate with the RIGHT stick (up/down = row, left/right = adjust),
-// A activates. While open, snap turn and the A rate-toggle are suppressed
-// (the menu owns those inputs). A small always-on prompt under the left
-// controller tells outsiders what the buttons do - unlabeled mystery
-// buttons read as broken to anyone who isn't the developer.
+// In-VR menu: a canvas panel on the LEFT hand, toggled with X. Built for
+// DEMO GUESTS first: the main page holds the big show-off levers (portals
+// on/off vs PCCM, reflections, AO+shadows, framerate target) and everything
+// in-the-weeds lives on the 'tuning' subpage. Interact by POINTING the right
+// hand at a row and pulling the trigger (main.js raycasts and routes the
+// trigger here instead of grabbing), or right stick + A. A one-line help
+// string lives inside the panel; an always-on prompt under the left hand
+// says how to open it.
 import * as THREE from 'three';
 
 const W = 512, H = 640;
+const ROW = 46, TOP = 110; // row baseline layout; hit band starts at TOP-30
 
 export class VRMenu {
-  // items: [{ name, value():string, adjust(dir) }] - adjust(+1/-1); buttons
-  // ignore dir. Values re-render on change.
-  constructor(items) {
-    this.items = items;
+  // pages: { main: [...], tuning: [...] } - item: { name, value():string,
+  // adjust(dir) }. adjust(+1) must CYCLE multi-state values (click has no
+  // direction); stick left/right supplies real -1/+1.
+  constructor(pages) {
+    this.pages = pages;
+    this.page = 'main';
     this.open = false;
     this.sel = 0;
+    this.hoverRow = -1;
     this._sig = '';
-    this._nav = { x: true, y: true, a: true, menu: true }; // edge triggers
+    this._nav = { x: true, y: true, a: true, menu: true };
 
     this.canvas = document.createElement('canvas');
     this.canvas.width = W; this.canvas.height = H;
@@ -30,7 +36,7 @@ export class VRMenu {
     this.mesh.visible = false;
     this.mesh.renderOrder = 10;
 
-    // always-on hand prompt (the "how do I open the menu" label)
+    // always-on hand prompt (how outsiders discover the controls)
     const pc = document.createElement('canvas');
     pc.width = 512; pc.height = 96;
     const ctx = pc.getContext('2d');
@@ -51,14 +57,36 @@ export class VRMenu {
     this.prompt.renderOrder = 10;
   }
 
+  get items() { return this.pages[this.page]; }
+
+  setPage(p) {
+    this.page = p;
+    this.sel = 0;
+    this._draw(true);
+  }
+
   toggle() {
     this.open = !this.open;
     this.mesh.visible = this.open;
-    if (this.open) this._draw(true);
+    if (this.open) { this.page = 'main'; this.sel = 0; this._draw(true); }
   }
 
-  // leftPad/rightPad: Gamepad objects (or null). Returns true when the menu
-  // consumed the right-hand inputs this frame (caller suppresses snap/rate).
+  // uv from the right-hand ray hitting the panel (or null): hovering selects
+  pointAt(uv) {
+    if (!uv) { this.hoverRow = -1; return; }
+    const py = (1 - uv.y) * H;
+    const r = Math.floor((py - (TOP - 30)) / ROW);
+    this.hoverRow = r >= 0 && r < this.items.length ? r : -1;
+    if (this.hoverRow >= 0) this.sel = this.hoverRow;
+  }
+
+  // right-trigger while pointing at the panel
+  click() {
+    if (!this.open) return;
+    if (this.sel >= 0 && this.sel < this.items.length) this.items[this.sel].adjust(1);
+  }
+
+  // pads: Gamepad or null. Returns true while the menu owns right-hand input.
   update(leftPad, rightPad) {
     const lb = leftPad && leftPad.buttons;
     const menuBtn = !!(lb && lb[4] && lb[4].pressed); // X
@@ -87,7 +115,8 @@ export class VRMenu {
   }
 
   _draw(force = false) {
-    const sig = this.sel + '|' + this.items.map(i => i.value()).join('|');
+    const sig = this.page + '|' + this.sel + '|' + this.hoverRow + '|' +
+      this.items.map(i => i.value()).join('|');
     if (!force && sig === this._sig) return;
     this._sig = sig;
     const ctx = this.canvas.getContext('2d');
@@ -97,24 +126,23 @@ export class VRMenu {
     ctx.fillStyle = '#8fb8ff';
     ctx.font = 'bold 30px system-ui';
     ctx.textAlign = 'left';
-    ctx.fillText('PortalGI debug', 20, 44);
-    ctx.font = '22px system-ui';
+    ctx.fillText(this.page === 'main' ? 'PortalGI' : 'PortalGI · tuning', 20, 44);
+    ctx.font = '21px system-ui';
     ctx.fillStyle = '#7a8699';
-    ctx.fillText('stick: navigate / adjust · A: toggle · X: close', 20, 76);
-    const row = 46, top = 110;
+    ctx.fillText('point + trigger to click · stick/A works too · X closes', 20, 76);
     for (let i = 0; i < this.items.length; i++) {
       const it = this.items[i];
       if (i === this.sel) {
         ctx.fillStyle = 'rgba(90,140,255,0.25)';
-        ctx.fillRect(10, top + i * row - 30, W - 20, 40);
+        ctx.fillRect(10, TOP + i * ROW - 30, W - 20, 40);
       }
       ctx.font = 'bold 26px system-ui';
       ctx.fillStyle = i === this.sel ? '#ffffff' : '#b7c2d3';
       ctx.textAlign = 'left';
-      ctx.fillText(it.name, 24, top + i * row);
+      ctx.fillText(it.name, 24, TOP + i * ROW);
       ctx.textAlign = 'right';
       ctx.fillStyle = i === this.sel ? '#9fe0a8' : '#7fa886';
-      ctx.fillText(it.value(), W - 24, top + i * row);
+      ctx.fillText(it.value(), W - 24, TOP + i * ROW);
     }
     this.tex.needsUpdate = true;
   }

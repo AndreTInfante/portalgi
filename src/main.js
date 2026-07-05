@@ -689,15 +689,16 @@ void main() {
   // must carry it), and the wrist's real omega as the departing spin
   const _twr = new THREE.Vector3(), _twc = new THREE.Vector3();
   const throwRelease = c => {
-    const p = props.held;
+    const key = c.userData.handed || 'right';
+    const h = props.holds.get(key);
     const v = ctrlVel(c);
     const w = ctrlAngVel(c);
-    if (p) {
+    if (h) {
       c.getWorldPosition(tmpV);
-      _twr.subVectors(p.mesh.position, tmpV);
+      _twr.subVectors(h.p.mesh.position, tmpV);
       v.add(_twc.crossVectors(w, _twr));
     }
-    props.release(v, w);
+    props.release(v, w, key);
   };
   const ctrlCarrier = c => {
     c.getWorldPosition(tmpV);
@@ -824,59 +825,81 @@ void main() {
       errEl.textContent += 'XR: session ended\n';
       rig.position.set(0, 0, 0);
       rig.rotation.set(0, 0, 0);
-      for (const j of [0, 1]) { // controllers vanish: drop the prop in place
+      for (const j of [0, 1]) { // controllers vanish: drop the props in place
         const cc = renderer.xr.getController(j);
         if (cc) { cc.userData.holding = false; cc.userData.hist = []; }
       }
-      props.dropHeld();
+      props.dropAll();
     });
-    // in-VR debug menu on the LEFT hand (X toggles; right stick + A drive
-    // it) plus an always-on prompt so an outsider knows the controls exist
+    // in-VR menu on the LEFT hand: the MAIN page is for demo guests (the
+    // big levers the technique is showing off), tuning lives one page down
     {
       const g = matsys.globals;
       const viewNames = ['none', 'cell tint', 'heatmap', 'irradiance', 'white', 'lightmap'];
-      const clampi = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-      vrMenu = new VRMenu([
-        { name: 'debug view', value: () => viewNames[g.uDebugMode.value],
-          adjust: d => {
-            g.uDebugMode.value = (g.uDebugMode.value + d + 6) % 6;
-            matsys.setDebugCompiled(g.uDebugMode.value > 0); // rebuild hitch, expected
-          } },
-        { name: 'lightmap', value: () => g.uUseLightmap.value > 0.5 ? 'on' : 'off',
-          adjust: () => matsys.setUseLightmap(!(g.uUseLightmap.value > 0.5)) },
-        { name: 'occluders', value: () => g.uOccOn.value > 0.5 ? 'on' : 'off',
-          adjust: () => { g.uOccOn.value = g.uOccOn.value > 0.5 ? 0 : 1; } },
-        { name: 'dyn shadows', value: () => g.uOccShadow.value > 0.001 ? 'on' : 'off',
-          adjust: () => { g.uOccShadow.value = g.uOccShadow.value > 0.001 ? 0 : 0.85; } },
-        { name: 'portal hops (glass)', value: () => String(g.uMaxSteps.value),
-          adjust: d => { g.uMaxSteps.value = clampi(g.uMaxSteps.value + d, 0, 6); } },
-        { name: 'blob hops', value: () => String(g.uOccHops.value),
-          adjust: d => { g.uOccHops.value = clampi(g.uOccHops.value + d, 0, 4); } },
-        { name: 'exposure EV', value: () => Math.log2(g.uExposure.value).toFixed(2),
-          adjust: d => { g.uExposure.value = Math.pow(2, Math.log2(g.uExposure.value) + d * 0.25); } },
-        { name: 'portal wires', value: () => wires.visible ? 'on' : 'off',
-          adjust: () => { wires.visible = !wires.visible; } },
-        { name: 'portal culling', value: () => culler.enabled ? 'on' : 'off',
-          adjust: () => { culler.enabled = !culler.enabled; } },
-        { name: 'target rate', value: () => rateState.target + 'Hz',
-          adjust: () => {
-            rateState.target = rateState.target === 90 ? 72 : 90;
-            drawRate();
-            applyRate(renderer.xr.getSession());
-          } },
-        { name: 'perf batch', value: () => (perf.batch || perf.sweep) ? 'RUNNING' : 'run',
-          adjust: () => {
-            if (perf.batch || perf.sweep) perf.cancelBatch();
-            else { const b = perf.batchSetup(); perf.startBatch(b.configs, b.restore); }
-          } },
-      ]);
+      const wrap = (v, n, d) => (v + d + n) % n;
+      let savedSteps = 3;
+      const mkToggle = (name, get, set) => ({
+        name, value: () => (get() ? 'on' : 'off'), adjust: () => set(!get()),
+      });
+      vrMenu = new VRMenu({
+        main: [
+          // THE headline A/B: full portal traversal vs plain parallax-
+          // corrected cubemaps, one click
+          mkToggle('portal rendering', () => g.uMaxSteps.value > 0, on => {
+            if (on) g.uMaxSteps.value = savedSteps || 3;
+            else { savedSteps = g.uMaxSteps.value || 3; g.uMaxSteps.value = 0; }
+          }),
+          mkToggle('reflections', () => matsys.specularOn, on => matsys.setSpecular(on)),
+          mkToggle('AO + shadows', () => g.uOccOn.value > 0.5,
+            on => { g.uOccOn.value = on ? 1 : 0; }),
+          { name: 'framerate target', value: () => rateState.target + 'Hz',
+            adjust: () => {
+              rateState.target = rateState.target === 90 ? 72 : 90;
+              drawRate();
+              applyRate(renderer.xr.getSession());
+            } },
+          { name: 'tuning', value: () => '>', adjust: () => vrMenu.setPage('tuning') },
+        ],
+        tuning: [
+          { name: 'debug view', value: () => viewNames[g.uDebugMode.value],
+            adjust: d => {
+              g.uDebugMode.value = wrap(g.uDebugMode.value, 6, d);
+              matsys.setDebugCompiled(g.uDebugMode.value > 0); // rebuild hitch, expected
+            } },
+          mkToggle('lightmap', () => g.uUseLightmap.value > 0.5,
+            on => matsys.setUseLightmap(on)),
+          mkToggle('dyn shadows', () => g.uOccShadow.value > 0.001,
+            on => { g.uOccShadow.value = on ? 0.85 : 0; }),
+          { name: 'portal hops (glass)', value: () => String(g.uMaxSteps.value),
+            adjust: d => { g.uMaxSteps.value = wrap(g.uMaxSteps.value, 7, d); } },
+          { name: 'blob hops', value: () => String(g.uOccHops.value),
+            adjust: d => { g.uOccHops.value = wrap(g.uOccHops.value, 5, d); } },
+          { name: 'exposure EV', value: () => Math.log2(g.uExposure.value).toFixed(2),
+            adjust: d => {
+              let ev = Math.log2(g.uExposure.value) + d * 0.25;
+              if (ev > 2) ev = -5; // clicks cycle; stick still goes both ways
+              g.uExposure.value = Math.pow(2, ev);
+            } },
+          mkToggle('portal wires', () => wires.visible, on => { wires.visible = on; }),
+          mkToggle('portal culling', () => culler.enabled, on => { culler.enabled = on; }),
+          { name: 'perf batch', value: () => (perf.batch || perf.sweep) ? 'RUNNING' : 'run',
+            adjust: () => {
+              if (perf.batch || perf.sweep) perf.cancelBatch();
+              else { const b = perf.batchSetup(); perf.startBatch(b.configs, b.restore); }
+            } },
+          { name: 'back', value: () => '<', adjust: () => vrMenu.setPage('main') },
+        ],
+      });
     }
     for (const i of [0, 1]) {
       const c = renderer.xr.getController(i);
       rig.add(c);
-      // the menu + prompt ride whichever controller reports LEFT handedness
+      // the menu + prompt ride whichever controller reports LEFT handedness;
+      // handedness also keys the per-hand prop holds
       c.addEventListener('connected', e => {
-        if (e.data && e.data.handedness === 'left' && vrMenu) {
+        if (!e.data) return;
+        c.userData.handed = e.data.handedness;
+        if (e.data.handedness === 'left' && vrMenu) {
           c.add(vrMenu.mesh);
           c.add(vrMenu.prompt);
         }
@@ -903,23 +926,33 @@ void main() {
         c.add(perfLabel);
       }
       c.addEventListener('selectstart', () => {
-        const car = ctrlCarrier(c);
-        const held = props.held;
-        if (held) { // hand-to-hand: take the held prop when this hand is NEAR it
-          // sphere grab, not surface-contact: 0.06 required the hand to be
-          // basically inside the mesh - passing hand to hand fought the user
-          if (!c.userData.holding && held.mesh.position.distanceTo(car.pos) < held.radius + 0.15) {
-            const other = renderer.xr.getController(1 - i);
-            if (other) other.userData.holding = false;
-            props.grabAttach(held, car);
-            c.userData.holding = true;
-          }
+        const key = c.userData.handed || (i === 0 ? 'left' : 'right');
+        // pointing at the open menu: the trigger CLICKS instead of grabbing
+        if (vrMenu && vrMenu.open && vrMenu.hoverRow >= 0 && key === 'right') {
+          vrMenu.click();
           return;
         }
-        const near = props.touch(car.pos, 0.15); // hand near a prop: attach in place
-        if (near) { props.grabAttach(near, car); c.userData.holding = true; return; }
+        if (c.userData.holding) return; // this hand is full
+        const car = ctrlCarrier(c);
+        // sphere grab near the hand (0.15m pad); grabbing a prop the OTHER
+        // hand holds STEALS it - that is the hand-to-hand transfer. Each
+        // hand carries its own prop.
+        const near = props.touch(car.pos, 0.15);
+        if (near) {
+          const prev = props.holderKey(near);
+          if (prev && prev !== key) {
+            const other = renderer.xr.getController(1 - i);
+            if (other) other.userData.holding = false;
+          }
+          props.grabAttach(near, car, key);
+          c.userData.holding = true;
+          return;
+        }
         const p = props.aim(car.pos, car.viewDir, 3.0);
-        if (p) { props.grabBeam(p, car); c.userData.holding = true; }
+        if (p && !props.holderKey(p)) { // ray-grab free props only
+          props.grabBeam(p, car, key);
+          c.userData.holding = true;
+        }
       });
       c.addEventListener('selectend', () => {
         if (!c.userData.holding) return;
@@ -929,7 +962,9 @@ void main() {
     }
   }
   let snapReady = true;
-  let perfBtnReady = true;
+  const menuRay = new THREE.Raycaster();
+  menuRay.layers.enableAll(); // the menu lives on debug layer 3
+  const menuDir = new THREE.Vector3();
   // pooled per-frame vectors + the ray-mode carrier (GC pauses on the Quest
   // browser read as unexplained one-frame drops at a locked 72)
   const heading = new THREE.Vector3();
@@ -980,36 +1015,26 @@ void main() {
         if (Math.abs(x) < 0.3) snapReady = true;
       }
     }
-    // A button (RIGHT hand): toggle the target frame-rate cap between 72
-    // and 90. Left X belongs to the debug menu now; while the menu is open
-    // A drives it instead.
-    let ratePressed = !menuActive &&
-      !!(rightPad && rightPad.buttons && rightPad.buttons[4] && rightPad.buttons[4].pressed);
-    if (menuActive) rateState.ready = false;
-    if (ratePressed && rateState.ready) {
-      rateState.ready = false;
-      rateState.target = rateState.target === 90 ? 72 : 90;
-      drawRate();
-      applyRate(session);
-    }
-    if (!ratePressed) rateState.ready = true;
-    // B/Y button: run/cancel the full perf batch (hold still and keep the
-    // view representative while it runs - it measures what you're looking at)
-    let perfPressed = false;
-    for (const src of session.inputSources) {
-      const b = src.gamepad && src.gamepad.buttons;
-      if (b && b[5] && b[5].pressed) perfPressed = true;
-    }
-    if (perfPressed && perfBtnReady) {
-      perfBtnReady = false;
-      if (perf.batch || perf.sweep) {
-        perf.cancelBatch();
+    // no raw A/B/Y bindings anymore: rate + perf batch live in the menu
+    // (unlabeled mystery buttons read as broken to demo guests). A is the
+    // menu's activate button; X toggles the menu.
+    // hover: the RIGHT hand's ray picks menu rows; trigger clicks them
+    if (vrMenu && vrMenu.open) {
+      let rc = null;
+      for (const j of [0, 1]) {
+        const cc = renderer.xr.getController(j);
+        if (cc && cc.userData.handed === 'right') rc = cc;
+      }
+      if (rc) {
+        rc.getWorldPosition(menuRay.ray.origin);
+        menuDir.set(0, 0, -1).applyQuaternion(rc.getWorldQuaternion(tmpQ));
+        menuRay.ray.direction.copy(menuDir);
+        const hit = menuRay.intersectObject(vrMenu.mesh, false)[0];
+        vrMenu.pointAt(hit && hit.uv ? hit.uv : null);
       } else {
-        const b = perf.batchSetup();
-        perf.startBatch(b.configs, b.restore);
+        vrMenu.pointAt(null);
       }
     }
-    if (!perfPressed) perfBtnReady = true;
     // hull collision on the head position; apply the correction to the rig
     camera.getWorldPosition(headPos);
     player.pos.set(headPos.x, 1.7, headPos.z);
@@ -1031,15 +1056,19 @@ void main() {
       if (spare) { spare.p.copy(tmpV); spare.q.copy(tmpQ); spare.t = now; hist.push(spare); }
       else hist.push({ p: tmpV.clone(), q: tmpQ.clone(), t: now });
     }
-    const holder = [0, 1].map(i => renderer.xr.getController(i)).find(c => c && c.userData.holding);
-    if (holder) {
-      xrCarrier = ctrlCarrier(holder);
-    } else {
-      rayCarrier.pos = player.pos;
-      rayCarrier.vel.set(0, 0, 0);
-      rayCarrier.eye.copy(headPos);
-      xrCarrier = rayCarrier;
+    // per-hand carriers: each holding hand drives its own prop
+    props.carriers.left = null;
+    props.carriers.right = null;
+    for (const j of [0, 1]) {
+      const cc = renderer.xr.getController(j);
+      if (cc && cc.userData.holding) {
+        props.carriers[cc.userData.handed || (j === 0 ? 'left' : 'right')] = ctrlCarrier(cc);
+      }
     }
+    rayCarrier.pos = player.pos;
+    rayCarrier.vel.set(0, 0, 0);
+    rayCarrier.eye.copy(headPos);
+    xrCarrier = rayCarrier; // fallback only (desktop-key holds don't exist in VR)
   }
 
   const occActive = new Set();

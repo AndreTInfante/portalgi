@@ -30,8 +30,11 @@ export class Props {
     this.level = level;
     this.matsys = matsys;
     this.physics = physics;
-    this.held = null;
-    this.hold = null; // attach state for the held prop: hand-space offsets + beam progress
+    // one hold per hand: key 'desktop' | 'left' | 'right' -> { p, hold }
+    // (hold = hand-space offsets + beam progress). VR carries a prop in
+    // EACH hand; desktop only ever uses its one slot.
+    this.holds = new Map();
+    this.carriers = {}; // per-key carriers, refreshed by main each frame (VR)
     // cannon 'collide' events feed the impact audio (with the per-prop cooldown)
     this.impactCb = (p, speed) => {
       if (!this.onImpact) return;
@@ -82,28 +85,46 @@ export class Props {
     }
   }
 
+  // legacy single-held view (desktop paths, crosshair checks): first hold
+  get held() {
+    for (const h of this.holds.values()) return h.p;
+    return null;
+  }
+
+  holderKey(p) {
+    for (const [k, h] of this.holds) if (h.p === p) return k;
+    return null;
+  }
+
+  _carrierFor(key, fallback) {
+    return key === 'desktop' ? fallback : (this.carriers[key] || fallback);
+  }
+
   // carrier: { pos, quat (Quaternion|null), viewDir, vel, eye?, mode? }.
   // mode 'attach' = rigid follow via hand-space offsets (VR controllers);
   // anything else = the desktop ray-carry spring. The desktop Player instance
-  // itself is a valid carrier (no quat/mode -> ray path).
+  // itself is a valid carrier (no quat/mode -> ray path). VR hands' carriers
+  // arrive via this.carriers (per key), refreshed by main each frame.
   update(dt, carrier) {
-    // kinematic bodies (the held prop) do not wake sleeping dynamics on
+    // kinematic bodies (held props) do not wake sleeping dynamics on
     // contact in cannon - after a while everything sleeps and the held prop
-    // ghosts through it. Nudge sleepers awake as the held prop approaches.
-    if (this.held && this.held.body) {
-      const hp = this.held.mesh.position;
+    // ghosts through it. Nudge sleepers awake as any held prop approaches.
+    for (const h of this.holds.values()) {
+      if (!h.p.body) continue;
+      const hp = h.p.mesh.position;
       for (const q of this.list) {
-        if (q === this.held || !q.body) continue;
+        if (this.holderKey(q) || !q.body) continue;
         if (q.body.sleepState === CANNON.Body.SLEEPING) {
-          const reach = this.held.radius + q.radius + 0.25;
+          const reach = h.p.radius + q.radius + 0.25;
           if (hp.distanceToSquared(q.mesh.position) < reach * reach) q.body.wakeUp();
         }
       }
     }
     if (this.physics) this.physics.step(dt);
     for (const p of this.list) {
-      if (p === this.held) {
-        this.updateHeld(p, dt, carrier);
+      const key = this.holderKey(p);
+      if (key) {
+        this.updateHeld(p, dt, this._carrierFor(key, carrier), this.holds.get(key).hold);
         if (p.body) { // kinematic body follows the carried mesh and pushes others
           p.body.position.copy(p.mesh.position);
           p.body.quaternion.copy(p.mesh.quaternion);
@@ -127,9 +148,8 @@ export class Props {
 
   // gravity is off while held, but collide() still runs so held props can't
   // clip walls. p.vel tracks the carry displacement so wall response works.
-  updateHeld(p, dt, carrier) {
+  updateHeld(p, dt, carrier, h) {
     const step = Math.min(dt, 0.05);
-    const h = this.hold;
     if (carrier.mode === 'attach' && carrier.quat && h) {
       const target = h.offPos.clone().applyQuaternion(carrier.quat).add(carrier.pos);
       if (h.beamT < 1) {
@@ -258,71 +278,85 @@ export class Props {
     p.body.wakeUp();
   }
 
-  grab(p) { this.held = p; this.hold = null; this._bodyHold(p); }
+  // claim p for `key`, stealing it from another hand if needed
+  _take(p, key) {
+    const prev = this.holderKey(p);
+    if (prev) this.holds.delete(prev);
+    this._bodyHold(p);
+  }
+
+  grab(p, key = 'desktop') {
+    this._take(p, key);
+    this.holds.set(key, { p, hold: null });
+  }
 
   // rigid attach preserving the current hand-relative pose (direct VR grab,
   // hand-to-hand transfer): no snap-to-center
-  grabAttach(p, carrier) {
-    if (!carrier || !carrier.quat) return this.grab(p);
-    this.held = p;
-    this._bodyHold(p);
+  grabAttach(p, carrier, key = 'desktop') {
+    if (!carrier || !carrier.quat) return this.grab(p, key);
+    this._take(p, key);
     const inv = carrier.quat.clone().invert();
-    this.hold = {
+    this.holds.set(key, { p, hold: {
       offPos: p.mesh.position.clone().sub(carrier.pos).applyQuaternion(inv),
       offQuat: inv.clone().multiply(p.mesh.quaternion),
       beamT: 1, beamDur: 1,
       beamFrom: new THREE.Vector3(),
-    };
+    } });
   }
 
   // tractor beam: timed pull to HOLD_DIST in front of the hand, ending in a
   // rigid attach (offQuat is latched when the beam lands)
-  grabBeam(p, carrier) {
-    if (!carrier || !carrier.quat) return this.grab(p);
-    this.held = p;
-    this._bodyHold(p);
+  grabBeam(p, carrier, key = 'desktop') {
+    if (!carrier || !carrier.quat) return this.grab(p, key);
+    this._take(p, key);
     const dist = p.mesh.position.distanceTo(carrier.pos);
-    this.hold = {
+    this.holds.set(key, { p, hold: {
       offPos: new THREE.Vector3(0, 0, -HOLD_DIST),
       offQuat: new THREE.Quaternion(),
       beamT: 0,
       beamDur: THREE.MathUtils.clamp(0.25 + dist * 0.07, 0.3, 0.5),
       beamFrom: p.mesh.position.clone(),
-    };
+    } });
   }
 
   throwHeld(dir, playerVel) {
-    if (!this.held) return;
-    this.held.vel.copy(dir).multiplyScalar(9).add(playerVel);
+    const h = this.holds.get('desktop');
+    if (!h) return;
+    h.p.vel.copy(dir).multiplyScalar(9).add(playerVel);
     // a touch of spin makes thrown props read as free bodies immediately
-    this._bodyFree(this.held, this.held.vel, 4);
-    this.held = null;
-    this.hold = null;
+    this._bodyFree(h.p, h.p.vel, 4);
+    this.holds.delete('desktop');
   }
 
   dropHeld() {
-    if (!this.held) return;
-    this.held.vel.multiplyScalar(0.2);
-    this._bodyFree(this.held, this.held.vel, 0); // no spin: drops should be calm
-    this.held = null;
-    this.hold = null;
+    const h = this.holds.get('desktop');
+    if (!h) return;
+    h.p.vel.multiplyScalar(0.2);
+    this._bodyFree(h.p, h.p.vel, 0); // no spin: drops should be calm
+    this.holds.delete('desktop');
+  }
+
+  dropAll() { // session end: park everything in place
+    for (const [key, h] of this.holds) {
+      h.p.vel.multiplyScalar(0.2);
+      this._bodyFree(h.p, h.p.vel, 0);
+    }
+    this.holds.clear();
   }
 
   // VR release: the hand's tracked world velocity carries the throw.
   // angVel (rad/s, optional): the wrist's real angular velocity - the prop
   // leaves spinning the way the hand was turning instead of with random spin
-  release(vel, angVel = null) {
-    if (!this.held) return;
-    this.held.vel.copy(vel);
+  release(vel, angVel = null, key = 'desktop') {
+    const h = this.holds.get(key);
+    if (!h) return;
+    h.p.vel.copy(vel);
     if (angVel) {
-      this._bodyFree(this.held, vel, 0);
-      if (this.held.body) {
-        this.held.body.angularVelocity.set(angVel.x, angVel.y, angVel.z);
-      }
+      this._bodyFree(h.p, vel, 0);
+      if (h.p.body) h.p.body.angularVelocity.set(angVel.x, angVel.y, angVel.z);
     } else {
-      this._bodyFree(this.held, vel, 1.5);
+      this._bodyFree(h.p, vel, 1.5);
     }
-    this.held = null;
-    this.hold = null;
+    this.holds.delete(key);
   }
 }

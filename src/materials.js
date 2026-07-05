@@ -211,6 +211,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     mat.userData.mode = mode;
     mat.userData.matte = !!opts.matte;
     mat.userData.hop1 = hop1;
+    mat.userData.spec0 = mat.uniforms.uSpecBoost.value; // setSpecular restore
     // statics boot with the pre-lightmap fallback compiled in; setUseLightmap
     // strips it (and its register pressure) once the lightmap exists
     if (mode === 0 && !lightmapOn) mat.defines = { LM_FALLBACK: '' };
@@ -265,7 +266,19 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     mat.uniforms.uLightCount.value = n;
   }
 
-  return { globals, makeMaterial, setMaterialCell, setUseLightmap, setDebugCompiled, allMaterials, occ, texOcc };
+  // demo lever: kill/restore ALL surface specular (per-material uSpecBoost
+  // values differ - floors are boosted - so restore from userData.spec0).
+  // Glass/pane don't read uSpecBoost: the balls keep reflecting, the lever
+  // is about SURFACE reflections.
+  function setSpecular(on) {
+    sys.specularOn = on;
+    for (const m of allMaterials) {
+      if (m.uniforms.uSpecBoost) m.uniforms.uSpecBoost.value = on ? m.userData.spec0 : 0;
+    }
+  }
+  const sys = { globals, makeMaterial, setMaterialCell, setUseLightmap, setDebugCompiled,
+    setSpecular, specularOn: true, allMaterials, occ, texOcc };
+  return sys;
 }
 
 // Instantiate all static level meshes into the scene (layer 0 = baked/static).

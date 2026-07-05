@@ -73,6 +73,6 @@ export class PortalCuller {
     }
     const vis = this.visible;
     for (const m of staticGroup.children) m.visible = vis.has(m.userData.cell);
-    for (const p of props.list) p.mesh.visible = vis.has(p.cell) || p === props.held;
+    for (const p of props.list) p.mesh.visible = vis.has(p.cell) || !!props.holderKey(p);
   }
 }

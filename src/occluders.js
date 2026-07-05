@@ -41,29 +41,28 @@ export function buildOccluderGroup(numCells) {
   const group = new THREE.UniformsGroup();
   group.setName('OccluderData');
   group.setUsage(THREE.DynamicDrawUsage);
-  // one Uniform per vec4 slot (see HullData note in materials.js)
+  // one Uniform per vec4 slot (see HullData note in materials.js). These
+  // exist purely so three computes the std140 LAYOUT - per-frame data goes
+  // through the packed mirror below, not through Uniform values.
   const mk = n => {
-    const arr = [];
-    for (let i = 0; i < n; i++) {
-      const u = new THREE.Uniform(new THREE.Vector4());
-      arr.push(u);
-      group.add(u);
-    }
-    return arr;
+    for (let i = 0; i < n; i++) group.add(new THREE.Uniform(new THREE.Vector4()));
   };
   // add() order defines the std140 layout: must match the GLSL block.
   // firstSphere/count/group pack into color.w (17 bits, float-exact).
   // NOTE: no cell-level aggregate volume - entries touch the floor, so any
   // aggregate containing them contains the floor, and floor-origin rays
   // (the dominant fill) intersect it at t=0. It can never reject them.
-  return {
-    group,
-    numCells,
-    cell: mk(numCells),
-    bound: mk(MAX_OCC_PROPS),
-    color: mk(MAX_OCC_PROPS),
-    sph: mk(MAX_SPHERES),
-  };
+  mk(numCells);        // cell headers
+  mk(MAX_OCC_PROPS);   // bounds
+  mk(MAX_OCC_PROPS);   // colors
+  mk(MAX_SPHERES);     // sphere slots
+  // packed std140 mirror: OccluderSystem writes floats here and the vendored
+  // three patch uploads it as ONE orphaning bufferData call per frame. The
+  // stock per-uniform path did ~200 tiny bufferSubData writes into an
+  // in-flight buffer whenever props moved (measured as movement-only drops)
+  const fast = new Float32Array((numCells + MAX_OCC_PROPS * 2 + MAX_SPHERES) * 4);
+  group.userData = { fastArray: fast };
+  return { group, numCells, fast };
 }
 
 // Automatic fit: one CAPSULE per submesh bounding box - elongated boxes get
@@ -303,6 +302,12 @@ export class OccluderSystem {
     for (const s of this.statics) {
       push(s.cell, { world: s.world, col: s.col, group: s.group });
     }
+    // pack straight into the std140 mirror (see buildOccluderGroup): layout
+    // is [cell headers | bounds | colors | sphere slots], all vec4
+    const F = occ.fast;
+    const B0 = occ.numCells * 4;
+    const C0 = (occ.numCells + MAX_OCC_PROPS) * 4;
+    const S0 = (occ.numCells + MAX_OCC_PROPS * 2) * 4;
     let pi = 0, si = 0;
     for (let c = 0; c < occ.numCells; c++) {
       const list = byCell.get(c);
@@ -328,20 +333,27 @@ export class OccluderSystem {
               Math.hypot(wa.x - cx, wa.y - cy, wa.z - cz) + wa.w,
               Math.hypot(wb.x - cx, wb.y - cy, wb.z - cz) + wa.w);
           }
-          occ.bound[pi].value.set(cx, cy, cz, rb);
+          let o = B0 + pi * 4;
+          F[o] = cx; F[o + 1] = cy; F[o + 2] = cz; F[o + 3] = rb;
           // color.w packs group (6b) | sphereCount (3b) | firstSlot (rest)
-          occ.color[pi].value.set(e.col[0], e.col[1], e.col[2],
-            e.group + n * 64 + si * 512);
+          o = C0 + pi * 4;
+          F[o] = e.col[0]; F[o + 1] = e.col[1]; F[o + 2] = e.col[2];
+          F[o + 3] = e.group + n * 64 + si * 512;
           for (const [wa, wb] of e.world) {
-            occ.sph[si++].value.copy(wa);
-            occ.sph[si++].value.copy(wb);
+            o = S0 + si * 4;
+            F[o] = wa.x; F[o + 1] = wa.y; F[o + 2] = wa.z; F[o + 3] = wa.w;
+            si++;
+            o = S0 + si * 4;
+            F[o] = wb.x; F[o + 1] = wb.y; F[o + 2] = wb.z; F[o + 3] = wb.w;
+            si++;
           }
           pi++;
           count++;
           if (e.dyn) dynCount++;
         }
       }
-      occ.cell[c].value.set(first, count, dynCount, 0);
+      const oc = c * 4;
+      F[oc] = first; F[oc + 1] = count; F[oc + 2] = dynCount; F[oc + 3] = 0;
     }
   }
 }

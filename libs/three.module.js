@@ -28157,6 +28157,22 @@ function WebGLUniformsGroups( gl, info, capabilities, state ) {
 	function updateBufferData( uniformsGroup ) {
 
 		const buffer = buffers[ uniformsGroup.id ];
+
+		// PortalGI vendored patch: a group carrying a packed std140 mirror
+		// uploads it as ONE orphaning bufferData call. The stock path below
+		// issues one bufferSubData per changed uniform (~200 tiny writes for
+		// the per-frame occluder block) into a buffer the GPU may still be
+		// reading - a classic tiler sync stall (frame drops only while props
+		// moved). bufferData reallocation hands the driver fresh storage.
+		if ( uniformsGroup.userData && uniformsGroup.userData.fastArray ) {
+
+			gl.bindBuffer( gl.UNIFORM_BUFFER, buffer );
+			gl.bufferData( gl.UNIFORM_BUFFER, uniformsGroup.userData.fastArray, gl.DYNAMIC_DRAW );
+			gl.bindBuffer( gl.UNIFORM_BUFFER, null );
+			return;
+
+		}
+
 		const uniforms = uniformsGroup.uniforms;
 		const cache = uniformsGroup.__cache;
 

@@ -545,7 +545,7 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   return /* glsl */`
 precision highp float;
@@ -565,6 +565,7 @@ uniform float uRoughFactor;
 uniform float uMetalFactor;
 uniform float uSpecBoost;
 uniform MP sampler2D uLightmap;
+${texOcc && STATIC ? '// texture-space occlusion layer over the lightmap UVs (dynocc.js)\nuniform MP sampler2D uDynOcc;' : ''}
 uniform float uUseLightmap;
 uniform int uCell;
 uniform int uCellPrev;    // previous cell during a diffuse handoff crossfade (-1 = none)
@@ -724,7 +725,15 @@ ${PROP ? /* glsl */`
   diffuseL = texture(uLightmap, vUv2).rgb;
 #endif
 `}
-${useUbo ? /* glsl */`
+${useUbo ? (texOcc && STATIC ? /* glsl */`
+  // texture-space occlusion (dynocc.js): every capsule's contact AO and
+  // shadow for STATIC receivers is pre-evaluated per lightmap texel into a
+  // quarter-res layer - one bilinear tap replaces both capsule loops (and
+  // their register pressure; matte walls become pure texture fill). Bonus:
+  // the splat is global world-space, so shadows no longer clip at portal
+  // planes and need no view-range pop-in gating.
+  if (uOccOn > 0.5) diffuseL *= texture(uDynOcc, vUv2).r;
+` : /* glsl */`
   // live contact AO from the occluder capsules (props AND proxied statics -
   // the statics cast nothing in the lightmap by design; dyn entries fade
   // with dynFade inside)
@@ -738,7 +747,7 @@ ${useUbo ? /* glsl */`
       diffuseL *= mix(1.0, capsuleShadow(uCell, P, Ng), dynFade);
     }
   }
-` : ''}
+`) : ''}
   MP vec3 F0 = mix(vec3(0.04), albedo, metal);
   color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
   ${STATIC ? 'if (uBake < 0.5) {' : '{'}  // split-sum: prefiltered radiance - env BRDF

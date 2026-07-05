@@ -15,6 +15,10 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // fp16 experiment: mediump on the provably-safe shader surface (see the
   // halfp note in shaders.js). ?fp16=0 compiles everything highp for A/B.
   const fp16 = sysOpts.fp16 !== false;
+  // texture-space occlusion (dynocc.js): statics read one uDynOcc tap instead
+  // of compiling the capsule AO/shadow loops. ?texocc=0 restores the analytic
+  // path for A/B (and as the escape hatch if the layer misbehaves on-device).
+  const texOcc = sysOpts.texOcc !== false;
   // one pruned program per material mode (statics carry no probe code, props
   // no lightmap code, glass/pane almost nothing) - the single uber-program
   // capped wave occupancy at a measured 52%
@@ -23,8 +27,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // shipping programs carry none of that register pressure
   let debugCompiled = false;
   const fragFor = (m, dbg = debugCompiled, matte = false) => {
-    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16));
+    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc));
   };
 
   let hullGroup = null;
@@ -56,6 +60,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     uAtlas: { value: atlasTex },
     uHullTex: { value: hullTex },
     uLightmap: { value: blackTex }, // swapped in once the path-traced bake lands
+    uDynOcc: { value: flatOrm },    // white until DynOccLayer swaps its RT in
     uUseLightmap: { value: 0.0 },
     uMaxSteps: { value: 3 },
     uRoughHops: { value: 1.0 },
@@ -200,7 +205,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     mat.uniforms.uLightCount.value = n;
   }
 
-  return { globals, makeMaterial, setMaterialCell, setUseLightmap, setDebugCompiled, allMaterials, occ };
+  return { globals, makeMaterial, setMaterialCell, setUseLightmap, setDebugCompiled, allMaterials, occ, texOcc };
 }
 
 // Instantiate all static level meshes into the scene (layer 0 = baked/static).

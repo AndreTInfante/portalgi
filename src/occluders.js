@@ -165,7 +165,7 @@ export class OccluderSystem {
           : t ? [t.x * 0.5, t.y * 0.5, t.z * 0.5] : [0.35, 0.33, 0.3];
         // occlusion group: "an occluder never occludes the surfaces it
         // approximates". All of a prop's materials share one group
-        const group = this._nextGroup++;
+        const group = this._takeGroup();
         for (const m of p.mats) {
           if (m.uniforms && m.uniforms.uOccSelf) m.uniforms.uOccSelf.value = group;
         }
@@ -192,8 +192,19 @@ export class OccluderSystem {
   // reflections. Materials without groups (floors, walls) skip nothing.
   _groupOf(mat) {
     if (!mat || !mat.uniforms || !mat.uniforms.uOccSelf) return 0;
-    if (mat.uniforms.uOccSelf.value < 1) mat.uniforms.uOccSelf.value = this._nextGroup++;
+    if (mat.uniforms.uOccSelf.value < 1) mat.uniforms.uOccSelf.value = this._takeGroup();
     return mat.uniforms.uOccSelf.value;
+  }
+
+  // group ids pack into 6 bits of color.w - overflowing 63 would silently
+  // corrupt the sphereCount bits (agent-flagged). Clamping to 63 merely
+  // over-shares one group (some false self-skips), which degrades gracefully
+  _takeGroup() {
+    if (this._nextGroup > 63) {
+      console.error('occluders: group id space exhausted (>63); sharing group 63');
+      return 63;
+    }
+    return this._nextGroup++;
   }
 
   // static exhibit mesh (world-space geometry): authored local-frame proxies
@@ -325,9 +336,11 @@ export class OccluderSystem {
               si + e.world.length * 2 > MAX_SPHERES) break;
           if (e.dyn) {
             // closest-first capsule budget, spent here so every consumer
-            // (AO / shadows / reflection occlusion) sees the same caster set
+            // (AO / shadows / reflection occlusion) sees the same caster set.
+            // Check-then-commit: charging skipped entries let one oversized
+            // close prop block every smaller one behind it (agent-flagged)
+            if (dynCaps + e.world.length > capsuleBudget) continue; // statics still follow
             dynCaps += e.world.length;
-            if (dynCaps > capsuleBudget) continue; // statics still follow
           }
           // entry-level bounding sphere over both capsule endpoints
           let cx = 0, cy = 0, cz = 0;

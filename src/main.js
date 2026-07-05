@@ -20,6 +20,7 @@ import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
 import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
+import { DynOccLayer } from './dynocc.js';
 import { AudioSystem } from './audio.js';
 import { TouchControls, isTouchDevice } from './touch.js';
 import { PhysicsWorld } from './physics.js';
@@ -144,7 +145,9 @@ async function boot() {
   // ?fp16=0: compile everything highp (A/B for the mediump experiment -
   // desktop ignores mediump entirely, so only the headset can judge it)
   const matsys = createMaterialSystem(level, textures, hullTex, baker.texture,
-    { fp16: params.get('fp16') !== '0' });
+    // ?texocc=0: statics compile the analytic capsule loops instead of the
+    // texture-space occlusion tap (A/B + escape hatch, like fp16)
+    { fp16: params.get('fp16') !== '0', texOcc: params.get('texocc') !== '0' });
   const useLightmap = BAKE || params.get('lm') !== '0';
   const lightmapper = useLightmap ? new Lightmapper(renderer, level, textures, {
     rays: lmSettings.lmrays, iterations: lmSettings.lmit,
@@ -292,6 +295,65 @@ void main() {
       occluders.addStatic(mm, mm.userData.cell, [0.42, 0.4, 0.36]);
     }
   }
+  // texture-space occlusion layer (dynocc.js): statics splat their AO once
+  // (constructed here, AFTER every static occluder group id is assigned);
+  // props re-splat per frame - but only when one actually moved. The dials
+  // stay live for the dyn layer; base-layer dial changes need a reload.
+  const occDialsObj = { ao: 0, aoClamp: 0, shadow: 0 };
+  const occDials = () => {
+    occDialsObj.ao = matsys.globals.uOccAO.value;
+    occDialsObj.aoClamp = matsys.globals.uOccAOClamp.value;
+    occDialsObj.shadow = matsys.globals.uOccShadow.value;
+    return occDialsObj;
+  };
+  let dynOcc = null;
+  if (occluders && matsys.texOcc) {
+    dynOcc = new DynOccLayer(renderer, level, staticGroup);
+    dynOcc.bakeBase(occluders.statics, occDials());
+    matsys.globals.uDynOcc.value = dynOcc.texture;
+  }
+  // agent C: ONE shadow direction per CASTER - the luminance/d2-weighted
+  // average of its cell's lights AT the prop (the same weighting the shader's
+  // capsuleShadow ran per receiver pixel). Following the caster instead of
+  // the receiver's cell also removes the direction snap at portal crossings.
+  const _sdAcc = new THREE.Vector3(), _sdL = new THREE.Vector3(), _sdAxis = new THREE.Vector3();
+  const shadowDirFor = (e) => {
+    const sd = e.shadowDir || (e.shadowDir = new THREE.Vector4());
+    const pos = e.p.mesh.position;
+    const lights = level.cells[e.p.cell].lights;
+    _sdAcc.set(0, 0, 0);
+    let wsum = 0;
+    for (let i = 0; i < Math.min(lights.length, 8); i++) {
+      const l = lights[i];
+      _sdL.set(l.pos[0] - pos.x, l.pos[1] - pos.y, l.pos[2] - pos.z);
+      const d2 = Math.max(_sdL.lengthSq(), 0.25);
+      let w = (0.299 * l.color[0] + 0.587 * l.color[1] + 0.114 * l.color[2]) * l.intensity / d2;
+      if (l.dir) { // spot falloff at the caster (soft 0.08-cos shoulder)
+        const cosO = Math.cos((l.cone || 35) * Math.PI / 180);
+        _sdAxis.set(l.dir[0], l.dir[1], l.dir[2]).normalize();
+        const c = -_sdL.dot(_sdAxis) / Math.sqrt(Math.max(_sdL.lengthSq(), 1e-8));
+        const t = Math.min(Math.max((c - cosO) / 0.08, 0), 1);
+        w *= t * t * (3 - 2 * t);
+      }
+      _sdAcc.addScaledVector(_sdL, w);
+      wsum += w;
+    }
+    if (wsum < 1e-5) { sd.set(0, 1, 0, 0); return; } // span 0 = no shadow
+    _sdAcc.divideScalar(wsum);
+    const len = Math.max(_sdAcc.length(), 1e-4);
+    sd.set(_sdAcc.x / len, _sdAcc.y / len, _sdAcc.z / len, Math.min(len, 3));
+  };
+  const dynEntries = []; // pooled (72x/s)
+  const updateDynOcc = () => {
+    if (!dynOcc) return;
+    dynEntries.length = 0;
+    for (const e of occluders.entries) {
+      if (!e.p.mesh.visible) continue;
+      shadowDirFor(e);
+      dynEntries.push(e);
+    }
+    dynOcc.update(dynEntries, occDials());
+  };
   if (params.has('occluders')) matsys.globals.uOccOn.value = parseFloat(params.get('occluders'));
   if (params.has('occsh')) matsys.globals.uOccShadow.value = parseFloat(params.get('occsh'));
   // dyn-effects budgets by platform (Andre-tuned): Quest is the tightest
@@ -497,6 +559,7 @@ void main() {
     }
     props.update(0.016, player);
     if (occluders) occluders.update();
+    updateDynOcc();
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
     const gl = renderer.getContext();
@@ -893,6 +956,7 @@ void main() {
       // closest-first dyn packing; the capsule budget truncates at pack time
       occluders.update(active, inXR ? headPos : player.pos,
         matsys.globals.uOccBudget.value);
+      updateDynOcc(); // after occluders.update: it reads the fresh e.world
     }
     if (!inXR) {
       player.applyToCamera(camera);

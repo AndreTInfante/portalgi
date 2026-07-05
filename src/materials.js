@@ -19,6 +19,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // of compiling the capsule AO/shadow loops. ?texocc=0 restores the analytic
   // path for A/B (and as the escape hatch if the layer misbehaves on-device).
   const texOcc = sysOpts.texOcc !== false;
+  // portal warp fields (warpfield.js): statics replace the recursive portal
+  // walk with a baked field tap. null (?warp=0) keeps the loop everywhere.
+  const warp = sysOpts.warp || null;
   // one pruned program per material mode (statics carry no probe code, props
   // no lightmap code, glass/pane almost nothing) - the single uber-program
   // capped wave occupancy at a measured 52%
@@ -27,8 +30,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // shipping programs carry none of that register pressure
   let debugCompiled = false;
   const fragFor = (m, dbg = debugCompiled, matte = false) => {
-    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc));
+    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp));
   };
 
   let hullGroup = null;
@@ -61,6 +64,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     uHullTex: { value: hullTex },
     uLightmap: { value: blackTex }, // swapped in once the path-traced bake lands
     uDynOcc: { value: flatOrm },    // white until DynOccLayer swaps its RT in
+    uWarpTex: { value: warp ? warp.texture : blackTex },
+    uWarpMeta: { value: warp ? warp.metaTex : blackTex },
     uUseLightmap: { value: 0.0 },
     uMaxSteps: { value: 3 },
     uRoughHops: { value: 1.0 },

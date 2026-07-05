@@ -3,6 +3,7 @@
 import { atlasGLSL } from './atlas.js';
 import { PLANES_OFF, PORTALS_OFF, PORTAL_STRIDE, PROBE_META_OFF, HULL_TEX_W } from './hulldata.js';
 import { MAX_OCC_PROPS, MAX_SPHERES, MAX_PER_CELL, MAX_SPH_PER_PROP } from './occluders.js';
+import { WARP_ST, WARP_DIR } from './warpfield.js';
 
 // ------------------------------------------------------------------ shared GLSL
 
@@ -455,6 +456,7 @@ ${useUbo ? /* glsl */`
   return acc;
 }
 
+${'' /* warp fields: traceSpecW is appended by warpGlsl() below (separate chunk) */}
 uniform float uIrrBlend;   // meters; 0 disables cross-portal diffuse blending
 
 // Diffuse continuity across portals: each cell captures irradiance from its own
@@ -489,6 +491,143 @@ vec3 blendedIrr(int cell, vec3 P, vec3 N) {
     }
   }
   return acc / wsum;
+}
+`;
+
+// ---------------------------------------------------------------- warp fields
+// Everything beyond the first portal crossing collapses to a baked field tap
+// (warpfield.js): (t_beyond, terminal_id, certainty) per directed portal over
+// rect (s,t) x hemi-oct direction. traceSpecW replaces the recursive walk in
+// STATIC programs - one local hull exit + local occSegment + quadrilinear
+// field tap + ONE far atlas sample; no live registers across an 8-hop loop.
+// Certainty fades toward the local flat sample (parallax-exact at portal
+// silhouettes - the same fallback the loop's edge blend used); the first
+// crossing keeps the loop's exact silhouette-edge blend band. NO fallback
+// loop compiles in: register allocation is per-program (the matte lesson).
+const warpGlsl = (warp) => /* glsl */`
+uniform sampler2D uWarpTex;
+uniform sampler2D uWarpMeta; // 4 texels/directed portal (D = cell*4 + slot)
+// bilinear over the rect within ONE direction-bin tile (clamped half a texel
+// inside: tiles have no borders, neighbors are other direction bins)
+vec3 wtap(vec2 blockPx, vec2 bin, vec2 st) {
+  vec2 px = blockPx + bin * ${WARP_ST}.0
+          + clamp(st * ${WARP_ST}.0, vec2(0.5), vec2(${WARP_ST}.0 - 0.5));
+  return texture(uWarpTex, px * vec2(${(1 / warp.W).toFixed(8)}, ${(1 / warp.H).toFixed(8)})).xyz;
+}
+MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) {
+  vec4 h0 = hfetch(cell, 0);
+  int pc = int(h0.w);
+  for (int j = 0; j < 12; j++) {            // nudge start point inside the hull
+    if (j >= pc) break;
+    vec4 pl = hfetch(cell, ${PLANES_OFF} + j);
+    float d = dot(pl.xyz, pos) + pl.w;
+    if (d < 0.01) pos += pl.xyz * (0.01 - d);
+  }
+  float bestT = 1e8;
+  int bestPlane = -1;
+  for (int j = 0; j < 12; j++) {
+    if (j >= pc) break;
+    vec4 pl = hfetch(cell, ${PLANES_OFF} + j);
+    float dn = dot(pl.xyz, dir);
+    if (dn < -1e-5) {
+      float t = -(dot(pl.xyz, pos) + pl.w) / dn;
+      if (t < bestT) { bestT = t; bestPlane = j; }
+    }
+  }
+  if (bestPlane < 0) bestT = 0.0;
+  vec3 hitP = pos + dir * bestT;
+  float effR = min(1.0, rough * (1.0 + bestT * uDistRough));
+  MP float lod = roughToLod(effR);
+  MP vec3 acc = vec3(0.0);
+  MP float w = 1.0;
+  // local occluder segment (the walk's hop-0 term, the shipping default;
+  // through-portal blobs were already dial-gated off)
+  if (uOccOn > 0.5 && uOccHops > 0.0) {
+    MP vec3 ocol = vec3(0.0);
+    MP float tr = occSegment(cell, pos, dir, bestT, rough, 0.0, dynFade, ocol);
+    if (tr < 0.95) acc += uOccTint * ocol * sampleIrr(cell, -dir);
+    w = tr;
+    if (w < 0.005) return acc;
+  }
+  MP float kFar = 0.0;
+  MP vec3 farS = vec3(0.0);
+  // uMaxSteps == 0 keeps the PCCM-baseline A/B lever meaningful
+  if (uMaxSteps > 0 && bestPlane >= 0) {
+    vec4 h1 = hfetch(cell, 1);
+    if ((int(h1.w) & (1 << bestPlane)) != 0) {
+      int poc = int(h1.x);
+      for (int p = 0; p < 4; p++) {
+        if (p >= poc) break;
+        int base = ${PORTALS_OFF} + p * ${PORTAL_STRIDE};
+        vec4 ph = hfetch(cell, base);
+        if (int(ph.x) != bestPlane) continue;
+        int D = cell * 4 + p;
+        vec4 m0 = texelFetch(uWarpMeta, ivec2(0, D), 0);
+        vec4 m1 = texelFetch(uWarpMeta, ivec2(1, D), 0);
+        vec3 rel = hitP - m0.xyz;
+        vec2 st = vec2(dot(rel, m1.xyz) / m0.w, 0.0);
+        if (st.x <= 0.0 || st.x >= 1.0) continue;  // same plane may carry
+        vec4 m2 = texelFetch(uWarpMeta, ivec2(2, D), 0);
+        st.y = dot(rel, m2.xyz) / m1.w;
+        if (st.y <= 0.0 || st.y >= 1.0) continue;  // another portal
+        // the loop's silhouette-edge blend band, first crossing only (deep
+        // silhouettes get the certainty fade instead)
+        int silMask = int(ph.w + 0.5);
+        float blendD = 1e8;
+        for (int e = 0; e < 4; e++) {
+          if ((silMask & (1 << e)) == 0) continue;
+          vec4 ep = hfetch(cell, base + 1 + e);
+          blendD = min(blendD, dot(ep.xyz, hitP) + ep.w);
+        }
+        float bw = uBlendBase + uBlendRough * effR * max(bestT, 0.3);
+        MP float blendK = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
+        // direction into the portal frame -> hemi-oct uv
+        vec4 m3 = texelFetch(uWarpMeta, ivec2(3, D), 0);
+        vec3 dl = vec3(dot(dir, m1.xyz), dot(dir, m2.xyz), dot(dir, m3.xyz));
+        dl /= (abs(dl.x) + abs(dl.y) + abs(dl.z));
+        vec2 duv = vec2(dl.x + dl.y, dl.x - dl.y) * 0.5 + 0.5;
+        // quadrilinear: bilinear-in-rect at the 2x2 nearest direction bins,
+        // lerped over direction (floors run near-mirror roughness - a single
+        // nearest bin at ${WARP_DIR}x${WARP_DIR} would band visibly)
+        vec2 g = duv * ${WARP_DIR}.0 - 0.5;
+        vec2 g0 = clamp(floor(g), 0.0, ${WARP_DIR}.0 - 2.0);
+        vec2 f = clamp(g - g0, 0.0, 1.0);
+        vec2 blockPx = vec2(m2.w, m3.w);
+        vec3 s00 = wtap(blockPx, g0, st);
+        vec3 s10 = wtap(blockPx, g0 + vec2(1.0, 0.0), st);
+        vec3 s01 = wtap(blockPx, g0 + vec2(0.0, 1.0), st);
+        vec3 s11 = wtap(blockPx, g0 + vec2(1.0, 1.0), st);
+        // smooth consensus over the 2x2 direction bins: taps that disagree
+        // with the HEAVIEST bin's terminal id drop out with their weight, so
+        // dir-bin discontinuities fade continuously (a binary all-agree gate
+        // printed hard 0/1 flips along reflected jamb edges)
+        vec4 wgt = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
+                        (1.0 - f.x) * f.y, f.x * f.y);
+        float id = wgt.x >= max(wgt.y, max(wgt.z, wgt.w)) ? s00.y
+                 : wgt.y >= max(wgt.z, wgt.w) ? s10.y
+                 : wgt.z >= wgt.w ? s01.y : s11.y;
+        vec4 same = vec4(abs(s00.y - id) < 0.5 ? 1.0 : 0.0,
+                         abs(s10.y - id) < 0.5 ? 1.0 : 0.0,
+                         abs(s01.y - id) < 0.5 ? 1.0 : 0.0,
+                         abs(s11.y - id) < 0.5 ? 1.0 : 0.0) * wgt;
+        float wSum = same.x + same.y + same.z + same.w;
+        MP float cert = dot(same, vec4(s00.z, s10.z, s01.z, s11.z)); // disagreeing
+        kFar = blendK * cert;                 // taps count as certainty 0
+        if (kFar > 0.002) {
+          float tB = dot(same, vec4(s00.x, s10.x, s01.x, s11.x)) / wSum;
+          float tTot = bestT + tB;
+          MP float lod2 = roughToLod(min(1.0, rough * (1.0 + tTot * uDistRough)));
+          int term = int(id + 0.5);
+          vec3 endP = hitP + dir * tB;
+          farS = sampleSpec(term, endP - hfetch(term, 0).xyz, lod2);
+        }
+        break;
+      }
+    }
+  }
+  MP vec3 localS = vec3(0.0);
+  if (kFar < 0.998) localS = sampleSpec(cell, hitP - h0.xyz, lod);
+  return acc + w * mix(localS, farS, kFar);
 }
 `;
 
@@ -545,8 +684,12 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
+  // warp fields replace the recursive walk in STATIC programs only: props/
+  // glass/pane are near-mirror small-fill and keep the exact loop; debug
+  // variants keep it too so the step heatmap stays a ground-truth view
+  const WARP = !!warp && STATIC && !matte && !dbg;
   return /* glsl */`
 precision highp float;
 #define MP ${halfp ? 'mediump' : 'highp'}
@@ -588,6 +731,7 @@ ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
 ${traceGlsl(numCells, useUbo, dbg)}
+${WARP ? warpGlsl(warp) : ''}
 ${TONEMAP_GLSL}
 
 // Diffuse for dynamic objects: per-cell irradiance PROBE GRID, trilinear over
@@ -757,7 +901,8 @@ ${useUbo ? (texOcc && STATIC ? /* glsl */`
     // along R - skip the whole hull walk (Tier 1)
     MP vec3 pre = ${matte ? 'sampleIrr(uCell, R)'
       : `(rough > 0.65) ? sampleIrr(uCell, R)
-                              : traceSpec(uCell, P, R, rough, 8, dynFade${dbg ? ', steps' : ''})`};
+                              : ${WARP ? 'traceSpecW(uCell, P, R, rough, dynFade)'
+                                       : `traceSpec(uCell, P, R, rough, 8, dynFade${dbg ? ', steps' : ''})`}`};
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
   }
 `}

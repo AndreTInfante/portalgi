@@ -21,6 +21,7 @@ import { PortalCuller } from './culling.js';
 import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
 import { DynOccLayer } from './dynocc.js';
+import { buildWarpField } from './warpfield.js';
 import { AudioSystem } from './audio.js';
 import { TouchControls, isTouchDevice } from './touch.js';
 import { PhysicsWorld } from './physics.js';
@@ -141,13 +142,17 @@ async function boot() {
   await addStaticModels(level); // static exhibits join the builders BEFORE chart packing
   packLightmapCharts(level, lmSettings.lmden, lmSettings.lmw);
   const hullTex = buildHullTexture(level.cells);
+  // portal warp fields: GPU-bake (t_beyond, terminal id, certainty) per
+  // directed portal at boot - pure hull/portal geometry, ~ms, no artifact
+  // to distribute. ?warp=0 keeps the recursive walk in static programs.
+  const warp = params.get('warp') !== '0' ? buildWarpField(renderer, level, hullTex) : null;
   const baker = new Baker(renderer, level, hullTex);
   // ?fp16=0: compile everything highp (A/B for the mediump experiment -
   // desktop ignores mediump entirely, so only the headset can judge it)
   const matsys = createMaterialSystem(level, textures, hullTex, baker.texture,
     // ?texocc=0: statics compile the analytic capsule loops instead of the
     // texture-space occlusion tap (A/B + escape hatch, like fp16)
-    { fp16: params.get('fp16') !== '0', texOcc: params.get('texocc') !== '0' });
+    { fp16: params.get('fp16') !== '0', texOcc: params.get('texocc') !== '0', warp });
   const useLightmap = BAKE || params.get('lm') !== '0';
   const lightmapper = useLightmap ? new Lightmapper(renderer, level, textures, {
     rays: lmSettings.lmrays, iterations: lmSettings.lmit,

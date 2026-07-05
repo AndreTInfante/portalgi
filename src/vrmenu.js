@@ -94,19 +94,17 @@ export class VRMenu {
     if (!menuBtn) this._nav.menu = true;
     if (!this.open) return false;
 
+    // stick up/down = rows, A/trigger = toggle. Left/right stays SNAP TURN
+    // (menu deliberately does NOT own it - turning while a debug view is up
+    // is how you actually inspect the scene)
     const ra = (rightPad && rightPad.axes) || [];
     const rb = rightPad && rightPad.buttons;
-    const x = ra[2] || 0, y = ra[3] || 0;
+    const y = ra[3] || 0;
     if (Math.abs(y) > 0.6 && this._nav.y) {
       this._nav.y = false;
       this.sel = (this.sel + (y > 0 ? 1 : -1) + this.items.length) % this.items.length;
     }
     if (Math.abs(y) < 0.3) this._nav.y = true;
-    if (Math.abs(x) > 0.6 && this._nav.x) {
-      this._nav.x = false;
-      this.items[this.sel].adjust(x > 0 ? 1 : -1);
-    }
-    if (Math.abs(x) < 0.3) this._nav.x = true;
     const aBtn = !!(rb && rb[4] && rb[4].pressed); // A
     if (aBtn && this._nav.a) { this._nav.a = false; this.items[this.sel].adjust(1); }
     if (!aBtn) this._nav.a = true;
@@ -129,7 +127,7 @@ export class VRMenu {
     ctx.fillText(this.page === 'main' ? 'PortalGI' : 'PortalGI · tuning', 20, 44);
     ctx.font = '21px system-ui';
     ctx.fillStyle = '#7a8699';
-    ctx.fillText('point + trigger to click · stick/A works too · X closes', 20, 76);
+    ctx.fillText('point + trigger · stick: rows, A: toggle · X closes', 20, 76);
     for (let i = 0; i < this.items.length; i++) {
       const it = this.items[i];
       if (i === this.sel) {

@@ -998,8 +998,8 @@ void main() {
         rig.position.addScaledVector(heading, -y * 2.5 * dt);
         rig.position.addScaledVector(right, x * 2.5 * dt);
       }
-      if (src.handedness === 'right' && !menuActive) {
-        if (Math.abs(x) > 0.7 && snapReady) {
+      if (src.handedness === 'right') { // snap turn stays live with the menu
+        if (Math.abs(x) > 0.7 && snapReady) { // open: turn to inspect debug views
           snapReady = false;
           const ang = x > 0 ? -Math.PI / 6 : Math.PI / 6;
           const pivot = new THREE.Vector3(headPos.x, rig.position.y, headPos.z);

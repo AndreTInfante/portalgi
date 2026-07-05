@@ -573,6 +573,8 @@ uniform float uRough;
 uniform vec3 uLightPos[8];
 uniform vec3 uLightColor[8]; // premultiplied by intensity (and crossing weight, for props)
 uniform vec4 uLightDir[8];   // spot axis + cos(outer); w = -2 -> point light
+uniform float uLightLocal[8]; // 1 = the light's HOME cell: only local spots
+                              // feed prop direct (no wall-shadow rays exist)
 uniform int uLightCount;
 uniform float uBake;
 uniform float uExposure;
@@ -700,7 +702,7 @@ ${PROP ? /* glsl */`
   // math matches the lightmapper's (soft 0.08-cos shoulder), unshadowed.
   for (int li = 0; li < 8; li++) {
     if (li >= uLightCount) break;
-    if (uLightDir[li].w < -1.5) continue;
+    if (uLightDir[li].w < -1.5 || uLightLocal[li] < 0.5) continue;
     vec3 Lv = uLightPos[li] - P;
     float ld2 = dot(Lv, Lv);
     vec3 Lnn = Lv * inversesqrt(ld2);

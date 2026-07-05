@@ -154,6 +154,54 @@ export class GeoBuilder {
   get empty() { return this.pos.length === 0; }
 }
 
+// One lightmap chart shared across polygons that live in DIFFERENT builders
+// (each cell keeps its own mesh: correct uCell for the traversal, normal
+// culling - but the ATLAS sees one rect, so sector boundaries land in the
+// chart INTERIOR where every texel is covered, and cannot seam. Andre: the
+// cell partition does not have to partition the lightmap.)
+// items: [{ geo, pts }] convex polys sharing plane normal n.
+// The chart object carries per-geo spans; packLightmapCharts packs it once
+// and writes uv2 into every span.
+export function emitSharedChart(items, n, uvFn) {
+  const first = items[0].pts;
+  const u = V.norm(V.sub(first[1], first[0]));
+  const v = V.norm(V.cross(n, u));
+  const origin = first[0];
+  const locOf = p => [V.dot(V.sub(p, origin), u), V.dot(V.sub(p, origin), v)];
+  let mx = Infinity, my = Infinity, Mx = -Infinity, My = -Infinity;
+  for (const it of items) {
+    for (const p of it.pts) {
+      const l = locOf(p);
+      if (l[0] < mx) mx = l[0]; if (l[0] > Mx) Mx = l[0];
+      if (l[1] < my) my = l[1]; if (l[1] > My) My = l[1];
+    }
+  }
+  const shared = { w: Math.max(Mx - mx, 0.05), h: Math.max(My - my, 0.05), spans: new Map() };
+  for (const it of items) {
+    const geo = it.geo;
+    let pts = it.pts;
+    let nx = 0, ny = 0, nz = 0; // Newell winding test (see polygon())
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      nx += (a[1] - b[1]) * (a[2] + b[2]);
+      ny += (a[2] - b[2]) * (a[0] + b[0]);
+      nz += (a[0] - b[0]) * (a[1] + b[1]);
+    }
+    if (V.dot([nx, ny, nz], n) < 0) pts = pts.slice().reverse();
+    const loc = pts.map(p => {
+      const l = locOf(p);
+      return [l[0] - mx, l[1] - my];
+    });
+    const span = { start: geo.pos.length / 3, count: 0 };
+    shared.spans.set(geo, span);
+    geo.charts.push(shared); // the packer dedupes shared charts by identity
+    for (let i = 1; i < pts.length - 1; i++) {
+      geo._emitTri(span, pts[0], pts[i], pts[i + 1], n,
+        uvFn(pts[0]), uvFn(pts[i]), uvFn(pts[i + 1]), loc[0], loc[i], loc[i + 1]);
+    }
+  }
+}
+
 // Shelf-pack every chart of every builder into one lightmap atlas and write
 // per-vertex uv2. Vertices map to the chart RECT edges, so border texel
 // centers sample the surface half a texel INSIDE the mesh edge - mapping
@@ -165,9 +213,20 @@ export class GeoBuilder {
 export function packLightmapCharts(level, density = 16, atlasW = 1024) {
   const PAD = 2;
   const entries = [];
+  const seenShared = new Set();
   for (const cell of level.cells) {
     for (const [, b] of cell.builders) {
-      for (const ch of b.geo.charts) entries.push({ g: b.geo, ch });
+      for (const ch of b.geo.charts) {
+        // shared charts (emitSharedChart) appear in several builders: pack
+        // the rect ONCE; the uv2 write below covers every span
+        if (ch.spans) {
+          if (seenShared.has(ch)) continue;
+          seenShared.add(ch);
+          entries.push({ g: null, ch });
+        } else {
+          entries.push({ g: b.geo, ch });
+        }
+      }
     }
   }
   for (const e of entries) {
@@ -185,13 +244,16 @@ export function packLightmapCharts(level, density = 16, atlasW = 1024) {
   }
   const atlasH = Math.ceil((y + shelf) / 4) * 4;
   for (const e of entries) {
-    const g = e.g;
-    if (!g.uv2) g.uv2 = new Float32Array((g.pos.length / 3) * 2);
-    for (let i = 0; i < e.ch.count; i++) {
-      const vi = e.ch.start + i;
-      const lx = g.lc[vi * 2] / e.ch.w, ly = g.lc[vi * 2 + 1] / e.ch.h;
-      g.uv2[vi * 2] = (e.x + PAD + lx * e.pw) / atlasW;
-      g.uv2[vi * 2 + 1] = (e.y + PAD + ly * e.ph) / atlasH;
+    // shared charts write uv2 into every participating geo's span
+    const spans = e.ch.spans ? [...e.ch.spans] : [[e.g, e.ch]];
+    for (const [g, sp] of spans) {
+      if (!g.uv2) g.uv2 = new Float32Array((g.pos.length / 3) * 2);
+      for (let i = 0; i < sp.count; i++) {
+        const vi = sp.start + i;
+        const lx = g.lc[vi * 2] / e.ch.w, ly = g.lc[vi * 2 + 1] / e.ch.h;
+        g.uv2[vi * 2] = (e.x + PAD + lx * e.pw) / atlasW;
+        g.uv2[vi * 2 + 1] = (e.y + PAD + ly * e.ph) / atlasH;
+      }
     }
   }
   level.lightmapSize = [atlasW, atlasH];
@@ -447,6 +509,8 @@ export function buildLevel() {
       lights: (LIGHT_DEFS[id] || []).map(l => ({
         pos: l.p.slice(), color: l.c.slice(), intensity: l.i,
         dir: l.d ? l.d.slice() : null, cone: l.cone, // spot: aim axis + outer degrees
+        cell: id, // home cell: only LOCAL spots feed prop direct (no shadow
+                  // rays vs walls - the borrowed sun lit props through them)
       })),
       portals: [],
       builders: new Map(),
@@ -607,8 +671,10 @@ export function buildLevel() {
   // centroid so truncation is identical for all members. Doorway boundaries
   // keep a small step - they are visual breaks anyway. (The path tracer
   // dedups lights globally, so bakes are unaffected.)
+  // open-plan components (cells joined by VIRTUAL portals) drive both the
+  // light-list union below and the merged floor/ceiling meshes later
+  const compMembers = new Map();
   {
-    const orig = cells.map(c => c.lights);
     const comp = cells.map(c => c.id);
     const find = i => (comp[i] === i ? i : (comp[i] = find(comp[i])));
     for (const cell of cells) {
@@ -618,12 +684,15 @@ export function buildLevel() {
         if (a !== b) comp[b] = a;
       }
     }
-    const members = new Map();
     for (const c of cells) {
       const r = find(c.id);
-      if (!members.has(r)) members.set(r, []);
-      members.get(r).push(c.id);
+      if (!compMembers.has(r)) compMembers.set(r, []);
+      compMembers.get(r).push(c.id);
     }
+  }
+  {
+    const orig = cells.map(c => c.lights);
+    const members = compMembers;
     const key = l => l.pos.join(',') + (l.dir ? '|' + l.dir.join(',') : '');
     for (const ids of members.values()) {
       const seen = new Set();
@@ -656,6 +725,36 @@ export function buildLevel() {
   // included), each ceiling, and the furniture colliders become static boxes
   const staticBoxes = [];
 
+  // ---- shared-chart floors/ceilings for open-plan rooms (pillar ring, L
+  // bend): each cell KEEPS its own mesh (correct uCell for the traversal,
+  // normal culling), but their floor polygons share ONE lightmap chart -
+  // sector boundaries land in the chart interior where every texel is
+  // covered, so the diagonal cuts cannot seam. (Andre: the cell partition
+  // does not have to partition the lightmap.)
+  const openPlan = new Set();
+  {
+    const uvf = p => [p[0] * 0.35, p[2] * 0.35];
+    for (const ids of compMembers.values()) {
+      const solid = ids.filter(id => !cells[id].hollow);
+      if (solid.length < 2) continue;
+      for (const id of solid) openPlan.add(id);
+      emitSharedChart(solid.map(id => ({
+        geo: getBuilder(cells[id], 'floor', {
+          mapKey: cells[id].floor.key, roughFactor: cells[id].floor.roughFactor,
+          specBoost: cells[id].floor.specBoost,
+        }),
+        pts: cells[id].fp.map(q => [q[0], cells[id].floorY, q[1]]),
+      })), [0, 1, 0], uvf);
+      const ceilIds = solid.filter(id => !cells[id].sky);
+      if (ceilIds.length) {
+        emitSharedChart(ceilIds.map(id => ({
+          geo: getBuilder(cells[id], 'plasterPlain', { mapKey: 'plasterPlain' }),
+          pts: cells[id].fp.map(q => [q[0], cells[id].ceilY, q[1]]),
+        })), [0, -1, 0], uvf);
+      }
+    }
+  }
+
   // ---- meshes: floors, ceilings, walls (with holes)
   for (const cell of cells) {
     if (cell.hollow) continue; // sky imposter: hull planes only, no geometry
@@ -665,12 +764,16 @@ export function buildLevel() {
     const cb = getBuilder(cell, 'plasterPlain', { mapKey: 'plasterPlain' });
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
     const floorPts = cell.fp.map(p => [p[0], cell.floorY, p[1]]);
-    fb.polygon(floorPts, [0, 1, 0], uvf); // one chart per floor: no lightmap seams inside
+    if (!openPlan.has(cell.id)) {
+      fb.polygon(floorPts, [0, 1, 0], uvf); // one chart per floor: no seams inside
+    }
     // sky cells have no ceiling geometry: the hull ceiling PLANE still exists,
     // so traversal exits up into this cell's cubemap (which sees the sky dome),
     // and bake rays / sun shadow rays pass through the opening unblocked
     if (!cell.sky) {
-      cb.polygon(floorPts.map(p => [p[0], cell.ceilY, p[2]]), [0, -1, 0], uvf);
+      if (!openPlan.has(cell.id)) {
+        cb.polygon(floorPts.map(p => [p[0], cell.ceilY, p[2]]), [0, -1, 0], uvf);
+      }
       const g = cell.probeGrid; // bbox of the footprint (close enough for a lid)
       staticBoxes.push({
         c: [g.min[0] + g.size[0] / 2, cell.ceilY + 0.15, g.min[2] + g.size[2] / 2],

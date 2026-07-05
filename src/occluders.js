@@ -251,7 +251,9 @@ export class OccluderSystem {
   // Only cells a reflection ray can actually start in (visible) or reach in
   // one hop (their portal neighbors, precomputed by the caller) need slots
   // this frame - that is what buys 16 entries/cell inside the UBO budget.
-  update(activeCells) {
+  // viewPos: dynamic entries pack CLOSEST-FIRST to it, so the shader-side
+  // shadow-caster cap (uOccMaxCast) always keeps the most relevant casters.
+  update(activeCells, viewPos = null) {
     const occ = this.occ;
     const byCell = new Map();
     const push = (cellId, item) => {
@@ -274,7 +276,10 @@ export class OccluderSystem {
       }
       // dyn: props pack at the HEAD of each cell's list so the shadow rays
       // can march just them (uOccCell.z) - statics' shadows are baked
-      const item = { world: e.world, col: e.col, group: e.group, dyn: true };
+      const item = {
+        world: e.world, col: e.col, group: e.group, dyn: true,
+        d2: viewPos ? mesh.position.distanceToSquared(viewPos) : 0,
+      };
       push(e.p.cell, item);
       // near a portal, register in the neighbor too: shadows, contact AO and
       // reflection occlusion clipped hard at portal planes when a caster
@@ -304,6 +309,9 @@ export class OccluderSystem {
       const first = pi;
       let count = 0, dynCount = 0;
       if (list) {
+        // dyn entries closest-first (a dozen items - a full sort is nothing);
+        // statics keep their arbitrary order after them
+        list.sort((a, b) => ((b.dyn ? 1 : 0) - (a.dyn ? 1 : 0)) || ((a.d2 || 0) - (b.d2 || 0)));
         for (const e of list) {
           if (count >= MAX_PER_CELL || pi >= MAX_OCC_PROPS ||
               si + e.world.length * 2 > MAX_SPHERES) break;

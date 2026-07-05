@@ -88,6 +88,9 @@ uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
 uniform float uOccAO;      // contact-AO strength from the same capsules
 uniform float uOccShadow;  // dynamic directional shadow strength (capsule shadow rays)
+uniform float uOccMaxCast; // shadow rays march only the closest N dynamic casters
+                           // (the CPU packs them distance-sorted, so a plain
+                           // count cap keeps exactly the most relevant ones)
 uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shades:
                            // an occluder never occludes the surfaces it approximates
 
@@ -143,7 +146,7 @@ float capsuleAO(int cell, vec3 P, vec3 N) {
 // capsule radius widens along the ray and coverage dims as r^2/rw^2, so
 // small or distant occluders fade out instead of printing hard streaks.
 float capsuleShadow(int cell, vec3 P, vec3 N) {
-  int dyn = int(uOccCell[cell].z);
+  int dyn = min(int(uOccCell[cell].z), int(uOccMaxCast));
   if (dyn == 0) return 1.0;
   vec3 acc = vec3(0.0);
   float wsum = 0.0;

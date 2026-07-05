@@ -79,9 +79,9 @@ export async function addStaticModels(level) {
 }
 
 export const MODEL_DEFS = [
-  { slug: 'horse_statue_01', size: 0.85, cell: 10, x: -1.8, z: 21, ped: true },
-  { slug: 'carved_wooden_elephant', size: 0.62, cell: 10, x: 1.8, z: 21, ped: true },
-  { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -1.8, z: 24, ped: true },
+  { slug: 'horse_statue_01', size: 0.85, cell: 10, x: -2.4, z: 20.3, ped: true },
+  { slug: 'carved_wooden_elephant', size: 0.62, cell: 10, x: 2.4, z: 20.3, ped: true },
+  { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -2.4, z: 24.7, ped: true },
   { slug: 'bronze_whale_statue', size: 1.15, cell: 11, x: 6.6, z: 22.5 },
   { slug: 'ceiling_fan', size: 1.0, cell: 10, x: 1.8, z: 24, hangCeil: 4.0 },
   { slug: 'CoffeeCart_01', size: 1.4, cell: 10, x: -2.4, z: 25.6, rotY: Math.PI },

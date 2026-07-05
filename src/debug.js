@@ -91,6 +91,8 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
       'ao', 0, 1.5, 0.01).name('contact AO');
     fo.add({ get sh() { return g.uOccShadow.value; }, set sh(v) { g.uOccShadow.value = v; } },
       'sh', 0, 1, 0.01).name('dyn shadows');
+    fo.add({ get mc() { return g.uOccMaxCast.value; }, set mc(v) { g.uOccMaxCast.value = v; } },
+      'mc', 0, 8, 1).name('shadow casters (closest N)');
     fo.add(op, 'hops', 0, 4, 1).name('LOD (cells of walk)');
     fo.add({ dump: () => {
       const j = JSON.stringify({ density: g.uOccDensity.value,

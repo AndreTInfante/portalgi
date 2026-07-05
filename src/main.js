@@ -821,7 +821,8 @@ void main() {
         }
         active = occActive;
       }
-      occluders.update(active);
+      // closest-first dyn packing keys the shadow-caster cap to the viewer
+      occluders.update(active, inXR ? headPos : player.pos);
     }
     if (!inXR) {
       player.applyToCamera(camera);

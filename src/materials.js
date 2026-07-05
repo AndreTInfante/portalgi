@@ -112,8 +112,15 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     uDebugMode: { value: 0 },
     uOccOn: { value: 1.0 },      // analytic occluders: DEFAULT after the 2026-07-03
                                  // A/B (0.23ms vs 2.1ms for planar smudges, worst view)
-    uOccHops: { value: 1 },     // hop-2 occlusion measured ~0.9ms for through-
-                                // doorway blobs only (GUI dial to restore)
+    uOccHops: { value: 2 },     // through-doorway blobs in the NEXT cell too.
+                                // The old 0.9ms cost was measured when every
+                                // floor pixel ran the multi-hop walk; only
+                                // glass/chrome/pane do now (small fill), and
+                                // hop-1 blobs without it popped in hard at
+                                // cell crossings in the glass sphere (Andre).
+                                // traceSpec1 (floors/props) stays hop-0: its
+                                // second segment compiles no occSegment, and
+                                // rough blur hides the missing far smudges.
     uOccDensity: { value: 1.6 },  // user-tuned 2026-07-04
     uOccWiden: { value: 1.5 },    // user-tuned 2026-07-04   // cone growth per rough-meter: drives spread AND fade
     uOccLod: { value: 2.0 },      // cone-footprint LOD threshold (occSegment)

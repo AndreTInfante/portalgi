@@ -159,10 +159,17 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
   vec3 toL = acc / wsum;
   float len = max(length(toL), 1e-4);
   vec3 dir = toL / len;
-  if (dot(N, dir) <= 0.03) return 1.0; // faces away: lightmap is already dark there
+  // facing fade on the GEOMETRIC normal (callers must not pass the bumped
+  // one): a binary gate on the normal-mapped N punched bright pinpricks
+  // through shadows wherever a bump facet tilted past the threshold
+  float face = smoothstep(0.0, 0.2, dot(N, dir));
+  if (face <= 0.0) return 1.0;
   float span = min(len, 6.0);
   int first = int(uOccCell[cell].x);
-  float trans = 1.0;
+  // single-ray visibility: overlapping volumes block the light ONCE - take
+  // the MAX coverage over capsules, not the product (the product printed
+  // extra darkening wherever authored capsules overlap)
+  float occl = 0.0;
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= dyn) break;
     vec4 b = uOccBound[first + pi];
@@ -198,11 +205,11 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
       // pinprick in the middle of the shadow wherever a prop nearly touched
       // the receiver. Contact AO owns the contact zone; hand off smoothly.
       pen *= smoothstep(0.0, 0.12, s);
-      trans *= 1.0 - pen * min(1.0, (A.w * A.w) / (rw * rw)) * uOccShadow;
+      occl = max(occl, pen * min(1.0, (A.w * A.w) / (rw * rw)));
     }
-    if (trans < 0.1) break;
+    if (occl > 0.95) break;
   }
-  return trans;
+  return 1.0 - occl * face * uOccShadow;
 }
 
 // transmittance through this cell's occluders (CAPSULES: two vec4 slots,
@@ -661,8 +668,10 @@ ${useUbo ? /* glsl */`
   if (uOccOn > 0.5) {
     diffuseL *= capsuleAO(uCell, P, N);
     // dynamic directional shadows: one capsule-marched ray toward the
-    // weighted local light direction ("we have raytracing at home")
-    if (uOccShadow > 0.001) diffuseL *= capsuleShadow(uCell, P, N);
+    // weighted local light direction ("we have raytracing at home").
+    // Ng, NOT the bumped N: bump facets tilting past a facing gate punched
+    // bright acne pinpricks through the shadow interior
+    if (uOccShadow > 0.001) diffuseL *= capsuleShadow(uCell, P, Ng);
   }
 ` : ''}
   vec3 F0 = mix(vec3(0.04), albedo, metal);

@@ -104,7 +104,12 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     uBlendBase: { value: 0.0 }, // sharp reflections get zero-width blend
                                 // (cone footprint is 0; the old 0.04 floor
                                 // over-blurred portals - user-tuned 2026-07-04)
-    uBlendRough: { value: 1.0 }, // ~cone footprint radius per (roughness - meter); silhouette edges only
+    uBlendRough: { value: 0.15 }, // "portal de-aliasing bias" (Andre, 2026-07-05):
+                                  // the blend band exists to anti-alias the
+                                  // partition at silhouette edges, not to model
+                                  // the lobe (linear-in-rough over-blends there
+                                  // on purpose). Re-tuned 1.0 -> 0.15 now that
+                                  // only first crossings blend.
     uDistRough: { value: 1.0 },  // dimensionless: 1 = physical t*rough/d
                                  // angular-footprint growth (was 0.12/m,
                                  // which froze d at ~8m - see traceSpec)

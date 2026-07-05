@@ -61,7 +61,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   f1.add(proxy, 'roughHops').name('rough-scaled hops (glass)');
   f1.add(proxy, 'edgeBlend').name('edge blend');
   f1.add(proxy, 'blendBase', 0, 0.4, 0.01).name('blend width base (m)');
-  f1.add(proxy, 'blendRough', 0, 3, 0.05).name('blend width / rough-m');
+  f1.add(proxy, 'blendRough', 0, 3, 0.05).name('portal de-aliasing bias');
   f1.add(proxy, 'distRough', 0, 2, 0.05).name('rough growth (1=physical)');
   // blendedIrr is compiled into the static program only in lightmap-off
   // fallback mode (shader variants); this dial is inert during normal play

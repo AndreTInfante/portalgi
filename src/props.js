@@ -308,11 +308,20 @@ export class Props {
     this.hold = null;
   }
 
-  // VR release: the hand's tracked world velocity carries the throw
-  release(vel) {
+  // VR release: the hand's tracked world velocity carries the throw.
+  // angVel (rad/s, optional): the wrist's real angular velocity - the prop
+  // leaves spinning the way the hand was turning instead of with random spin
+  release(vel, angVel = null) {
     if (!this.held) return;
     this.held.vel.copy(vel);
-    this._bodyFree(this.held, vel, 1.5);
+    if (angVel) {
+      this._bodyFree(this.held, vel, 0);
+      if (this.held.body) {
+        this.held.body.angularVelocity.set(angVel.x, angVel.y, angVel.z);
+      }
+    } else {
+      this._bodyFree(this.held, vel, 1.5);
+    }
     this.held = null;
     this.hold = null;
   }

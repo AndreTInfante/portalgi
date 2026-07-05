@@ -741,6 +741,105 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
 }
 `;
 
+// Diffuse for dynamic objects: per-cell irradiance PROBE GRID, trilinear over
+// 8 probes. Each probe was convolved at bake time from its own position with
+// the parallax warp applied to the radiance BEFORE the cosine convolution -
+// the correct operation order, so none of the warp-after-convolve artifacts
+// (kernel skew, hull-edge creases) can appear. Convexity guarantees probes
+// see their whole cell: no visibility term needed, no leaking within a cell.
+// (Shared chunk: PROP programs evaluate this in the VERTEX shader - 8
+// scattered atlas taps per PIXEL halved the framerate with a prop at the
+// face; irradiance is low-frequency, per-vertex interpolation is free.)
+const PROBE_GLSL = /* glsl */`
+vec3 probeDiffuse(int cell, vec3 P, vec3 N) {
+  vec4 m0 = hfetch(cell, ${PROBE_META_OFF});
+  vec4 m1 = hfetch(cell, ${PROBE_META_OFF + 1});
+  vec4 m2 = hfetch(cell, ${PROBE_META_OFF + 2});
+  vec3 dims = vec3(m0.w, m1.w, m2.x);
+  vec3 g = clamp((P - m0.xyz) / max(m1.xyz, vec3(1e-4)), 0.0, 1.0) * (dims - 1.0);
+  vec3 g0 = min(floor(g), dims - 2.0);
+  vec3 f = g - g0;
+  ivec3 gi = ivec3(g0 + 0.5);
+  ivec3 di = ivec3(dims + 0.5);
+  vec2 o = octEncode(normalize(N));
+  vec3 sum = vec3(0.0);
+  for (int i = 0; i < 8; i++) {
+    ivec3 c = gi + ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+    float w = mix(1.0 - f.x, f.x, float(i & 1))
+            * mix(1.0 - f.y, f.y, float((i >> 1) & 1))
+            * mix(1.0 - f.z, f.z, float((i >> 2) & 1));
+    if (w < 1e-4) continue;
+    int idx = c.x + di.x * (c.y + di.y * c.z);
+    vec2 base = vec2(PROBE_X + float(idx % PROBES_PER_ROW) * PROBE_TILE + BORDER_PX,
+                     float(cell) * ROW_H + float(idx / PROBES_PER_ROW) * PROBE_TILE + BORDER_PX);
+    sum += w * texture(uAtlas, (base + o * PROBE_S) / ATLAS_SIZE).rgb;
+  }
+  return sum;
+}
+`;
+
+// PROP vertex shader: the prop's LOW-FREQUENCY diffuse - probe irradiance
+// (with the cell-handoff crossfade), contact AO, and capsule shadows - is
+// evaluated per VERTEX and interpolated. Per pixel these were 8-16 scattered
+// atlas taps + three capsule loops; with a held prop filling the view that
+// measured as a halved framerate while full-screen floors held 90 (floors
+// tap two coherent textures). Spot direct (crisp cone edges) and specular
+// stay per-pixel. Vertex normals feed the probe + capsule terms - the
+// geometric normal is exactly what capsuleShadow wants anyway, and bump
+// detail survives in the per-pixel specular.
+export function sceneVertProp(numCells, useUbo = true, halfp = true, occDynCap = 999) {
+  return /* glsl */`
+precision highp float;
+#define MP ${halfp ? 'mediump' : 'highp'}
+attribute vec2 lmuv;
+attribute vec4 tang4;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+varying vec4 vTan;
+varying vec2 vUv;
+varying vec2 vUv2;
+varying vec3 vDiff;
+uniform sampler2D uAtlas;
+uniform int uCell;
+uniform int uCellPrev;
+uniform float uPrevMix;
+// capsuleShadow's weighted light direction reads these (declared here as in
+// the fragment stage; same program, same values)
+uniform vec3 uLightPos[8];
+uniform vec3 uLightColor[8];
+uniform vec4 uLightDir[8];
+uniform int uLightCount;
+${atlasGLSL(numCells)}
+${OCT_GLSL}
+${ATLAS_SAMPLE_GLSL}
+${traceGlsl(numCells, useUbo, false, occDynCap)}
+${PROBE_GLSL}
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorldPos = wp.xyz;
+  vNormal = normalize(mat3(modelMatrix) * normal);
+  vTan = vec4(normalize(mat3(modelMatrix) * tang4.xyz), tang4.w);
+  vUv = uv;
+  vUv2 = lmuv;
+  vec3 dl = probeDiffuse(uCell, wp.xyz, vNormal);
+  if (uPrevMix > 0.001 && uCellPrev >= 0) {
+    dl = mix(dl, probeDiffuse(uCellPrev, wp.xyz, vNormal), uPrevMix);
+  }
+${useUbo ? /* glsl */`
+  MP float dynFade = 1.0 - smoothstep(uOccRange - 2.0, uOccRange, distance(wp.xyz, cameraPosition));
+  if (uOccOn > 0.5) {
+    dl *= capsuleAO(uCell, wp.xyz, vNormal, dynFade);
+    if (uOccShadow > 0.001 && dynFade > 0.0) {
+      dl *= mix(1.0, capsuleShadow(uCell, wp.xyz, vNormal), dynFade);
+    }
+  }
+` : ''}
+  vDiff = dl;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}
+`;
+}
+
 const TONEMAP_GLSL = /* glsl */`
 MP vec3 acesTonemap(MP vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
@@ -794,8 +893,9 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
+  const PVD = pvd && PROP; // prop diffuse arrives from the vertex shader
   // warp fields replace the recursive walk in STATIC programs only: props/
   // glass/pane are near-mirror small-fill and keep the exact loop; debug
   // variants keep it too so the step heatmap stays a ground-truth view
@@ -811,6 +911,7 @@ varying vec3 vNormal;
 varying vec4 vTan;
 varying vec2 vUv;
 varying vec2 vUv2;
+${PVD ? 'varying vec3 vDiff; // probe irradiance x AO x shadow, per vertex' : ''}
 
 uniform sampler2D uAtlas;
 uniform MP sampler2D uMap;     // MP samplers: fetch RESULTS are fp16 (color /
@@ -846,38 +947,7 @@ ${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}
-
-// Diffuse for dynamic objects: per-cell irradiance PROBE GRID, trilinear over
-// 8 probes. Each probe was convolved at bake time from its own position with
-// the parallax warp applied to the radiance BEFORE the cosine convolution -
-// the correct operation order, so none of the warp-after-convolve artifacts
-// (kernel skew, hull-edge creases) can appear. Convexity guarantees probes
-// see their whole cell: no visibility term needed, no leaking within a cell.
-vec3 probeDiffuse(int cell, vec3 P, vec3 N) {
-  vec4 m0 = hfetch(cell, ${PROBE_META_OFF});
-  vec4 m1 = hfetch(cell, ${PROBE_META_OFF + 1});
-  vec4 m2 = hfetch(cell, ${PROBE_META_OFF + 2});
-  vec3 dims = vec3(m0.w, m1.w, m2.x);
-  vec3 g = clamp((P - m0.xyz) / max(m1.xyz, vec3(1e-4)), 0.0, 1.0) * (dims - 1.0);
-  vec3 g0 = min(floor(g), dims - 2.0);
-  vec3 f = g - g0;
-  ivec3 gi = ivec3(g0 + 0.5);
-  ivec3 di = ivec3(dims + 0.5);
-  vec2 o = octEncode(normalize(N));
-  vec3 sum = vec3(0.0);
-  for (int i = 0; i < 8; i++) {
-    ivec3 c = gi + ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
-    float w = mix(1.0 - f.x, f.x, float(i & 1))
-            * mix(1.0 - f.y, f.y, float((i >> 1) & 1))
-            * mix(1.0 - f.z, f.z, float((i >> 2) & 1));
-    if (w < 1e-4) continue;
-    int idx = c.x + di.x * (c.y + di.y * c.z);
-    vec2 base = vec2(PROBE_X + float(idx % PROBES_PER_ROW) * PROBE_TILE + BORDER_PX,
-                     float(cell) * ROW_H + float(idx / PROBES_PER_ROW) * PROBE_TILE + BORDER_PX);
-    sum += w * texture(uAtlas, (base + o * PROBE_S) / ATLAS_SIZE).rgb;
-  }
-  return sum;
-}
+${PROBE_GLSL}
 
 vec3 directLight(vec3 P, vec3 N) {
   vec3 sum = vec3(0.0);
@@ -951,12 +1021,18 @@ ${GLASS ? /* glsl */`
   MP float metal = clamp(orm.b * uMetalFactor, 0.0, 1.0);
   MP float ao = orm.r;
   MP vec3 diffuseL;
-${PROP ? /* glsl */`
+${PVD ? /* glsl */`
+  // probe irradiance + contact AO + capsule shadows arrive interpolated
+  // from the vertex shader (sceneVertProp) - low-frequency terms cost
+  // vertices, not fill
+  diffuseL = vDiff;` : ''}
+${PROP && !PVD ? /* glsl */`
   // probe-grid irradiance with the 0.2s cell-handoff crossfade
   diffuseL = probeDiffuse(uCell, P, N);
   if (uPrevMix > 0.001 && uCellPrev >= 0) {
     diffuseL = mix(diffuseL, probeDiffuse(uCellPrev, P, N), uPrevMix);
-  }
+  }` : ''}
+${PROP ? /* glsl */`
   // analytic SPOT direct on props: the probe grid averages a room's light but
   // cannot represent a narrow beam, so props in a spotlight stayed flat.
   // Point lights (w = -2) skip - their energy is already in the probes. Cone
@@ -982,7 +1058,8 @@ ${PROP ? /* glsl */`
   diffuseL = texture(uLightmap, vUv2).rgb;
 #endif
 `}
-${useUbo ? (texOcc && STATIC ? /* glsl */`
+${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
+  : texOcc && STATIC ? /* glsl */`
   // texture-space occlusion (dynocc.js): every capsule's contact AO and
   // shadow for STATIC receivers is pre-evaluated per lightmap texel into a
   // quarter-res layer - one bilinear tap replaces both capsule loops (and

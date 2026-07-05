@@ -2,7 +2,7 @@
 // parameterized per cell/material. Global uniforms are shared BY IDENTITY across
 // all materials, so flipping e.g. uMaxSteps.value updates the whole scene.
 import * as THREE from 'three';
-import { SCENE_VERT, sceneFrag } from './shaders.js';
+import { SCENE_VERT, sceneFrag, sceneVertProp } from './shaders.js';
 import { buildOccluderGroup } from './occluders.js';
 
 // hull records as a std140 uniform block: the traversal's dependent
@@ -30,6 +30,14 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // PROP programs scan at most this many DYNAMIC casters (props interact
   // with far fewer objects than floors); statics never skipped. ?occdynprop=
   const occDynCap = sysOpts.occDynProp !== undefined ? sysOpts.occDynProp : 4;
+  // prop diffuse per VERTEX (probes + AO + capsule shadows interpolated):
+  // per-pixel these halved the framerate with a held prop at the face.
+  // ?pvd=0 restores per-pixel evaluation for A/B.
+  const pvd = sysOpts.pvd !== false;
+  let propVert = null;
+  const vertFor = m => (m === 4 && pvd)
+    ? (propVert || (propVert = sceneVertProp(numCells, USE_HULL_UBO, fp16, occDynCap)))
+    : SCENE_VERT;
   // one pruned program per material mode (statics carry no probe code, props
   // no lightmap code, glass/pane almost nothing) - the single uber-program
   // capped wave occupancy at a measured 52%
@@ -39,7 +47,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   let debugCompiled = false;
   const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false) => {
     const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap));
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd));
   };
 
   let hullGroup = null;
@@ -139,7 +147,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
       (mode === 0 || (mode === 4 && !sharp));
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
-      vertexShader: SCENE_VERT,
+      vertexShader: vertFor(mode),
       fragmentShader: fragFor(mode, debugCompiled, !!opts.matte, hop1),
       // FrontSide: winding is normal-oriented at emit time; DoubleSide was a
       // crutch that doubled binning/hidden-surface work on tiled GPUs (Tier 1)

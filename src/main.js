@@ -160,6 +160,8 @@ async function boot() {
     // single hop (A/B; hop1 should be pixel-identical to ?hop1=0&steps=1)
     { fp16: params.get('fp16') !== '0', texOcc: params.get('texocc') !== '0',
       hop1: params.get('hop1') !== '0', warp,
+      // ?pvd=0: prop diffuse (probes/AO/shadows) back to per-pixel (A/B)
+      pvd: params.get('pvd') !== '0',
       // ?occdynprop=999 restores uncapped prop-program dyn casters (A/B)
       occDynProp: params.has('occdynprop') ? parseInt(params.get('occdynprop')) : 4 });
   const useLightmap = BAKE || params.get('lm') !== '0';
@@ -313,11 +315,11 @@ void main() {
   // (constructed here, AFTER every static occluder group id is assigned);
   // props re-splat per frame - but only when one actually moved. The dials
   // stay live for the dyn layer; base-layer dial changes need a reload.
-  // layer density divisor vs the lightmap: 2 = half-res (sweeping shadows
-  // crawl less), 4 = quarter. Quest defaults to 4 until the on-device verdict
-  // on half-res cost (?dynres=2 to test); desktop/phones take half now.
+  // layer density divisor vs the lightmap: half-res verified fine on Quest
+  // (Andre 2026-07-05) - Quest/mobile take 2, PC takes FULL res (1).
+  // ?dynres= overrides for A/B.
   const dynDiv = params.has('dynres') ? parseInt(params.get('dynres'))
-    : (navigator.userAgent.includes('OculusBrowser') ? 4 : 2);
+    : (navigator.userAgent.includes('OculusBrowser') || isTouchDevice()) ? 2 : 1;
   // splat penumbra floor ~ 1.5 LAYER texels (scales with the divisor):
   // shadows narrower than a texel dim out instead of aliasing.
   // ?pensoft= overrides (meters; 0 = the old hard-edged splat).
@@ -628,14 +630,60 @@ void main() {
   // ---- WebXR (Quest): VR button, controller grab, stick locomotion
   let xrCarrier = null; // carrier driving the held prop in VR (see props.update)
   const tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), headPos = new THREE.Vector3();
-  // controller world velocity over the last ~120ms of samples: swing throws
-  // need more than a single-frame delta
+  // controller world velocity: PEAK windowed estimate, not the full-window
+  // average. A throw accelerates into release and the hand starts braking at
+  // the exact release moment - averaging first-to-last over 120ms diluted
+  // the peak with the wind-up AND the brake, so throws felt weak
+  // (Andre, 2026-07-05). Try every sub-window ending at the newest sample
+  // (span >= 25ms for noise) and keep the fastest.
   const ctrlVel = c => {
     const h = c && c.userData.hist;
     if (!h || h.length < 2) return new THREE.Vector3();
-    const a = h[0], b = h[h.length - 1];
+    const b = h[h.length - 1];
+    const v = new THREE.Vector3();
+    let best = 0;
+    for (let i = 0; i < h.length - 1; i++) {
+      const span = b.t - h[i].t;
+      if (span < 0.025) break; // entries are time-ordered: rest are shorter
+      const s2 = b.p.distanceToSquared(h[i].p) / (span * span);
+      if (s2 > best) { best = s2; v.subVectors(b.p, h[i].p).divideScalar(span); }
+    }
+    return v;
+  };
+  // wrist angular velocity over the most recent ~50ms (quaternion delta)
+  const _aq = new THREE.Quaternion();
+  const ctrlAngVel = c => {
+    const h = c && c.userData.hist;
+    const w = new THREE.Vector3();
+    if (!h || h.length < 2) return w;
+    const b = h[h.length - 1];
+    let a = h[0];
+    for (let i = h.length - 2; i >= 0; i--) {
+      if (b.t - h[i].t >= 0.04) { a = h[i]; break; }
+    }
     const span = b.t - a.t;
-    return span > 1e-3 ? b.p.clone().sub(a.p).divideScalar(span) : new THREE.Vector3();
+    if (span < 1e-3) return w;
+    _aq.copy(a.q).invert().premultiply(b.q); // world-frame delta rotation
+    const s = Math.sqrt(Math.max(0, 1 - _aq.w * _aq.w));
+    if (s < 1e-4) return w;
+    const ang = 2 * Math.acos(Math.min(1, Math.abs(_aq.w)));
+    return w.set(_aq.x, _aq.y, _aq.z)
+      .multiplyScalar(((_aq.w < 0 ? -1 : 1) * ang) / (s * span));
+  };
+  // release the held prop with the full rigid-body velocity: hand velocity
+  // + omega x r (the prop rides at an offset from the grip - a wrist flick
+  // must carry it), and the wrist's real omega as the departing spin
+  const _twr = new THREE.Vector3(), _twc = new THREE.Vector3();
+  const throwRelease = c => {
+    const p = props.held;
+    const v = ctrlVel(c);
+    const w = ctrlAngVel(c);
+    if (p) {
+      c.getWorldPosition(tmpV);
+      _twr.subVectors(p.mesh.position, tmpV);
+      v.add(_twc.crossVectors(w, _twr));
+    }
+    props.release(v, w);
   };
   const ctrlCarrier = c => {
     c.getWorldPosition(tmpV);
@@ -813,7 +861,7 @@ void main() {
       c.addEventListener('selectend', () => {
         if (!c.userData.holding) return;
         c.userData.holding = false;
-        props.release(ctrlVel(c));
+        throwRelease(c);
       });
     }
   }
@@ -898,17 +946,19 @@ void main() {
     player.collide(level.colliders);
     rig.position.x += player.pos.x - headPos.x;
     rig.position.z += player.pos.z - headPos.z;
-    // per-controller position history (post-locomotion) feeds swing-release throws
+    // per-controller pose history (post-locomotion) feeds swing-release
+    // throws: position for linear velocity, orientation for the wrist omega
     const now = performance.now() * 0.001;
     for (const j of [0, 1]) {
       const cc = renderer.xr.getController(j);
       if (!cc) continue;
       cc.getWorldPosition(tmpV);
+      cc.getWorldQuaternion(tmpQ);
       const hist = cc.userData.hist || (cc.userData.hist = []);
       let spare = null; // recycle expired entries instead of allocating
-      while (hist.length > 2 && now - hist[0].t > 0.12) spare = hist.shift();
-      if (spare) { spare.p.copy(tmpV); spare.t = now; hist.push(spare); }
-      else hist.push({ p: tmpV.clone(), t: now });
+      while (hist.length > 2 && now - hist[0].t > 0.15) spare = hist.shift();
+      if (spare) { spare.p.copy(tmpV); spare.q.copy(tmpQ); spare.t = now; hist.push(spare); }
+      else hist.push({ p: tmpV.clone(), q: tmpQ.clone(), t: now });
     }
     const holder = [0, 1].map(i => renderer.xr.getController(i)).find(c => c && c.userData.holding);
     if (holder) {

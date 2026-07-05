@@ -32,17 +32,22 @@ function makeCanvasTex(size, fill) {
   const ctx = c.getContext('2d');
   const img = ctx.createImageData(size, size);
   const d = img.data;
-  let sr = 0, sg = 0, sb = 0;
+  let sr = 0, sg = 0, sb = 0, mg = 255;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4;
       const [r, g, b] = fill(x / size, y / size, x, y);
       d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255;
       sr += r; sg += g; sb += b;
+      if (g < mg) mg = g;
     }
   }
   ctx.putImageData(img, 0, 0);
   const tex = new THREE.CanvasTexture(c);
+  // min of the G channel: on ORM maps this is the guaranteed-minimum
+  // roughness, which decides MATTE (traversal-free) program eligibility
+  tex.userData = tex.userData || {};
+  tex.userData.minG = mg / 255;
   tex.flipY = false; // keep fill()'s v == uv v (three defaults to flipping canvases)
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -90,9 +95,12 @@ async function loadImg(url) {
 //             photo plaster is far blotchier than clean gallery walls
 //   norFlat   scale normal-map strength toward flat (1 = keep)
 //   roughMul  scale the ORM roughness channel (G); lower = glossier
+//   roughMin  raise the ORM roughness floor - a set whose minimum roughness
+//             (x roughFactor) clears 0.65 compiles the traversal-free MATTE
+//             program, so guaranteed-rough walls stop paying glossy registers
 //   band      paint the baseboard strip over v < 0.045: fn(x, y) -> [r,g,b]
 //   srgb      color texture (compute avg, tag SRGBColorSpace)
-function makeImgTex(img, { tile = 1, target = null, flatten = 1, norFlat = 1, roughMul = 1, band = null, srgb = false } = {}) {
+function makeImgTex(img, { tile = 1, target = null, flatten = 1, norFlat = 1, roughMul = 1, roughMin = 0, band = null, srgb = false } = {}) {
   const size = Math.min(img.width * tile, 2048);
   const c = document.createElement('canvas');
   c.width = c.height = size;
@@ -124,6 +132,10 @@ function makeImgTex(img, { tile = 1, target = null, flatten = 1, norFlat = 1, ro
   if (roughMul !== 1) {
     for (let i = 1; i < d.length; i += 4) d[i] = Math.min(255, d[i] * roughMul);
   }
+  if (roughMin > 0) {
+    const floor = roughMin * 255;
+    for (let i = 1; i < d.length; i += 4) if (d[i] < floor) d[i] = floor;
+  }
   if (band) {
     const rows = Math.round(size * 0.045);
     for (let y = 0; y < rows; y++) {
@@ -139,6 +151,9 @@ function makeImgTex(img, { tile = 1, target = null, flatten = 1, norFlat = 1, ro
   tex.flipY = false;
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.anisotropy = 4;
+  let mg = 255;
+  for (let i = 1; i < d.length; i += 4) if (d[i] < mg) mg = d[i];
+  tex.userData.minG = mg / 255; // ORM maps: guaranteed-minimum roughness (MATTE test)
   if (srgb) {
     tex.colorSpace = THREE.SRGBColorSpace;
     let sr = 0, sg = 0, sb = 0;
@@ -175,17 +190,18 @@ export const REAL_SETS = {
   wood: { slug: 'wood_table_001', res: '2k' },
   concrete: { slug: 'concrete_floor_worn_001', res: '1k', target: [135, 135, 132] },
   // board-formed panels with form ties: wall-styled, so walls only (floors
-  // keep the plain slab above via the concrete/concreteWall key split)
-  concreteWall: { slug: 'concrete_wall_009', res: '2k' },
+  // keep the plain slab above via the concrete/concreteWall key split).
+  // roughMin 0.7: guarantees the MATTE (traversal-free) program for walls
+  concreteWall: { slug: 'concrete_wall_009', res: '2k', roughMin: 0.7 },
   walnut: { slug: 'dark_wood', res: '1k' },
   brick: { slug: 'red_bricks_04', res: '2k' }, // courtyard paving
   // mild flatten reins in the photo's stains without going flat-procedural
-  // (also feeds plasterPlain = ceilings/jambs)
-  plaster: { slug: 'painted_plaster_wall', res: '1k', target: [230, 226, 219], flatten: 0.65, norFlat: 0.7 },
+  // (also feeds plasterPlain = ceilings/jambs). roughMin 0.7 -> MATTE walls
+  plaster: { slug: 'painted_plaster_wall', res: '1k', target: [230, 226, 219], flatten: 0.65, norFlat: 0.7, roughMin: 0.7 },
 };
 
 // AO (R) + roughness (G) images -> one ORM texture (metal = 0)
-function makeOrmTex(aoImg, roughImg, { roughMul = 1 } = {}) {
+function makeOrmTex(aoImg, roughImg, { roughMul = 1, roughMin = 0 } = {}) {
   const size = Math.min(Math.max(aoImg.width, roughImg.width), 2048);
   const grab = img => {
     const c = document.createElement('canvas');
@@ -197,7 +213,7 @@ function makeOrmTex(aoImg, roughImg, { roughMul = 1 } = {}) {
   const ao = grab(aoImg), ro = grab(roughImg);
   const d = ao.d.data, rd = ro.d.data;
   for (let i = 0; i < d.length; i += 4) {
-    d[i + 1] = Math.min(255, rd[i] * roughMul);
+    d[i + 1] = Math.max(Math.min(255, rd[i] * roughMul), roughMin * 255);
     d[i + 2] = 0;
   }
   ao.x.putImageData(ao.d, 0, 0);
@@ -206,6 +222,9 @@ function makeOrmTex(aoImg, roughImg, { roughMul = 1 } = {}) {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.anisotropy = 4;
   tex.colorSpace = THREE.LinearSRGBColorSpace;
+  let mg = 255;
+  for (let i = 1; i < d.length; i += 4) if (d[i] < mg) mg = d[i];
+  tex.userData.minG = mg / 255;
   return tex;
 }
 
@@ -237,7 +256,11 @@ export async function applyRealTextures(textures) {
     ormMap: imgs.length > 3
       ? makeOrmTex(imgs[2], imgs[3], opts)
       : makeImgTex(imgs[2], { tile: opts.tile, roughMul: opts.roughMul,
-          band: opts.band && (() => [255, 115, 0]) }),
+          roughMin: opts.roughMin,
+          // trim band rough 0.72 (was 0.45): the band shares the wall
+          // material, and one glossy pixel would disqualify walls from the
+          // traversal-free MATTE program
+          band: opts.band && (() => [255, 184, 0]) }),
   });
   // baseboard strip painted back over the wall set, matching the procedural one
   const bb = (x, y) => {

@@ -19,9 +19,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   // debug variants compile in the traversal step accumulator + debug views;
   // shipping programs carry none of that register pressure
   let debugCompiled = false;
-  const fragFor = (m, dbg = debugCompiled) => {
-    const k = m + (dbg ? 'd' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg));
+  const fragFor = (m, dbg = debugCompiled, matte = false) => {
+    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte));
   };
 
   let hullGroup = null;
@@ -104,7 +104,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: SCENE_VERT,
-      fragmentShader: fragFor(mode),
+      fragmentShader: fragFor(mode, debugCompiled, !!opts.matte),
       // FrontSide: winding is normal-oriented at emit time; DoubleSide was a
       // crutch that doubled binning/hidden-surface work on tiled GPUs (Tier 1)
       side: THREE.FrontSide,
@@ -134,6 +134,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     });
     if (hullGroup) mat.uniformsGroups = occ ? [hullGroup, occ.group] : [hullGroup];
     mat.userData.mode = mode;
+    mat.userData.matte = !!opts.matte;
     // statics boot with the pre-lightmap fallback compiled in; setUseLightmap
     // strips it (and its register pressure) once the lightmap exists
     if (mode === 0 && !lightmapOn) mat.defines = { LM_FALLBACK: '' };
@@ -167,7 +168,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
     if (on === debugCompiled) return;
     debugCompiled = on;
     for (const m of allMaterials) {
-      m.fragmentShader = fragFor(m.userData.mode, on);
+      m.fragmentShader = fragFor(m.userData.mode, on, m.userData.matte);
       m.needsUpdate = true;
     }
   }
@@ -203,11 +204,19 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
         : o.paintingIndex !== undefined
           ? { map: paintingTexs[o.paintingIndex] } // varnished canvas: flat maps, glossy factor
           : textures[o.mapKey || 'white'];
+      const rf = o.paintingIndex !== undefined ? 0.4 : (o.roughFactor !== undefined ? o.roughFactor : 1);
+      // MATTE eligibility: the set's guaranteed-minimum roughness (tracked on
+      // canvas-processed ORM maps; gltf textures have no minG and stay full)
+      // times the factor must clear the 0.65 irradiance early-out for EVERY
+      // possible pixel - then the program compiles with no traversal at all
+      const minG = set.ormMap && set.ormMap.userData && set.ormMap.userData.minG !== undefined
+        ? set.ormMap.userData.minG : 0;
       const mesh = new THREE.Mesh(b.geo.buildGeometry(), matsys.makeMaterial(cell.id, {
         map: set.map, nrm: set.normalMap, orm: set.ormMap,
-        roughFactor: o.paintingIndex !== undefined ? 0.4 : (o.roughFactor !== undefined ? o.roughFactor : 1),
+        roughFactor: rf,
         metalFactor: o.metalFactor !== undefined ? o.metalFactor : (o.texMap ? 1 : 0),
         specBoost: o.specBoost, tint: o.tint, emissive: o.emissive,
+        matte: minG * rf > 0.65,
       }));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key

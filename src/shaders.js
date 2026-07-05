@@ -168,7 +168,10 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
   // through shadows wherever a bump facet tilted past the threshold
   float face = smoothstep(0.0, 0.2, dot(N, dir));
   if (face <= 0.0) return 1.0;
-  float span = min(len, 6.0);
+  // 3m cap: coverage dims to ~0.13 by then (r^2/rw^2), invisible - and the
+  // shorter segment lets the per-entry bound test reject far more pixels
+  // (the shadow march measured ~2ms at 125->85u; this is the cheap half)
+  float span = min(len, 3.0);
   int first = int(uOccCell[cell].x);
   // single-ray visibility: overlapping volumes block the light ONCE - take
   // the MAX coverage over capsules, not the product (the product printed
@@ -496,7 +499,12 @@ void main() {
 // helper functions are stripped by the GLSL compiler once the CALLS are
 // template-removed. Statics compile their pre-lightmap fallback only under
 // the LM_FALLBACK define (materials toggle it with the lightmap state).
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false) {
+// matte: guaranteed-rough statics (min roughness x factor > 0.65 across the
+// whole ORM set) ALWAYS take the irradiance early-out, so their program
+// compiles with no traversal at all. Register allocation is static per
+// program - without this, wall/ceiling pixels (most fill) ran at
+// glossy-floor occupancy to execute one irradiance tap.
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   return /* glsl */`
 precision highp float;
@@ -685,8 +693,9 @@ ${useUbo ? /* glsl */`
     // very rough surfaces (most wall/ceiling area): the traversal's max-lod
     // result is indistinguishable from one cosine-convolved irradiance tap
     // along R - skip the whole hull walk (Tier 1)
-    vec3 pre = (rough > 0.65) ? sampleIrr(uCell, R)
-                              : traceSpec(uCell, P, R, rough, 8${dbg ? ', steps' : ''});
+    vec3 pre = ${matte ? 'sampleIrr(uCell, R)'
+      : `(rough > 0.65) ? sampleIrr(uCell, R)
+                              : traceSpec(uCell, P, R, rough, 8${dbg ? ', steps' : ''})`};
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
   }
 `}

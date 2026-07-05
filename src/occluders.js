@@ -283,7 +283,7 @@ export class OccluderSystem {
       if (this.level) {
         const cell = this.level.cells[e.p.cell];
         const pos = mesh.position;
-        const margin = e.reach * scale + 1.2;
+        const margin = e.reach * scale + 0.8; // covers AO reach (0.7) + shadow spill
         for (const po of cell.portals) {
           const pl = cell.planes[po.planeIndex];
           if (pl.n.dot(pos) + pl.d > margin) continue; // far from this portal

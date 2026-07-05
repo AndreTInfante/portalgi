@@ -186,6 +186,7 @@ async function boot() {
   if (params.has('steps')) matsys.globals.uMaxSteps.value = parseInt(params.get('steps'));
   if (params.has('rhops')) matsys.globals.uRoughHops.value = parseFloat(params.get('rhops'));
   if (params.has('occd')) matsys.globals.uOccDensity.value = parseFloat(params.get('occd'));
+  if (params.has('occlod')) matsys.globals.uOccLod.value = parseFloat(params.get('occlod'));
   if (params.has('blend')) matsys.globals.uBlendOn.value = parseFloat(params.get('blend'));
   if (params.has('debug')) {
     matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
@@ -984,6 +985,7 @@ void main() {
   }
 
   const occActive = new Set();
+  const occOrder = []; // pooled priority order (visible -> ring1 -> ring2)
   const skyCells = [level.cells.find(c => c.sky).id, level.cells.find(c => c.hollow).id];
   // adaptive quality: sharp periphery (low foveation) + full dyn range in the
   // cheap rooms - most of them - ratcheting up foveation and pulling the dyn
@@ -1046,16 +1048,28 @@ void main() {
     dome.visible = state.baking || !culler.enabled ||
       culler.visible.has(skyCells[0]) || culler.visible.has(skyCells[1]);
     if (occluders && !state.baking) {
-      // occluder slots only for cells reflections can reach this frame:
-      // the visible set plus one ring of portal neighbors (first-hop targets)
+      // occluder slots in PRIORITY order: visible cells, then one ring of
+      // portal neighbors, then a SECOND ring (Andre: blobs popped into deep
+      // sphere reflections as the active set changed - the full march sees
+      // 2-3 portals deep). Slot exhaustion now drops ring 2 first, so the
+      // extra ring only spends what nearer cells left over.
       let active = null;
       if (culler.enabled) {
         occActive.clear();
-        for (const c of culler.visible) {
-          occActive.add(c);
-          for (const po of level.cells[c].portals) occActive.add(po.neighbor);
+        occOrder.length = 0;
+        const pushCell = c => {
+          if (!occActive.has(c)) { occActive.add(c); occOrder.push(c); }
+        };
+        for (const c of culler.visible) pushCell(c);
+        const n1 = occOrder.length;
+        for (let i = 0; i < n1; i++) {
+          for (const po of level.cells[occOrder[i]].portals) pushCell(po.neighbor);
         }
-        active = occActive;
+        const n2 = occOrder.length;
+        for (let i = n1; i < n2; i++) {
+          for (const po of level.cells[occOrder[i]].portals) pushCell(po.neighbor);
+        }
+        active = occOrder;
       }
       // closest-first dyn packing; the capsule budget truncates at pack time
       occluders.update(active, inXR ? headPos : player.pos,

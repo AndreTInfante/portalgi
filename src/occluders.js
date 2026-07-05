@@ -33,7 +33,12 @@ const capToWorld = (v, f) => {
 // frame instead of reserving slots for the whole level: the same bytes now
 // support 16 entries/cell and 8 capsules/entry in the rooms that matter.
 export const MAX_OCC_PROPS = 40;
-export const MAX_SPHERES = 160; // vec4 slots: 80 capsules
+// capsules pack fp16 RELATIVE to their entry's fp32 bound center (offsets
+// <= ~1.5m keep fp16 error under 1mm; absolute coords would quantize at
+// 3cm): one uvec4 per capsule instead of two vec4 - the sphere region
+// halves to 1.28KB of the ~13KB constant-store ceiling (headroom is the
+// scaling axis for more cells)
+export const MAX_OCC_CAPS = 80;
 export const MAX_PER_CELL = 16;
 export const MAX_SPH_PER_PROP = 8;
 
@@ -55,14 +60,15 @@ export function buildOccluderGroup(numCells) {
   mk(numCells);        // cell headers
   mk(MAX_OCC_PROPS);   // bounds
   mk(MAX_OCC_PROPS);   // colors
-  mk(MAX_SPHERES);     // sphere slots
+  mk(MAX_OCC_CAPS);    // capsule slots (uvec4 of fp16 pairs; same 16B layout)
   // packed std140 mirror: OccluderSystem writes floats here and the vendored
   // three patch uploads it as ONE orphaning bufferData call per frame. The
   // stock per-uniform path did ~200 tiny bufferSubData writes into an
   // in-flight buffer whenever props moved (measured as movement-only drops)
-  const fast = new Float32Array((numCells + MAX_OCC_PROPS * 2 + MAX_SPHERES) * 4);
+  const fast = new Float32Array((numCells + MAX_OCC_PROPS * 2 + MAX_OCC_CAPS) * 4);
   group.userData = { fastArray: fast };
-  return { group, numCells, fast };
+  // uint view over the same bytes: the capsule region holds packed halfs
+  return { group, numCells, fast, fastU: new Uint32Array(fast.buffer) };
 }
 
 // Automatic fit: one CAPSULE per submesh bounding box - elongated boxes get
@@ -257,16 +263,24 @@ export class OccluderSystem {
     });
   }
 
-  // activeCells: the culler's visible set, or null for all (bakes, cull=0).
-  // Only cells a reflection ray can actually start in (visible) or reach in
-  // one hop (their portal neighbors, precomputed by the caller) need slots
-  // this frame - that is what buys 16 entries/cell inside the UBO budget.
+  // activeOrder: cell ids in PRIORITY order (visible -> ring 1 -> ring 2,
+  // built by the caller), or null for all cells (bakes, cull=0). Cells pack
+  // in that order, so when entry/sphere slots run out the LEAST important
+  // cells lose their blobs - previously cells packed by id, so a far
+  // low-id cell could starve the room the viewer was standing in.
   // viewPos: dynamic entries pack CLOSEST-FIRST to it. capsuleBudget: dyn
   // entries are TRUNCATED here, at pack time - the budget outcome is
   // deterministic per cell per frame, so spending it in the shader was pure
   // per-pixel waste (and forced the color/meta read before the bound reject)
-  update(activeCells, viewPos = null, capsuleBudget = Infinity) {
+  update(activeOrder = null, viewPos = null, capsuleBudget = Infinity) {
     const occ = this.occ;
+    const activeCells = activeOrder
+      ? (this._activeSet || (this._activeSet = new Set()))
+      : null;
+    if (activeCells) {
+      activeCells.clear();
+      for (const c of activeOrder) activeCells.add(c);
+    }
     // pooled per-frame structures: this runs 72x/s and Quest-browser GC
     // pauses read as unexplained single-frame drops
     const byCell = this._byCell || (this._byCell = new Map());
@@ -323,7 +337,18 @@ export class OccluderSystem {
     const C0 = (occ.numCells + MAX_OCC_PROPS) * 4;
     const S0 = (occ.numCells + MAX_OCC_PROPS * 2) * 4;
     let pi = 0, si = 0;
-    for (let c = 0; c < occ.numCells; c++) {
+    // zero every header first: cells that lose the slot race (or left the
+    // active set) must read count 0, whatever order they pack in
+    F.fill(0, 0, B0);
+    let order = activeOrder;
+    if (!order) {
+      order = this._allOrder || (this._allOrder = []);
+      if (order.length !== occ.numCells) {
+        order.length = 0;
+        for (let c = 0; c < occ.numCells; c++) order.push(c);
+      }
+    }
+    for (const c of order) {
       const list = byCell.get(c);
       const first = pi;
       let count = 0, dynCount = 0, dynCaps = 0;
@@ -333,7 +358,7 @@ export class OccluderSystem {
         list.sort((a, b) => ((b.dyn ? 1 : 0) - (a.dyn ? 1 : 0)) || ((a.d2 || 0) - (b.d2 || 0)));
         for (const e of list) {
           if (count >= MAX_PER_CELL || pi >= MAX_OCC_PROPS ||
-              si + e.world.length * 2 > MAX_SPHERES) break;
+              si + e.world.length > MAX_OCC_CAPS) break;
           if (e.dyn) {
             // closest-first capsule budget, spent here so every consumer
             // (AO / shadows / reflection occlusion) sees the same caster set.
@@ -361,12 +386,16 @@ export class OccluderSystem {
           o = C0 + pi * 4;
           F[o] = e.col[0]; F[o + 1] = e.col[1]; F[o + 2] = e.col[2];
           F[o + 3] = e.group + n * 64 + si * 512;
+          // capsules as fp16 offsets from the entry's fp32 bound center
+          // (uvec4/capsule: (a-c).xy | (a-c).z,r | (b-c).xy | (b-c).z,-)
+          const U = occ.fastU;
+          const hf = THREE.DataUtils.toHalfFloat;
           for (const [wa, wb] of e.world) {
             o = S0 + si * 4;
-            F[o] = wa.x; F[o + 1] = wa.y; F[o + 2] = wa.z; F[o + 3] = wa.w;
-            si++;
-            o = S0 + si * 4;
-            F[o] = wb.x; F[o + 1] = wb.y; F[o + 2] = wb.z; F[o + 3] = wb.w;
+            U[o]     = hf(wa.x - cx) | (hf(wa.y - cy) << 16);
+            U[o + 1] = hf(wa.z - cz) | (hf(wa.w) << 16);
+            U[o + 2] = hf(wb.x - cx) | (hf(wb.y - cy) << 16);
+            U[o + 3] = hf(wb.z - cz);
             si++;
           }
           pi++;

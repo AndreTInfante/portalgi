@@ -2,7 +2,7 @@
 // bake passes use RawShaderMaterial, also GLSL3 (three prepends the version line).
 import { atlasGLSL } from './atlas.js';
 import { PLANES_OFF, PORTALS_OFF, PORTAL_STRIDE, PROBE_META_OFF, HULL_TEX_W } from './hulldata.js';
-import { MAX_OCC_PROPS, MAX_SPHERES, MAX_PER_CELL, MAX_SPH_PER_PROP } from './occluders.js';
+import { MAX_OCC_PROPS, MAX_OCC_CAPS, MAX_PER_CELL, MAX_SPH_PER_PROP } from './occluders.js';
 import { WARP_ST, WARP_DIR } from './warpfield.js';
 
 // ------------------------------------------------------------------ shared GLSL
@@ -83,13 +83,29 @@ vec4 hfetch(int cell, int t) { return uHull[cell * ${HULL_TEX_W} + t]; }
 layout(std140) uniform OccluderData {
   vec4 uOccCell[${numCells}];  // x = first entry, y = count
   vec4 uOccBound[${MAX_OCC_PROPS}];
-  vec4 uOccColor[${MAX_OCC_PROPS}]; // rgb albedo; w packs group|count|firstSlot
-  vec4 uOccSph[${MAX_SPHERES}];
+  vec4 uOccColor[${MAX_OCC_PROPS}]; // rgb albedo; w packs group|count|firstCapsule
+  // fp16 capsules RELATIVE to the entry bound center (uvec4 each:
+  // (a-c).xy | (a-c).z,r | (b-c).xy | (b-c).z,-): half the constant-store
+  // footprint of the old two-vec4 slots, sub-mm error at capsule scale
+  uvec4 uOccSph[${MAX_OCC_CAPS}];
 };
+// decode capsule slot: A = world a-endpoint, Ar = radius, u = b - a
+// (relative offsets cancel the center: u needs no add-back)
+void occCap(int slot, vec3 c, out vec3 A, out float Ar, out vec3 u) {
+  uvec4 h = uOccSph[slot];
+  vec2 h0 = unpackHalf2x16(h.x), h1 = unpackHalf2x16(h.y);
+  vec2 h2 = unpackHalf2x16(h.z), h3 = unpackHalf2x16(h.w);
+  A = c + vec3(h0, h1.x);
+  Ar = h1.y;
+  u = vec3(h2, h3.x) - vec3(h0, h1.x);
+}
 uniform float uOccOn;
 uniform float uOccHops;    // LOD: occluders evaluated for the first N cells of the walk
 uniform float uOccDensity;
 uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
+uniform float uOccLod;     // entry collapses to its bound sphere once cone
+                           // widening exceeds this multiple of the bound
+                           // radius (0 = never; see occSegment)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
 uniform float uOccAO;      // contact-AO strength from the same capsules
 uniform float uOccAOClamp; // AO minimum-distance clamp (m): surfaces never
@@ -132,20 +148,20 @@ MP float capsuleAO(int cell, vec3 P, vec3 N, MP float dynFade) {
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;
-      vec4 A = uOccSph[sf + si * 2];
-      vec3 u = uOccSph[sf + si * 2 + 1].xyz - A.xyz;
+      vec3 Ap, u; float Ar;
+      occCap(sf + si, b.xyz, Ap, Ar, u);
       float cc = dot(u, u);
-      float t = cc > 1e-6 ? clamp(dot(P - A.xyz, u) / cc, 0.0, 1.0) : 0.0;
-      vec3 d = A.xyz + u * t - P;                // to the nearest axis point
+      float t = cc > 1e-6 ? clamp(dot(P - Ap, u) / cc, 0.0, 1.0) : 0.0;
+      vec3 d = Ap + u * t - P;                   // to the nearest axis point
       // surfaces INSIDE a loose capsule (walls poking through a fit) never
       // evaluate closer than the capsule surface + uOccAOClamp: contact stays
       // strong, interior saturation blotches become impossible (GUI-tunable)
-      float d2 = max(dot(d, d), (A.w + uOccAOClamp) * (A.w + uOccAOClamp));
+      float d2 = max(dot(d, d), (Ar + uOccAOClamp) * (Ar + uOccAOClamp));
       float invd = inversesqrt(d2);
-      MP float o1 = clamp(dot(N, d * invd), 0.0, 1.0) * (A.w * A.w) / d2;
+      MP float o1 = clamp(dot(N, d * invd), 0.0, 1.0) * (Ar * Ar) / d2;
       // smooth range falloff to zero BEFORE the binary entry reject radius -
       // the reject alone printed a visible AO edge line around objects
-      MP float reach = clamp(1.0 - (d2 * invd - A.w) / 0.6, 0.0, 1.0);
+      MP float reach = clamp(1.0 - (d2 * invd - Ar) / 0.6, 0.0, 1.0);
       aoc *= 1.0 - min(o1 * reach * reach * uOccAO, 0.85) * k;
     }
     if (aoc < 0.15) break;
@@ -223,10 +239,10 @@ MP float capsuleShadow(int cell, vec3 P, vec3 N) {
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;
-      vec4 A = uOccSph[sf + si * 2];
-      vec3 u = uOccSph[sf + si * 2 + 1].xyz - A.xyz;
+      vec3 Ap, u; float Ar;
+      occCap(sf + si, b.xyz, Ap, Ar, u);
       // closest approach of the shadow ray to the capsule axis (clamped)
-      vec3 w0 = P - A.xyz;
+      vec3 w0 = P - Ap;
       float bb = dot(dir, u);
       float cc = max(dot(u, u), 1e-8);
       float dd = dot(dir, w0);
@@ -235,15 +251,15 @@ MP float capsuleShadow(int cell, vec3 P, vec3 N) {
       float s = den > 1e-6 ? clamp((bb * ee - cc * dd) / den, 0.0, span) : 0.0;
       float t = clamp((bb * s + ee) / cc, 0.0, 1.0);
       s = clamp(bb * t - dd, 0.0, span);
-      vec3 dv = (P + dir * s) - (A.xyz + u * t);
+      vec3 dv = (P + dir * s) - (Ap + u * t);
       float dist = length(dv);
-      float rw = A.w + s * 0.12;                 // ~7deg effective source size
+      float rw = Ar + s * 0.12;                  // ~7deg effective source size
       MP float pen = clamp((rw - dist) / max(rw * 0.45, 1e-3), 0.0, 1.0);
       // near-contact RAMP, not a hard skip: the binary skip printed a bright
       // pinprick in the middle of the shadow wherever a prop nearly touched
       // the receiver. Contact AO owns the contact zone; hand off smoothly.
       pen *= smoothstep(0.0, 0.12, s);
-      occl = max(occl, pen * min(1.0, (A.w * A.w) / (rw * rw)));
+      occl = max(occl, pen * min(1.0, (Ar * Ar) / (rw * rw)));
     }
     if (occl > 0.95) break;
   }
@@ -288,14 +304,29 @@ MP float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBa
     vec4 colw = uOccColor[first + pi];
     int packed = int(colw.w + 0.5);
     if ((packed & 63) == uOccSelf) continue;      // own-group skip
+    // cone-footprint LOD: once the cone widening dwarfs the whole entry,
+    // the capsule set is indistinguishable from ONE bound-sphere smudge
+    // (coverage r^2/rw^2 has already dimmed it to a blur) - skip the march.
+    // uOccLod = widening/bound-radius threshold; 0 disables (A/B dial).
+    if (uOccLod > 0.0 && rb - b.w > uOccLod * b.w) {
+      MP float q = 1.0 - dot(pc, pc) / (rb * rb);
+      if (q > 0.0) {
+        MP float cover = (b.w * b.w) / (rb * rb);
+        MP float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0) * k;
+        trans -= taken;
+        col += taken * colw.rgb;
+        if (trans < 0.01) break;
+      }
+      continue;
+    }
     int sc = (packed >> 6) & 7;
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;
-      vec4 A = uOccSph[sf + si * 2];
-      vec3 u = uOccSph[sf + si * 2 + 1].xyz - A.xyz;
+      vec3 Ap, u; float Ar;
+      occCap(sf + si, b.xyz, Ap, Ar, u);
       // closest approach between the ray segment and the capsule axis
-      vec3 w0 = o - A.xyz;
+      vec3 w0 = o - Ap;
       float bb = dot(d, u);
       float cc = dot(u, u);
       float dw = dot(d, w0);
@@ -304,10 +335,10 @@ MP float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBa
       float ts = clamp(sg * bb - dw, 0.0, tMax);
       if (cc > 1e-6) sg = clamp((e + ts * bb) / cc, 0.0, 1.0);
       vec3 ps = w0 + d * ts - u * sg;
-      float rw = A.w + uOccWiden * wr * (tBase + ts);
+      float rw = Ar + uOccWiden * wr * (tBase + ts);
       MP float q = 1.0 - dot(ps, ps) / (rw * rw); // 0 at the widened silhouette
       if (q <= 0.0) continue;
-      MP float cover = (A.w * A.w) / (rw * rw);   // blur spreads, peak dims
+      MP float cover = (Ar * Ar) / (rw * rw);     // blur spreads, peak dims
       MP float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0) * k;
       trans -= taken;
       col += taken * colw.rgb;

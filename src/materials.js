@@ -116,6 +116,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
                                 // doorway blobs only (GUI dial to restore)
     uOccDensity: { value: 1.6 },  // user-tuned 2026-07-04
     uOccWiden: { value: 1.5 },    // user-tuned 2026-07-04   // cone growth per rough-meter: drives spread AND fade
+    uOccLod: { value: 2.0 },      // cone-footprint LOD threshold (occSegment)
     uOccTint: { value: 0.8 },    // user-tuned: it's ~AO + optically-correct ambient
     uOccAO: { value: 0.8 },      // contact-AO strength from the same capsules
     uOccAOClamp: { value: 0.03 }, // AO min-distance clamp (m), artist dial

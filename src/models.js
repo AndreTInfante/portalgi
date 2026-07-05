@@ -13,6 +13,9 @@ import { GeoBuilder } from './level.js';
 export const STATIC_MODEL_DEFS = [
   { slug: 'horse_statue_01', size: 2.2, cell: 2, x: 0, z: 13.3, rotY: Math.PI },
   { slug: 'bronze_whale_statue', size: 2.4, cell: 8, x: 13.4, z: -15.8, rotY: Math.PI / 5 },
+  // courtyard greenery (Andre-sourced, CC0): opposite corners, off the benches
+  { slug: 'potted_plant_02', size: 1.15, cell: 13, x: 17.5, z: -3.6, rotY: 0.6 },
+  { slug: 'potted_plant_04', size: 1.35, cell: 13, x: 23.7, z: 3.6, rotY: -1.1 },
 ];
 
 export async function addStaticModels(level) {

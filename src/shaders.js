@@ -83,6 +83,7 @@ uniform float uOccDensity;
 uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
 uniform float uOccAO;      // contact-AO strength from the same capsules
+uniform float uOccShadow;  // dynamic directional shadow strength (capsule shadow rays)
 uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shades:
                            // an occluder never occludes the surfaces it approximates
 
@@ -127,6 +128,78 @@ float capsuleAO(int cell, vec3 P, vec3 N) {
     if (aoc < 0.15) break;
   }
   return aoc;
+}
+
+// Directional shadows from DYNAMIC occluders: one ray from P toward the
+// luminance/d2-weighted average of the cell's analytic lights (spot cones
+// weight by their falloff at P), marched through the PROP capsules only -
+// uOccCell.z counts the dynamic entries packed at the head of the cell's
+// list. Proxied statics are excluded: their shadows are already baked into
+// the lightmap, marching them again would double-darken. Penumbra: the
+// capsule radius widens along the ray and coverage dims as r^2/rw^2, so
+// small or distant occluders fade out instead of printing hard streaks.
+float capsuleShadow(int cell, vec3 P, vec3 N) {
+  int dyn = int(uOccCell[cell].z);
+  if (dyn == 0) return 1.0;
+  vec3 acc = vec3(0.0);
+  float wsum = 0.0;
+  for (int i = 0; i < 8; i++) {
+    if (i >= uLightCount) break;
+    vec3 L = uLightPos[i] - P;
+    float d2 = max(dot(L, L), 0.25);
+    float w = dot(uLightColor[i], vec3(0.299, 0.587, 0.114)) / d2;
+    if (uLightDir[i].w > -1.5) {
+      w *= smoothstep(uLightDir[i].w, uLightDir[i].w + 0.08,
+                      dot(normalize(-L), uLightDir[i].xyz));
+    }
+    acc += w * L;
+    wsum += w;
+  }
+  if (wsum < 1e-5) return 1.0;
+  vec3 toL = acc / wsum;
+  float len = max(length(toL), 1e-4);
+  vec3 dir = toL / len;
+  if (dot(N, dir) <= 0.03) return 1.0; // faces away: lightmap is already dark there
+  float span = min(len, 6.0);
+  int first = int(uOccCell[cell].x);
+  float trans = 1.0;
+  for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
+    if (pi >= dyn) break;
+    vec4 b = uOccBound[first + pi];
+    vec3 dc = b.xyz - P;
+    float tb = clamp(dot(dc, dir), 0.0, span);
+    vec3 q = dc - dir * tb;
+    float rb = b.w + 0.6;                        // penumbra margin
+    if (dot(q, q) > rb * rb) continue;
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
+    if ((packed & 63) == uOccSelf) continue;     // own-group skip
+    int sc = (packed >> 6) & 7;
+    int sf = packed >> 9;
+    for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
+      if (si >= sc) break;
+      vec4 A = uOccSph[sf + si * 2];
+      vec3 u = uOccSph[sf + si * 2 + 1].xyz - A.xyz;
+      // closest approach of the shadow ray to the capsule axis (clamped)
+      vec3 w0 = P - A.xyz;
+      float bb = dot(dir, u);
+      float cc = max(dot(u, u), 1e-8);
+      float dd = dot(dir, w0);
+      float ee = dot(u, w0);
+      float den = cc - bb * bb;
+      float s = den > 1e-6 ? clamp((bb * ee - cc * dd) / den, 0.0, span) : 0.0;
+      float t = clamp((bb * s + ee) / cc, 0.0, 1.0);
+      s = clamp(bb * t - dd, 0.0, span);
+      if (s < 0.02) continue;                    // resting contact is AO's job
+      vec3 dv = (P + dir * s) - (A.xyz + u * t);
+      float dist = length(dv);
+      float rw = A.w + s * 0.12;                 // ~7deg effective source size
+      float pen = clamp((rw - dist) / max(rw * 0.45, 1e-3), 0.0, 1.0);
+      trans *= 1.0 - pen * min(1.0, (A.w * A.w) / (rw * rw)) * uOccShadow;
+    }
+    if (trans < 0.1) break;
+  }
+  return trans;
 }
 
 // transmittance through this cell's occluders (CAPSULES: two vec4 slots,
@@ -582,7 +655,12 @@ ${PROP ? /* glsl */`
 ${useUbo ? /* glsl */`
   // live contact AO from the occluder capsules (props AND proxied statics -
   // the statics cast nothing in the lightmap by design)
-  if (uOccOn > 0.5) diffuseL *= capsuleAO(uCell, P, N);
+  if (uOccOn > 0.5) {
+    diffuseL *= capsuleAO(uCell, P, N);
+    // dynamic directional shadows: one capsule-marched ray toward the
+    // weighted local light direction ("we have raytracing at home")
+    if (uOccShadow > 0.001) diffuseL *= capsuleShadow(uCell, P, N);
+  }
 ` : ''}
   vec3 F0 = mix(vec3(0.04), albedo, metal);
   color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;

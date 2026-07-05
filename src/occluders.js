@@ -265,7 +265,9 @@ export class OccluderSystem {
         this.sv.copy(s.b).applyMatrix4(mw);
         e.world[i][1].set(this.sv.x, this.sv.y, this.sv.z, 0);
       }
-      push(e.p.cell, { world: e.world, col: e.col, group: e.group });
+      // dyn: props pack at the HEAD of each cell's list so the shadow rays
+      // can march just them (uOccCell.z) - statics' shadows are baked
+      push(e.p.cell, { world: e.world, col: e.col, group: e.group, dyn: true });
     }
     for (const s of this.statics) {
       push(s.cell, { world: s.world, col: s.col, group: s.group });
@@ -274,7 +276,7 @@ export class OccluderSystem {
     for (let c = 0; c < occ.numCells; c++) {
       const list = byCell.get(c);
       const first = pi;
-      let count = 0;
+      let count = 0, dynCount = 0;
       if (list) {
         for (const e of list) {
           if (count >= MAX_PER_CELL || pi >= MAX_OCC_PROPS ||
@@ -302,9 +304,10 @@ export class OccluderSystem {
           }
           pi++;
           count++;
+          if (e.dyn) dynCount++;
         }
       }
-      occ.cell[c].value.set(first, count, 0, 0);
+      occ.cell[c].value.set(first, count, dynCount, 0);
     }
   }
 }

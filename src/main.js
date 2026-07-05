@@ -266,6 +266,7 @@ void main() {
     }
   }
   if (params.has('occluders')) matsys.globals.uOccOn.value = parseFloat(params.get('occluders'));
+  if (params.has('occsh')) matsys.globals.uOccShadow.value = parseFloat(params.get('occsh'));
   // eye-buffer scale: ~19% fill at 0.9 for near-invisible sharpness loss
   // (Tier 2 item 3; ground-truth ~1.9ms at the gallery worst view).
   // Applies at session START - re-enter VR after changing the GUI slider

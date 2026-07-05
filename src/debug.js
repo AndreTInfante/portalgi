@@ -83,6 +83,8 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     fo.add(op, 'tint', 0, 1, 0.01).name('diffuse re-emit');
     fo.add({ get ao() { return g.uOccAO.value; }, set ao(v) { g.uOccAO.value = v; } },
       'ao', 0, 1.5, 0.01).name('contact AO');
+    fo.add({ get sh() { return g.uOccShadow.value; }, set sh(v) { g.uOccShadow.value = v; } },
+      'sh', 0, 1, 0.01).name('dyn shadows');
     fo.add(op, 'hops', 0, 4, 1).name('LOD (cells of walk)');
     fo.add({ dump: () => {
       const j = JSON.stringify({ density: g.uOccDensity.value,

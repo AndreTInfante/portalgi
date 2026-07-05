@@ -142,10 +142,14 @@ async function boot() {
   await addStaticModels(level); // static exhibits join the builders BEFORE chart packing
   packLightmapCharts(level, lmSettings.lmden, lmSettings.lmw);
   const hullTex = buildHullTexture(level.cells);
-  // portal warp fields: GPU-bake (t_beyond, terminal id, certainty) per
-  // directed portal at boot - pure hull/portal geometry, ~ms, no artifact
-  // to distribute. ?warp=0 keeps the recursive walk in static programs.
-  const warp = params.get('warp') !== '0' ? buildWarpField(renderer, level, hullTex) : null;
+  // portal warp fields: OFF after the in-headset verdict (2026-07-05).
+  // The field cannot resolve geometry silhouettes BEYOND the portal (the
+  // hall pillar) at feasible angular resolution: behind-pillar reflections
+  // wobbled (t lerped across 5.6-degree bins) and hard seams appeared at
+  // every bin crossing (the tap-consensus reference id flips where bins
+  // disagree). The analytic per-pixel walk is exactly what makes those
+  // reflections stable - it stays. ?warp=1 re-enables the experiment.
+  const warp = params.get('warp') === '1' ? buildWarpField(renderer, level, hullTex) : null;
   const baker = new Baker(renderer, level, hullTex);
   // ?fp16=0: compile everything highp (A/B for the mediump experiment -
   // desktop ignores mediump entirely, so only the headset can judge it)

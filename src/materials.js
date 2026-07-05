@@ -22,6 +22,11 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // portal warp fields (warpfield.js): statics replace the recursive portal
   // walk with a baked field tap. null (?warp=0) keeps the loop everywhere.
   const warp = sysOpts.warp || null;
+  // one exact unrolled hop for floors + non-sharp props (Andre's re-pose
+  // after warp fields failed in motion): stable analytic reflections into
+  // the next room without a dynamic 8-hop loop's register pressure.
+  // ?hop1=0 restores the full march everywhere for A/B.
+  const hop1Sys = sysOpts.hop1 !== false;
   // one pruned program per material mode (statics carry no probe code, props
   // no lightmap code, glass/pane almost nothing) - the single uber-program
   // capped wave occupancy at a measured 52%
@@ -29,9 +34,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // debug variants compile in the traversal step accumulator + debug views;
   // shipping programs carry none of that register pressure
   let debugCompiled = false;
-  const fragFor = (m, dbg = debugCompiled, matte = false) => {
-    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp));
+  const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false) => {
+    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1));
   };
 
   let hullGroup = null;
@@ -121,10 +126,18 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   function makeMaterial(cellId, opts = {}) {
     const { lp, lc, ld, ll, n } = lightUniforms(cellId);
     const mode = opts.mode || 0;
+    // SHARP reflectors resolve a real image through a second portal and keep
+    // the full march: explicit opts.sharp, or a flat-ORM material whose
+    // roughFactor (= its exact roughness, orm.g is 1) sits under the 2-hop
+    // rung (the chrome ball). ORM-mapped props (gltf statues) are mid-rough.
+    const sharp = opts.sharp === true ||
+      (!opts.orm && opts.roughFactor !== undefined && opts.roughFactor <= 0.12);
+    const hop1 = hop1Sys && !opts.matte &&
+      (mode === 0 || (mode === 4 && !sharp));
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: SCENE_VERT,
-      fragmentShader: fragFor(mode, debugCompiled, !!opts.matte),
+      fragmentShader: fragFor(mode, debugCompiled, !!opts.matte, hop1),
       // FrontSide: winding is normal-oriented at emit time; DoubleSide was a
       // crutch that doubled binning/hidden-surface work on tiled GPUs (Tier 1)
       side: THREE.FrontSide,
@@ -156,6 +169,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     if (hullGroup) mat.uniformsGroups = occ ? [hullGroup, occ.group] : [hullGroup];
     mat.userData.mode = mode;
     mat.userData.matte = !!opts.matte;
+    mat.userData.hop1 = hop1;
     // statics boot with the pre-lightmap fallback compiled in; setUseLightmap
     // strips it (and its register pressure) once the lightmap exists
     if (mode === 0 && !lightmapOn) mat.defines = { LM_FALLBACK: '' };
@@ -189,7 +203,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     if (on === debugCompiled) return;
     debugCompiled = on;
     for (const m of allMaterials) {
-      m.fragmentShader = fragFor(m.userData.mode, on, m.userData.matte);
+      m.fragmentShader = fragFor(m.userData.mode, on, m.userData.matte, m.userData.hop1);
       m.needsUpdate = true;
     }
   }

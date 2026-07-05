@@ -155,8 +155,11 @@ async function boot() {
   // desktop ignores mediump entirely, so only the headset can judge it)
   const matsys = createMaterialSystem(level, textures, hullTex, baker.texture,
     // ?texocc=0: statics compile the analytic capsule loops instead of the
-    // texture-space occlusion tap (A/B + escape hatch, like fp16)
-    { fp16: params.get('fp16') !== '0', texOcc: params.get('texocc') !== '0', warp });
+    // texture-space occlusion tap (A/B + escape hatch, like fp16).
+    // ?hop1=0: floors/props compile the full march instead of the unrolled
+    // single hop (A/B; hop1 should be pixel-identical to ?hop1=0&steps=1)
+    { fp16: params.get('fp16') !== '0', texOcc: params.get('texocc') !== '0',
+      hop1: params.get('hop1') !== '0', warp });
   const useLightmap = BAKE || params.get('lm') !== '0';
   const lightmapper = useLightmap ? new Lightmapper(renderer, level, textures, {
     rays: lmSettings.lmrays, iterations: lmSettings.lmit,

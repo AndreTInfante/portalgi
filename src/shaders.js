@@ -494,6 +494,110 @@ vec3 blendedIrr(int cell, vec3 P, vec3 N) {
 }
 `;
 
+// ---------------------------------------------------------------- one hop
+// Andre's re-pose after the warp-field failure (2026-07-05): one EXACT hop,
+// unrolled. One hop is visually stable in motion (it is the analytic walk -
+// no field quantization) and buys ~90% of the visual win: reflections see
+// into the next room and the first crossing keeps the silhouette edge blend.
+// What the compiler sees is straight-line code - two hull exits, one portal
+// scan, at most two atlas samples - with no live state carried across a
+// dynamic 8-iteration loop. Compiles into all non-matte STATICS (floors)
+// and all PROPS except sharp reflectors (chrome); glass/pane/chrome keep
+// the full march, where a real image can resolve a second portal.
+// Pixel-identical to the full walk at uMaxSteps=1 with uOccHops<=1 (the
+// configuration Andre judged in-headset); uMaxSteps=0 still = PCCM.
+// The occluder-hops and portal-hops GUI dials affect full-march programs only.
+const HOP1_GLSL = /* glsl */`
+MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) {
+  vec4 h0 = hfetch(cell, 0);
+  int pc = int(h0.w);
+  for (int j = 0; j < 12; j++) {            // nudge start point inside the hull
+    if (j >= pc) break;
+    vec4 pl = hfetch(cell, ${PLANES_OFF} + j);
+    float d = dot(pl.xyz, pos) + pl.w;
+    if (d < 0.01) pos += pl.xyz * (0.01 - d);
+  }
+  float bestT = 1e8;
+  int bestPlane = -1;
+  for (int j = 0; j < 12; j++) {            // local hull exit
+    if (j >= pc) break;
+    vec4 pl = hfetch(cell, ${PLANES_OFF} + j);
+    float dn = dot(pl.xyz, dir);
+    if (dn < -1e-5) {
+      float t = -(dot(pl.xyz, pos) + pl.w) / dn;
+      if (t < bestT) { bestT = t; bestPlane = j; }
+    }
+  }
+  if (bestPlane < 0) bestT = 0.0;
+  vec3 hitP = pos + dir * bestT;
+  float effR = min(1.0, rough * (1.0 + bestT * uDistRough));
+  MP float lod = roughToLod(effR);
+  MP vec3 acc = vec3(0.0);
+  MP float w = 1.0;
+  if (uOccOn > 0.5 && uOccHops > 0.0) {     // local occluder segment (hop 0)
+    MP vec3 ocol = vec3(0.0);
+    MP float tr = occSegment(cell, pos, dir, bestT, rough, 0.0, dynFade, ocol);
+    if (tr < 0.95) acc += uOccTint * ocol * sampleIrr(cell, -dir);
+    w = tr;
+    if (w < 0.005) return acc;
+  }
+  int nextCell = -1;
+  MP float blend = 0.0;
+  if (uMaxSteps > 0 && bestPlane >= 0) {    // the one crossing
+    vec4 h1 = hfetch(cell, 1);
+    if ((int(h1.w) & (1 << bestPlane)) != 0) {
+      int poc = int(h1.x);
+      for (int p = 0; p < 4; p++) {
+        if (p >= poc) break;
+        int base = ${PORTALS_OFF} + p * ${PORTAL_STRIDE};
+        vec4 ph = hfetch(cell, base);
+        if (int(ph.x) != bestPlane) continue;
+        int silMask = int(ph.w + 0.5);
+        float insideD = 1e8;
+        float blendD = 1e8;
+        for (int e = 0; e < 4; e++) {
+          vec4 ep = hfetch(cell, base + 1 + e);
+          float d = dot(ep.xyz, hitP) + ep.w;
+          insideD = min(insideD, d);
+          if ((silMask & (1 << e)) != 0) blendD = min(blendD, d);
+        }
+        if (insideD > 0.0) {
+          float bw = uBlendBase + uBlendRough * effR * max(bestT, 0.3);
+          blend = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
+          nextCell = int(ph.y);
+          break;
+        }
+      }
+    }
+  }
+  vec3 localDir = hitP - h0.xyz;
+  if (nextCell < 0 || blend <= 0.002) {
+    acc += w * sampleSpec(cell, localDir, lod);
+    return acc;
+  }
+  if (blend < 0.998) {
+    acc += w * (1.0 - blend) * sampleSpec(cell, localDir, lod);
+    w *= blend;
+  }
+  // the neighbor is TERMINAL: hull exit (no portal scan), sample, done
+  vec3 pos2 = hitP + dir * 1e-3;
+  vec4 g0 = hfetch(nextCell, 0);
+  int pc2 = int(g0.w);
+  float t2 = 1e8;
+  for (int j = 0; j < 12; j++) {
+    if (j >= pc2) break;
+    vec4 pl = hfetch(nextCell, ${PLANES_OFF} + j);
+    float dn = dot(pl.xyz, dir);
+    if (dn < -1e-5) t2 = min(t2, -(dot(pl.xyz, pos2) + pl.w) / dn);
+  }
+  if (t2 > 1e7) t2 = 0.0;
+  vec3 hit2 = pos2 + dir * t2;
+  MP float lod2 = roughToLod(min(1.0, rough * (1.0 + (bestT + t2) * uDistRough)));
+  acc += w * sampleSpec(nextCell, hit2 - g0.xyz, lod2);
+  return acc;
+}
+`;
+
 // ---------------------------------------------------------------- warp fields
 // Everything beyond the first portal crossing collapses to a baked field tap
 // (warpfield.js): (t_beyond, terminal_id, certainty) per directed portal over
@@ -684,12 +788,14 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   // warp fields replace the recursive walk in STATIC programs only: props/
   // glass/pane are near-mirror small-fill and keep the exact loop; debug
   // variants keep it too so the step heatmap stays a ground-truth view
   const WARP = !!warp && STATIC && !matte && !dbg;
+  // one exact unrolled hop (floors + non-sharp props); debug keeps the loop
+  const HOP1 = hop1 && (STATIC || PROP) && !matte && !dbg && !WARP;
   return /* glsl */`
 precision highp float;
 #define MP ${halfp ? 'mediump' : 'highp'}
@@ -732,6 +838,7 @@ ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
 ${traceGlsl(numCells, useUbo, dbg)}
 ${WARP ? warpGlsl(warp) : ''}
+${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}
 
 // Diffuse for dynamic objects: per-cell irradiance PROBE GRID, trilinear over
@@ -902,6 +1009,7 @@ ${useUbo ? (texOcc && STATIC ? /* glsl */`
     MP vec3 pre = ${matte ? 'sampleIrr(uCell, R)'
       : `(rough > 0.65) ? sampleIrr(uCell, R)
                               : ${WARP ? 'traceSpecW(uCell, P, R, rough, dynFade)'
+                                : HOP1 ? 'traceSpec1(uCell, P, R, rough, dynFade)'
                                        : `traceSpec(uCell, P, R, rough, 8, dynFade${dbg ? ', steps' : ''})`}`};
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
   }

@@ -10,8 +10,11 @@ import { buildOccluderGroup } from './occluders.js';
 // the DataTexture path (same GLSL interface) if a driver misbehaves.
 const USE_HULL_UBO = true;
 
-export function createMaterialSystem(level, textures, hullTex, atlasTex) {
+export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts = {}) {
   const numCells = level.cells.length;
+  // fp16 experiment: mediump on the provably-safe shader surface (see the
+  // halfp note in shaders.js). ?fp16=0 compiles everything highp for A/B.
+  const fp16 = sysOpts.fp16 !== false;
   // one pruned program per material mode (statics carry no probe code, props
   // no lightmap code, glass/pane almost nothing) - the single uber-program
   // capped wave occupancy at a measured 52%
@@ -20,8 +23,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex) {
   // shipping programs carry none of that register pressure
   let debugCompiled = false;
   const fragFor = (m, dbg = debugCompiled, matte = false) => {
-    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte));
+    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16));
   };
 
   let hullGroup = null;

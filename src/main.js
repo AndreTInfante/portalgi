@@ -141,7 +141,10 @@ async function boot() {
   packLightmapCharts(level, lmSettings.lmden, lmSettings.lmw);
   const hullTex = buildHullTexture(level.cells);
   const baker = new Baker(renderer, level, hullTex);
-  const matsys = createMaterialSystem(level, textures, hullTex, baker.texture);
+  // ?fp16=0: compile everything highp (A/B for the mediump experiment -
+  // desktop ignores mediump entirely, so only the headset can judge it)
+  const matsys = createMaterialSystem(level, textures, hullTex, baker.texture,
+    { fp16: params.get('fp16') !== '0' });
   const useLightmap = BAKE || params.get('lm') !== '0';
   const lightmapper = useLightmap ? new Lightmapper(renderer, level, textures, {
     rays: lmSettings.lmrays, iterations: lmSettings.lmit,

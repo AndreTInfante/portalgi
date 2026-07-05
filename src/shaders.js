@@ -102,18 +102,18 @@ uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shad
 // the same capsules that occlude reflections darken nearby diffuse. Proxied
 // statics are OUT of the lightmap BVH - this is their only shadow, exactly
 // one representation per object per lighting domain.
-float capsuleAO(int cell, vec3 P, vec3 N, float dynFade) {
+MP float capsuleAO(int cell, vec3 P, vec3 N, MP float dynFade) {
   int cnt = int(uOccCell[cell].y);
   if (cnt == 0) return 1.0;
   int first = int(uOccCell[cell].x);
   int dyn = int(uOccCell[cell].z);
-  float aoc = 1.0;
+  MP float aoc = 1.0;
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
     // dyn entries (packed closest-first, budget-truncated at pack time) fade
     // with viewer distance; statics (furniture - this is their only shadow)
     // always evaluate at full strength
-    float k = pi < dyn ? dynFade : 1.0;
+    MP float k = pi < dyn ? dynFade : 1.0;
     if (k <= 0.0) continue;
     vec4 b = uOccBound[first + pi];
     vec3 dc = b.xyz - P;
@@ -136,10 +136,10 @@ float capsuleAO(int cell, vec3 P, vec3 N, float dynFade) {
       // strong, interior saturation blotches become impossible (GUI-tunable)
       float d2 = max(dot(d, d), (A.w + uOccAOClamp) * (A.w + uOccAOClamp));
       float invd = inversesqrt(d2);
-      float o1 = clamp(dot(N, d * invd), 0.0, 1.0) * (A.w * A.w) / d2;
+      MP float o1 = clamp(dot(N, d * invd), 0.0, 1.0) * (A.w * A.w) / d2;
       // smooth range falloff to zero BEFORE the binary entry reject radius -
       // the reject alone printed a visible AO edge line around objects
-      float reach = clamp(1.0 - (d2 * invd - A.w) / 0.6, 0.0, 1.0);
+      MP float reach = clamp(1.0 - (d2 * invd - A.w) / 0.6, 0.0, 1.0);
       aoc *= 1.0 - min(o1 * reach * reach * uOccAO, 0.85) * k;
     }
     if (aoc < 0.15) break;
@@ -155,7 +155,7 @@ float capsuleAO(int cell, vec3 P, vec3 N, float dynFade) {
 // the lightmap, marching them again would double-darken. Penumbra: the
 // capsule radius widens along the ray and coverage dims as r^2/rw^2, so
 // small or distant occluders fade out instead of printing hard streaks.
-float capsuleShadow(int cell, vec3 P, vec3 N) {
+MP float capsuleShadow(int cell, vec3 P, vec3 N) {
   int dyn = int(uOccCell[cell].z);
   if (dyn == 0) return 1.0;
   int first = int(uOccCell[cell].x);
@@ -192,7 +192,7 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
   // facing fade on the GEOMETRIC normal (callers must not pass the bumped
   // one): a binary gate on the normal-mapped N punched bright pinpricks
   // through shadows wherever a bump facet tilted past the threshold
-  float face = smoothstep(0.0, 0.2, dot(N, dir));
+  MP float face = smoothstep(0.0, 0.2, dot(N, dir));
   if (face <= 0.0) return 1.0;
   // 3m cap: coverage dims to ~0.13 by then (r^2/rw^2), invisible - and the
   // shorter segment lets the per-entry bound test reject far more pixels
@@ -201,7 +201,7 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
   // single-ray visibility: overlapping volumes block the light ONCE - take
   // the MAX coverage over capsules, not the product (the product printed
   // extra darkening wherever authored capsules overlap)
-  float occl = 0.0;
+  MP float occl = 0.0;
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= dyn) break;
     vec4 b = uOccBound[first + pi];
@@ -232,7 +232,7 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
       vec3 dv = (P + dir * s) - (A.xyz + u * t);
       float dist = length(dv);
       float rw = A.w + s * 0.12;                 // ~7deg effective source size
-      float pen = clamp((rw - dist) / max(rw * 0.45, 1e-3), 0.0, 1.0);
+      MP float pen = clamp((rw - dist) / max(rw * 0.45, 1e-3), 0.0, 1.0);
       // near-contact RAMP, not a hard skip: the binary skip printed a bright
       // pinprick in the middle of the shadow wherever a prop nearly touched
       // the receiver. Contact AO owns the contact zone; hand off smoothly.
@@ -254,8 +254,8 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
 // Subtractive and saturating - no sorting. Each bite of transmittance
 // accumulates the biter's albedo into col so the caller can re-emit blocked
 // light as darkened occluder diffuse instead of pitch black.
-float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase, float dynFade, inout vec3 col) {
-  float trans = 1.0;
+MP float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase, MP float dynFade, inout MP vec3 col) {
+  MP float trans = 1.0;
   int cnt = int(uOccCell[cell].y);
   if (cnt == 0) return trans;
   int first = int(uOccCell[cell].x);
@@ -270,7 +270,7 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
     // dyn prefix (closest-first, budget-truncated at pack time) fades with
     // viewer distance; statics (furniture reflections - captures exclude
     // them) always march
-    float k = pi < dyn ? dynFade : 1.0;
+    MP float k = pi < dyn ? dynFade : 1.0;
     if (k <= 0.0) continue;
     vec4 b = uOccBound[first + pi];
     vec3 oc = b.xyz - o;
@@ -298,10 +298,10 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       if (cc > 1e-6) sg = clamp((e + ts * bb) / cc, 0.0, 1.0);
       vec3 ps = w0 + d * ts - u * sg;
       float rw = A.w + uOccWiden * wr * (tBase + ts);
-      float q = 1.0 - dot(ps, ps) / (rw * rw);    // 0 at the widened silhouette
+      MP float q = 1.0 - dot(ps, ps) / (rw * rw); // 0 at the widened silhouette
       if (q <= 0.0) continue;
-      float cover = (A.w * A.w) / (rw * rw);      // blur spreads, peak dims
-      float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0) * k;
+      MP float cover = (A.w * A.w) / (rw * rw);   // blur spreads, peak dims
+      MP float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0) * k;
       trans -= taken;
       col += taken * colw.rgb;
     }
@@ -325,7 +325,7 @@ uniform float uDistRough;   // roughness growth per meter of path length
 // roughness-scaled edge blend, then either terminate on the local cubemap or
 // hop into the neighbor cell. A straight ray can never revisit a convex cell,
 // so this always makes forward progress.
-vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, float dynFade${dbg ? ', out float stepsUsed' : ''}) {
+MP vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, MP float dynFade${dbg ? ', out float stepsUsed' : ''}) {
   // roughness-scaled hop budget: a reflection too blurry to resolve an image
   // can't resolve a second portal either. Anything reflective keeps >= 1 hop
   // (portal-boundary artifacts appear at 0); the rough > 0.65 irradiance
@@ -345,8 +345,10 @@ vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, float dynF
     float d = dot(pl.xyz, pos) + pl.w;
     if (d < 0.01) pos += pl.xyz * (0.01 - d);
   }
-  vec3 acc = vec3(0.0);
-  float w = 1.0;
+  // acc/w are LIVE across the whole hull walk - the register-pressure prize.
+  // Radiance fits fp16 (max 65504); w is a 0..1 weight
+  MP vec3 acc = vec3(0.0);
+  MP float w = 1.0;
   float tTot = 0.0;
   ${dbg ? 'stepsUsed = 0.0;' : ''}
   for (int i = 0; i <= 8; i++) {
@@ -367,16 +369,16 @@ vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, float dynF
     vec3 hitP = pos + dir * bestT;
     float tHit = tTot + bestT;
     float effR = min(1.0, rough * (1.0 + tHit * uDistRough));
-    float lod = roughToLod(effR);
+    MP float lod = roughToLod(effR);
 ${useUbo ? /* glsl */`
     // occluder transmittance over this cell's segment attenuates everything
     // sampled beyond it (this cell's tile AND the recursion); the blocked
     // fraction re-emits as darkened occluder diffuse lit by cell irradiance
     if (uOccOn > 0.5 && float(i) < uOccHops) {
-      vec3 ocol = vec3(0.0);
+      MP vec3 ocol = vec3(0.0);
       // surface roughness (not distance-grown effR) drives the cone: the
       // footprint model already accounts for distance inside occSegment
-      float tr = occSegment(cell, pos, dir, bestT, rough, tTot, dynFade, ocol);
+      MP float tr = occSegment(cell, pos, dir, bestT, rough, tTot, dynFade, ocol);
       // tinted re-emission taps irradiance only at PERCEPTIBLE occlusion
       // (>= 5%; the old 0.3% threshold bought an extra atlas fetch across
       // every faintly-grazed pixel of cone-widened blob area). Kept per-hop:
@@ -388,7 +390,7 @@ ${useUbo ? /* glsl */`
     }
 ` : ''}
     int nextCell = -1;
-    float blend = 0.0;
+    MP float blend = 0.0;
     // the portal-plane bitmask skips the whole scan when the exit plane
     // carries no portal - the common case for every glossy pixel
     if (i < maxHops && bestPlane >= 0) {
@@ -491,7 +493,7 @@ vec3 blendedIrr(int cell, vec3 P, vec3 N) {
 `;
 
 const TONEMAP_GLSL = /* glsl */`
-vec3 acesTonemap(vec3 x) {
+MP vec3 acesTonemap(MP vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
 vec3 hsv2rgb(vec3 c) {
@@ -535,10 +537,19 @@ void main() {
 // compiles with no traversal at all. Register allocation is static per
 // program - without this, wall/ceiling pixels (most fill) ran at
 // glossy-floor occupancy to execute one irradiance tap.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false) {
+// halfp (the fp16 experiment): default precision stays HIGHP; MP marks only
+// the provably-fp16-safe surface - texture fetch results, color/radiance
+// chains (HDR fits fp16's 65504 max), 0..1 factors, and the traversal's
+// live accumulators. Positions, plane math, ray t's, directions, and
+// atlas/lightmap UV math (2048+ px, past fp16's 10-bit mantissa) never get
+// MP. On Adreno fp16 halves the register footprint of what it touches, and
+// occupancy is the measured structural ceiling; desktop GPUs ignore
+// mediump, so the A/B (?fp16=0) only means anything on-device.
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   return /* glsl */`
 precision highp float;
+#define MP ${halfp ? 'mediump' : 'highp'}
 layout(location = 0) out vec4 fragOut;
 varying vec3 vWorldPos;
 varying vec3 vNormal;
@@ -547,13 +558,13 @@ varying vec2 vUv;
 varying vec2 vUv2;
 
 uniform sampler2D uAtlas;
-uniform sampler2D uMap;
-uniform sampler2D uNrmMap;
-uniform sampler2D uOrmMap;   // AO / roughness / metallic
+uniform MP sampler2D uMap;     // MP samplers: fetch RESULTS are fp16 (color /
+uniform MP sampler2D uNrmMap;  // unit-vector / HDR data, all fp16-safe);
+uniform MP sampler2D uOrmMap;  // coordinate precision is unaffected
 uniform float uRoughFactor;
 uniform float uMetalFactor;
 uniform float uSpecBoost;
-uniform sampler2D uLightmap;
+uniform MP sampler2D uLightmap;
 uniform float uUseLightmap;
 uniform int uCell;
 uniform int uCellPrev;    // previous cell during a diffuse handoff crossfade (-1 = none)
@@ -623,12 +634,12 @@ vec3 directLight(vec3 P, vec3 N) {
 }
 
 // Karis' analytic environment BRDF approximation (mobile split-sum)
-vec3 envBRDF(vec3 F0, float rough, float NoV) {
-  const vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
-  const vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
-  vec4 r = rough * c0 + c1;
-  float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
-  vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
+MP vec3 envBRDF(MP vec3 F0, MP float rough, MP float NoV) {
+  const MP vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
+  const MP vec4 c1 = vec4(1.0, 0.0425, 1.04, -0.04);
+  MP vec4 r = rough * c0 + c1;
+  MP float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+  MP vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
   return F0 * AB.x + AB.y;
 }
 
@@ -650,23 +661,23 @@ void main() {
     vec3 nTS = texture(uNrmMap, vUv).xyz * 2.0 - 1.0;
     N = normalize(T * nTS.x + B * nTS.y + Ng * nTS.z);
   }
-  float NoV = max(dot(N, V), 0.0);
+  MP float NoV = max(dot(N, V), 0.0);
   ${dbg ? 'float steps = 0.0;' : ''}
 ${useUbo ? /* glsl */`
   // dynamic-occluder effects (contact AO, shadow rays, reflection blobs)
   // exist only within uOccRange of the viewer, feathered over 2m - the
   // capsule budget concentrates where anyone can see it. Statics never fade.
-  float dynFade = 1.0 - smoothstep(uOccRange - 2.0, uOccRange, distance(P, cameraPosition));
-` : 'float dynFade = 1.0;'}
-  vec3 color;
+  MP float dynFade = 1.0 - smoothstep(uOccRange - 2.0, uOccRange, distance(P, cameraPosition));
+` : 'MP float dynFade = 1.0;'}
+  MP vec3 color;
 ${GLASS ? /* glsl */`
   // glass: chrome sampled the opposite way. The fresnel reflection is a
   // faint overlay over the dominant fake refraction: 1 hop is plenty for it
   vec3 R = reflect(-V, N);
-  float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
-  vec3 refl = traceSpec(uCell, P, R, uRough, 1, dynFade${dbg ? ', steps' : ''});
+  MP float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
+  MP vec3 refl = traceSpec(uCell, P, R, uRough, 1, dynFade${dbg ? ', steps' : ''});
   ${dbg ? 'float s2;' : ''}
-  vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, dynFade${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
+  MP vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, dynFade${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
   color = mix(thru, refl, F);
 ` : PANE ? /* glsl */`
   // debug pane: continue the eye ray straight through with zero roughness -
@@ -675,13 +686,13 @@ ${GLASS ? /* glsl */`
   // lens). Faint green cast marks the glass.
   color = traceSpec(uCell, P, -V, 0.0, 8, dynFade${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
 ` : /* glsl */`
-  vec3 albedo = texture(uMap, vUv).rgb * uTint;
+  MP vec3 albedo = texture(uMap, vUv).rgb * uTint;
   ${dbg ? 'if (uDebugMode == 4) albedo = vec3(0.75);' : ''}
-  vec3 orm = texture(uOrmMap, vUv).rgb;
+  MP vec3 orm = texture(uOrmMap, vUv).rgb;
   float rough = clamp(orm.g * uRoughFactor, 0.03, 1.0);
-  float metal = clamp(orm.b * uMetalFactor, 0.0, 1.0);
-  float ao = orm.r;
-  vec3 diffuseL;
+  MP float metal = clamp(orm.b * uMetalFactor, 0.0, 1.0);
+  MP float ao = orm.r;
+  MP vec3 diffuseL;
 ${PROP ? /* glsl */`
   // probe-grid irradiance with the 0.2s cell-handoff crossfade
   diffuseL = probeDiffuse(uCell, P, N);
@@ -700,7 +711,7 @@ ${PROP ? /* glsl */`
     vec3 Lnn = Lv * inversesqrt(ld2);
     float ndl = dot(N, Lnn);
     if (ndl <= 0.0) continue;
-    float spot = smoothstep(uLightDir[li].w, uLightDir[li].w + 0.08, dot(-Lnn, uLightDir[li].xyz));
+    MP float spot = smoothstep(uLightDir[li].w, uLightDir[li].w + 0.08, dot(-Lnn, uLightDir[li].xyz));
     diffuseL += uLightColor[li] * (spot * ndl / max(ld2, 0.05));
   }
 ` : /* glsl */`
@@ -728,14 +739,14 @@ ${useUbo ? /* glsl */`
     }
   }
 ` : ''}
-  vec3 F0 = mix(vec3(0.04), albedo, metal);
+  MP vec3 F0 = mix(vec3(0.04), albedo, metal);
   color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
   ${STATIC ? 'if (uBake < 0.5) {' : '{'}  // split-sum: prefiltered radiance - env BRDF
     vec3 R = reflect(-V, N);
     // very rough surfaces (most wall/ceiling area): the traversal's max-lod
     // result is indistinguishable from one cosine-convolved irradiance tap
     // along R - skip the whole hull walk (Tier 1)
-    vec3 pre = ${matte ? 'sampleIrr(uCell, R)'
+    MP vec3 pre = ${matte ? 'sampleIrr(uCell, R)'
       : `(rough > 0.65) ? sampleIrr(uCell, R)
                               : traceSpec(uCell, P, R, rough, 8, dynFade${dbg ? ', steps' : ''})`};
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;

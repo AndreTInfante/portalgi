@@ -260,7 +260,6 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
   if (cnt == 0) return trans;
   int first = int(uOccCell[cell].x);
   int dyn = int(uOccCell[cell].z);
-  int budget = int(uOccBudget);
   // low-end knee: GGX blur is strongly nonlinear at small roughness (alpha ~
   // rough^2), so near-mirror surfaces (chrome/glass ~0.04) widen almost
   // nothing - linear widening made their blobs ghostly-faint while their
@@ -268,25 +267,21 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
   float wr = rough * clamp(rough * 6.667, 0.0, 1.0);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
-    vec4 colw = uOccColor[first + pi];
-    int packed = int(colw.w + 0.5);
-    int sc = (packed >> 6) & 7;
-    // dyn prefix: shared closest-first capsule budget + viewer-distance fade;
-    // statics (furniture reflections - captures exclude them) always march
-    float k = 1.0;
-    if (pi < dyn) {
-      budget -= sc;
-      if (budget < 0) continue;
-      k = dynFade;
-      if (k <= 0.0) continue;
-    }
+    // dyn prefix (closest-first, budget-truncated at pack time) fades with
+    // viewer distance; statics (furniture reflections - captures exclude
+    // them) always march
+    float k = pi < dyn ? dynFade : 1.0;
+    if (k <= 0.0) continue;
     vec4 b = uOccBound[first + pi];
     vec3 oc = b.xyz - o;
     float tc = clamp(dot(oc, d), 0.0, tMax);
     vec3 pc = oc - d * tc;
     float rb = b.w + uOccWiden * wr * (tBase + tc) + 0.05;
-    if (dot(pc, pc) > rb * rb) continue;          // entry-level reject
+    if (dot(pc, pc) > rb * rb) continue;          // common path: 1 vec4 read
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
     if ((packed & 63) == uOccSelf) continue;      // own-group skip
+    int sc = (packed >> 6) & 7;
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;

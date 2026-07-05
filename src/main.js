@@ -181,7 +181,7 @@ async function boot() {
         side: THREE.BackSide,
         uniforms: {
           uMap: { value: skyTex },
-          uGain: { value: params.has('skygain') ? parseFloat(params.get('skygain')) : 4.0 },
+          uGain: { value: params.has('skygain') ? parseFloat(params.get('skygain')) : 6.0 },
           uExposure: matsys.globals.uExposure, // shared identity with the scene
           uBake: matsys.globals.uBake,
         },
@@ -276,10 +276,10 @@ void main() {
           [P(cc.rx * 0.86, 0.16, 0), P(cc.rx * 0.86, cc.h * 0.6, 0), cc.rz * 0.8],
         ], cellId, walnutAvg, walnutMat(cellId));
       } else {
-        // pedestal: a single stretched vertical capsule (tight - the blob
-        // overlays the pedestal's own baked reflection, fat reads as fringe;
-        // top ends at h so props resting on it start outside the capsule)
-        const r = cc.rx;
+        // pedestal: a single stretched vertical capsule (top ends at h so
+        // props resting on it start outside). Radius x1.1 (Andre 2026-07-04:
+        // the tight fit read too thin in glossy reflections)
+        const r = cc.rx * 1.1;
         occluders.addPiece([
           [[cc.x, r * 0.9, cc.z], [cc.x, cc.h - r, cc.z], r],
         ], cellId, walnutAvg, walnutMat(cellId));

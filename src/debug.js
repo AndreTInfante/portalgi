@@ -89,6 +89,8 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     fo.add(op, 'tint', 0, 1, 0.01).name('diffuse re-emit');
     fo.add({ get ao() { return g.uOccAO.value; }, set ao(v) { g.uOccAO.value = v; } },
       'ao', 0, 1.5, 0.01).name('contact AO');
+    fo.add({ get ac() { return g.uOccAOClamp.value; }, set ac(v) { g.uOccAOClamp.value = v; } },
+      'ac', 0, 0.2, 0.005).name('AO min distance (m)');
     fo.add({ get sh() { return g.uOccShadow.value; }, set sh(v) { g.uOccShadow.value = v; } },
       'sh', 0, 1, 0.01).name('dyn shadows');
     fo.add({ get mc() { return g.uOccBudget.value; }, set mc(v) { g.uOccBudget.value = v; } },

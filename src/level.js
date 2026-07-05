@@ -301,22 +301,20 @@ const LIGHT_DEFS = [
   [{ p: [16.6, 0.6, -23.2], c: [1.0, 0.22, 0.05], i: 6 }],
   [{ p: [0, 3.6, 20.6], c: NEUT, i: 8 }, { p: [0, 3.6, 24.3], c: NEUT, i: 8 }],
   [], // cornell: lit purely by its ceiling area light (the point of the test)
-  // hall B: dim spot-lit exhibit room - no ceiling panels, every light is a
-  // warm accent cone on one exhibit; ambience comes purely from GI bounce
+  // hall B: dim spot-lit furniture room - ONE narrow hot cone per piece,
+  // nothing else; the room stays mostly dark and ambience is pure GI bounce
   [
-    { p: [-9.4, 3.85, 22.5], c: WARM, i: 9, d: [-0.92, -2.25, 0], cone: 32 },   // mirror
-    { p: [-7.1, 3.85, 23.5], c: WARM, i: 8, d: [0, -2.9, 1.05], cone: 30 },     // console
-    { p: [-8.5, 3.85, 21.7], c: NEUT, i: 9, d: [0, -2.7, 0.8], cone: 26 },      // pedestal W
-    { p: [-6.6, 3.85, 20.6], c: NEUT, i: 9, d: [0.8, -2.7, 0.4], cone: 26 },    // pedestal N
-    { p: [-6.6, 3.85, 24.4], c: NEUT, i: 9, d: [0.8, -2.7, -0.4], cone: 26 },   // pedestal S
-    { p: [-8.6, 3.85, 23.6], c: WARM, i: 7, d: [-0.7, -3.15, 0.6], cone: 34 },  // barber chair
-    { p: [-8.6, 3.85, 21.4], c: WARM, i: 7, d: [-0.7, -3.15, -0.6], cone: 34 }, // arm chair
-    { p: [-5.5, 3.85, 22.5], c: WARM, i: 7, d: [0.7, -3.15, 0], cone: 34 },     // lounge chair
+    { p: [-7.1, 3.85, 23.8], c: WARM, i: 14, d: [0, -3.15, 0.75], cone: 18 },   // console
+    { p: [-8.7, 3.85, 23.6], c: WARM, i: 14, d: [-0.6, -3.25, 0.6], cone: 18 }, // barber chair
+    { p: [-8.7, 3.85, 21.4], c: WARM, i: 14, d: [-0.6, -3.25, -0.6], cone: 18 },// arm chair
+    { p: [-5.4, 3.85, 22.5], c: WARM, i: 14, d: [0.6, -3.25, 0], cone: 18 },    // lounge chair
   ],
   // courtyard: the sun - a far, hot point whose rays enter through the open
   // ceiling; global shadow rays keep it out of every roofed room, and the
-  // slant pools light through the doorway into the pillar hall
-  [{ p: [34, 22, -10], c: [1.0, 0.92, 0.78], i: 3000 }],
+  // slant pools light through the doorway into the pillar hall.
+  // i 6500 (was 3000): outdoors read as bright as the interiors, which is
+  // physically implausible - midday should push toward overexposure
+  [{ p: [34, 22, -10], c: [1.0, 0.92, 0.78], i: 6500 }],
 ];
 
 const PANEL_DEFS = [
@@ -339,7 +337,7 @@ const PANEL_DEFS = [
   // hall B panels removed: the spot-lit room's light is all accent cones
   // sky: NEE area light for the courtyard's open ceiling. noGeo - the visual
   // sky is the HDRI dome mesh (main.js), not an emissive slab
-  { cell: 13, x: 20.6, z: 0, sx: 7.4, sz: 8.4, y: 4.55, i: 2.2, color: [0.55, 0.72, 1.0], noGeo: true },
+  { cell: 13, x: 20.6, z: 0, sx: 7.4, sz: 8.4, y: 4.55, i: 4.0, color: [0.55, 0.72, 1.0], noGeo: true },
 ];
 
 // paintings: index into PAINTINGS, wall-mounted (pos on wall surface, normal into room)
@@ -383,7 +381,7 @@ const PEDESTAL_DEFS = [
   // pedestals (and the never-used one under the fan) removed - only the
   // brass pan pedestal remains, keeping the dyn blob load balanced per room
   { cell: 10, x: -2.4, z: 24.7 },
-  { cell: 12, x: -8.5, z: 22.5 }, { cell: 12, x: -5.8, z: 21 }, { cell: 12, x: -5.8, z: 24 },
+  // (hall B pedestals removed 2026-07-04: the furniture room shows furniture)
 ];
 
 // rotunda paintings get placed on decagon edges by index
@@ -533,6 +531,10 @@ export function buildLevel() {
       if (!edge.doorShifted) {
         cell.planes[edge.planeIndex].d += WALL_T / 2;
         edge.doorShifted = true;
+        // record it: doored hull planes sit at MID-wall, so anything clamped
+        // against the plane alone can reach halfway into the visible wall
+        // (Andre: carried balls sank into the hallS/L1 wall)
+        (cell.doorPlanes || (cell.doorPlanes = new Set())).add(edge.planeIndex);
       }
       const portal = makePortal(cell, edge, otherId, s0, s1, cell.floorY, cell.floorY + def.h, false, WALL_T / 2);
       // rim rect at the visible wall surface (unshifted) -- used for jamb geometry
@@ -591,33 +593,58 @@ export function buildLevel() {
     }
   }
 
-  // ---- shadow-light continuity (AFTER all portal pairing, incl. the virtual
-  // pillar-ring/L-room portals): every cell's RUNTIME light list also carries
-  // its portal neighbors' lights (deduped, strongest 8 by intensity/d^2 to the
-  // cell center). The capsule shadow rays aim at this list's weighted average;
-  // with own-cell lights only, the shadow direction snapped at every portal
-  // plane. Physically honest too - light crosses doorways (the pillar-hall
-  // cell by the courtyard door gains the sun, so the beam casts prop
-  // shadows). Also feeds the props' analytic spot direct across doorways.
-  // (The path tracer dedups lights globally, so bakes are unaffected.)
+  // ---- shadow-light continuity (AFTER all portal pairing): cells joined by
+  // VIRTUAL portals are one visual room (the pillar ring, the L bend) - they
+  // must share an IDENTICAL runtime light list or the per-pixel weighted
+  // shadow direction snaps mid-room at invisible boundaries (one-hop merge
+  // still differed: hallE carried the sun, hallW the gallery lights). Union
+  // find over virtual portals; each component takes every member's lights
+  // plus every DOOR neighbor's lights, weight-sorted against the COMPONENT
+  // centroid so truncation is identical for all members. Doorway boundaries
+  // keep a small step - they are visual breaks anyway. (The path tracer
+  // dedups lights globally, so bakes are unaffected.)
   {
     const orig = cells.map(c => c.lights);
+    const comp = cells.map(c => c.id);
+    const find = i => (comp[i] === i ? i : (comp[i] = find(comp[i])));
     for (const cell of cells) {
-      const key = l => l.pos.join(',') + (l.dir ? '|' + l.dir.join(',') : '');
-      const seen = new Set(orig[cell.id].map(key));
-      const merged = orig[cell.id].slice();
       for (const po of cell.portals) {
-        for (const l of orig[po.neighbor]) {
+        if (!po.virtual) continue;
+        const a = find(cell.id), b = find(po.neighbor);
+        if (a !== b) comp[b] = a;
+      }
+    }
+    const members = new Map();
+    for (const c of cells) {
+      const r = find(c.id);
+      if (!members.has(r)) members.set(r, []);
+      members.get(r).push(c.id);
+    }
+    const key = l => l.pos.join(',') + (l.dir ? '|' + l.dir.join(',') : '');
+    for (const ids of members.values()) {
+      const seen = new Set();
+      const merged = [];
+      const addFrom = list => {
+        for (const l of list) {
           if (seen.has(key(l))) continue;
           seen.add(key(l));
           merged.push(l);
         }
+      };
+      for (const id of ids) addFrom(orig[id]);
+      for (const id of ids) {
+        for (const po of cells[id].portals) {
+          if (!ids.includes(po.neighbor)) addFrom(orig[po.neighbor]);
+        }
       }
-      const cx = cell.capture;
+      let cx = 0, cy = 0, cz = 0;
+      for (const id of ids) { const p = cells[id].capture; cx += p.x; cy += p.y; cz += p.z; }
+      cx /= ids.length; cy /= ids.length; cz /= ids.length;
       const w = l => l.intensity / Math.max(0.5,
-        (l.pos[0] - cx.x) ** 2 + (l.pos[1] - cx.y) ** 2 + (l.pos[2] - cx.z) ** 2);
+        (l.pos[0] - cx) ** 2 + (l.pos[1] - cy) ** 2 + (l.pos[2] - cz) ** 2);
       merged.sort((a, b) => w(b) - w(a));
-      cell.lights = merged.slice(0, 8);
+      const top = merged.slice(0, 8);
+      for (const id of ids) cells[id].lights = top;
     }
   }
 
@@ -788,6 +815,12 @@ export function buildLevel() {
     }
     return { cell: p.cell, x: p.x, y, z: p.z, sx: p.sx, sz: p.sz, intensity: p.i, color: c };
   });
+
+  // darkroom lamp base: the corner lamp panel floated at y 0.55 with nothing
+  // under it - an onyx block grounds it (and gets a collider below)
+  getBuilder(cells[9], 'lampbase', { mapKey: 'white', tint: [0.028, 0.028, 0.034] })
+    .box(16.6, 0.255, -23.2, 0.26, 0.51, 0.26, 1);
+  colliders.push({ x: 16.6, z: -23.2, r: 0.3, rx: 0.15, rz: 0.15, rot: 0, h: 0.51 });
 
   // spot fixtures: a black cylinder (octagonal prism, reads round at 12cm)
   // aimed along the beam, emissive white cap on the business end, thin stem to

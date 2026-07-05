@@ -67,10 +67,13 @@ export async function addStaticModels(level) {
         });
       });
       // r: generous player-collision radius (can't clip the statue overhang);
-      // rx/rz: reflection-contact footprint = the plinth, NOT the collision r
+      // rx/rz: reflection-contact footprint = the plinth, NOT the collision r.
+      // slug/proxyFrame: physics builds sphere compounds from the authored
+      // occluder capsules instead of a crude box
       level.colliders.push({
         x: def.x, z: def.z, r: def.size * 0.42,
         rx: def.size * 0.25, rz: def.size * 0.25, rot: 0,
+        slug: def.slug, proxyFrame: { x: def.x, z: def.z, rotY: def.rotY || 0 },
       });
     } catch (e) {
       console.error(`static model failed: ${def.slug}`, e);
@@ -87,9 +90,10 @@ export const MODEL_DEFS = [
   { slug: 'bronze_whale_statue', size: 1.15, cell: 11, x: 6.6, z: 22.5 },
   { slug: 'ceiling_fan', size: 1.0, cell: 10, x: 1.8, z: 24, hangCeil: 4.0 },
   { slug: 'CoffeeCart_01', size: 1.4, cell: 10, x: -2.4, z: 25.6, rotY: Math.PI },
-  { slug: 'BarberShopChair_01', size: 1.15, cell: 12, x: -9.3, z: 24.2 },
-  { slug: 'mid_century_lounge_chair', size: 0.95, cell: 12, x: -4.8, z: 22.5 },
-  { slug: 'modern_arm_chair_01', size: 0.95, cell: 12, x: -9.3, z: 20.8 },
+  // chairs face the room center (Andre-specified turns from their old facing)
+  { slug: 'BarberShopChair_01', size: 1.15, cell: 12, x: -9.3, z: 24.2, rotY: Math.PI * 0.75 },
+  { slug: 'mid_century_lounge_chair', size: 0.95, cell: 12, x: -4.8, z: 22.5, rotY: -Math.PI / 2 },
+  { slug: 'modern_arm_chair_01', size: 0.95, cell: 12, x: -9.3, z: 20.8, rotY: Math.PI / 4 },
   { slug: 'ClassicConsole_01', size: 1.35, cell: 12, x: -7.1, z: 24.55 },
   // ornate_mirror_01 cut 2026-07-04 (hanging mirror read badly)
 ];

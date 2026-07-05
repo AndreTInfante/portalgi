@@ -28,7 +28,30 @@ export class PhysicsWorld {
     // colliders register in addStaticModels, which runs after buildLevel
     // (reading earlier silently skipped every statue)
     for (const cc of level.colliders) {
-      const h = cc.h !== undefined ? cc.h : 1.4; // statues: body-height box
+      // statics with authored occluder capsules (statues, plants) get sphere
+      // compounds instead of a crude box - props bounced erratically off the
+      // invisible box corners around the whale and horse
+      const authored = cc.slug && OCCLUDER_PROXIES.statics[cc.slug];
+      if (authored && cc.proxyFrame) {
+        const f = cc.proxyFrame;
+        const co = Math.cos(f.rotY), sn = Math.sin(f.rotY);
+        const body = new CANNON.Body({ type: CANNON.Body.STATIC });
+        for (const [a, b, r] of authored.capsules) {
+          // authoring-local -> world (same convention as occluders.capToWorld)
+          const A = [f.x + co * a[0] + sn * a[2], a[1], f.z - sn * a[0] + co * a[2]];
+          const B = [f.x + co * b[0] + sn * b[2], b[1], f.z - sn * b[0] + co * b[2]];
+          const len = Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]);
+          const n = Math.min(4, Math.max(2, Math.ceil(len / Math.max(r, 0.05)) + 1));
+          for (let k = 0; k < n; k++) {
+            const t = n === 1 ? 0 : k / (n - 1);
+            body.addShape(new CANNON.Sphere(r), new CANNON.Vec3(
+              A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t));
+          }
+        }
+        this.world.addBody(body);
+        continue;
+      }
+      const h = cc.h !== undefined ? cc.h : 1.4; // fallback: body-height box
       this._staticBox(
         [cc.x, h / 2, cc.z],
         [cc.rx || cc.r * 0.8, h / 2, cc.rz || cc.r * 0.8],
@@ -66,6 +89,15 @@ export class PhysicsWorld {
           body.addShape(new CANNON.Sphere(r), new CANNON.Vec3(q.x, q.y, q.z));
         }
       }
+      // flat foot: sphere compounds have no stable ground plane, so chairs
+      // and the cart never settled straight once disturbed. A thin box at
+      // the rest base (rFloor below the root) gives a real contact patch.
+      const bb = new THREE.Box3().setFromObject(p.mesh);
+      const size = bb.getSize(new THREE.Vector3());
+      body.addShape(
+        new CANNON.Box(new CANNON.Vec3(
+          Math.max(size.x * 0.3, 0.05), 0.025, Math.max(size.z * 0.3, 0.05))),
+        new CANNON.Vec3(0, -p.rFloor + 0.025, 0));
     } else {
       // no authored proxy: box from the world bbox at spawn (spawns unrotated)
       const bb = new THREE.Box3().setFromObject(p.mesh);

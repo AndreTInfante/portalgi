@@ -4,7 +4,7 @@
 // which makes it a razor-sharp probe of environment-approximation quality.
 import * as THREE from 'three';
 import * as CANNON from '../libs/cannon-es.js';
-import { findCell } from './level.js';
+import { findCell, WALL_T } from './level.js';
 
 const REST = 0.35;
 const tmpD = new THREE.Vector3();
@@ -87,6 +87,19 @@ export class Props {
   // anything else = the desktop ray-carry spring. The desktop Player instance
   // itself is a valid carrier (no quat/mode -> ray path).
   update(dt, carrier) {
+    // kinematic bodies (the held prop) do not wake sleeping dynamics on
+    // contact in cannon - after a while everything sleeps and the held prop
+    // ghosts through it. Nudge sleepers awake as the held prop approaches.
+    if (this.held && this.held.body) {
+      const hp = this.held.mesh.position;
+      for (const q of this.list) {
+        if (q === this.held || !q.body) continue;
+        if (q.body.sleepState === CANNON.Body.SLEEPING) {
+          const reach = this.held.radius + q.radius + 0.25;
+          if (hp.distanceToSquared(q.mesh.position) < reach * reach) q.body.wakeUp();
+        }
+      }
+    }
     if (this.physics) this.physics.step(dt);
     for (const p of this.list) {
       if (p === this.held) {
@@ -167,8 +180,11 @@ export class Props {
     let contacts = 0; // plane-index bitmask (hull cells have far fewer than 32 planes)
     for (let idx = 0; idx < cell.planes.length; idx++) {
       const pl = cell.planes[idx];
-      // floor rests at the model's true base height; walls use the sphere bound
-      const rad = pl.n.y > 0.5 ? p.rFloor : p.radius;
+      // floor rests at the model's true base height; walls use the sphere
+      // bound. Doored hull planes sit at MID-wall (portal coincidence), so
+      // they need the half-thickness back or held props sink into the wall.
+      const rad = (pl.n.y > 0.5 ? p.rFloor : p.radius) +
+        (cell.doorPlanes && cell.doorPlanes.has(idx) ? WALL_T / 2 : 0);
       const d = pl.n.dot(pos) + pl.d;
       if (d >= rad) continue;
       let passable = false;

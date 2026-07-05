@@ -87,6 +87,8 @@ uniform float uOccDensity;
 uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
 uniform float uOccAO;      // contact-AO strength from the same capsules
+uniform float uOccAOClamp; // AO minimum-distance clamp (m): surfaces never
+                           // evaluate closer than capsule surface + this
 uniform float uOccShadow;  // dynamic directional shadow strength (capsule shadow rays)
 uniform float uOccBudget;  // dynamic-entry CAPSULE budget shared by shadows, AO and
                            // reflection occlusion: dyn casters pack closest-first
@@ -139,9 +141,9 @@ float capsuleAO(int cell, vec3 P, vec3 N, float dynFade) {
       float t = cc > 1e-6 ? clamp(dot(P - A.xyz, u) / cc, 0.0, 1.0) : 0.0;
       vec3 d = A.xyz + u * t - P;                // to the nearest axis point
       // surfaces INSIDE a loose capsule (walls poking through a fit) never
-      // evaluate closer than the capsule surface + 3cm: contact stays strong,
-      // interior saturation blotches become impossible
-      float d2 = max(dot(d, d), (A.w + 0.03) * (A.w + 0.03));
+      // evaluate closer than the capsule surface + uOccAOClamp: contact stays
+      // strong, interior saturation blotches become impossible (GUI-tunable)
+      float d2 = max(dot(d, d), (A.w + uOccAOClamp) * (A.w + uOccAOClamp));
       float invd = inversesqrt(d2);
       float o1 = clamp(dot(N, d * invd), 0.0, 1.0) * (A.w * A.w) / d2;
       // smooth range falloff to zero BEFORE the binary entry reject radius -

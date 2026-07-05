@@ -379,10 +379,10 @@ const BENCH_DEFS = [
 const PEDESTAL_DEFS = [
   { cell: 0, x: -2.5, z: 1.4 }, { cell: 0, x: 0, z: 1.4 }, { cell: 0, x: 2.5, z: 1.4 },
   { cell: 0, x: -2.5, z: -1.4 }, { cell: 0, x: 0, z: -1.4 }, { cell: 0, x: 2.5, z: -1.4 },
-  // hall A spread wide: shadow/AO cost scales with casters near the viewer,
-  // so the dense prop room keeps its distance between exhibits
-  { cell: 10, x: -2.4, z: 20.3 }, { cell: 10, x: 2.4, z: 20.3 },
-  { cell: 10, x: -2.4, z: 24.7 }, { cell: 10, x: 2.4, z: 24.7 },
+  // hall A thinned 2026-07-04: horse + elephant moved to the gallery, their
+  // pedestals (and the never-used one under the fan) removed - only the
+  // brass pan pedestal remains, keeping the dyn blob load balanced per room
+  { cell: 10, x: -2.4, z: 24.7 },
   { cell: 12, x: -8.5, z: 22.5 }, { cell: 12, x: -5.8, z: 21 }, { cell: 12, x: -5.8, z: 24 },
 ];
 

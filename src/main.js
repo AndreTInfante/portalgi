@@ -283,6 +283,21 @@ void main() {
   }
   if (params.has('occluders')) matsys.globals.uOccOn.value = parseFloat(params.get('occluders'));
   if (params.has('occsh')) matsys.globals.uOccShadow.value = parseFloat(params.get('occsh'));
+  // dyn-effects budgets by platform (Andre-tuned): Quest is the tightest
+  // (locked 72 at 9/9), phones hold 60 with headroom, PC is unconstrained.
+  // ?occbudget= / ?occrange= pin values for A/B and skip the auto switch.
+  const applyDynBudget = () => {
+    const g = matsys.globals;
+    if (params.has('occbudget')) g.uOccBudget.value = parseFloat(params.get('occbudget'));
+    if (params.has('occrange')) g.uOccRange.value = parseFloat(params.get('occrange'));
+    if (params.has('occbudget') || params.has('occrange')) return;
+    if (renderer.xr.isPresenting) { g.uOccBudget.value = 9; g.uOccRange.value = 9; }
+    else if (isTouchDevice()) { g.uOccBudget.value = 16; g.uOccRange.value = 12; }
+    else { g.uOccBudget.value = 32; g.uOccRange.value = 100; }
+  };
+  applyDynBudget();
+  renderer.xr.addEventListener('sessionstart', applyDynBudget);
+  renderer.xr.addEventListener('sessionend', applyDynBudget);
   // eye-buffer scale: ~19% fill at 0.9 for near-invisible sharpness loss
   // (Tier 2 item 3; ground-truth ~1.9ms at the gallery worst view).
   // Applies at session START - re-enter VR after changing the GUI slider

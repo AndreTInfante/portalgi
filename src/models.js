@@ -79,8 +79,10 @@ export async function addStaticModels(level) {
 }
 
 export const MODEL_DEFS = [
-  { slug: 'horse_statue_01', size: 0.85, cell: 10, x: -2.4, z: 20.3, ped: true },
-  { slug: 'carved_wooden_elephant', size: 0.62, cell: 10, x: 2.4, z: 20.3, ped: true },
+  // horse + elephant live in the gallery now (on the pedestals the cut
+  // chrome/glass cubes vacated) - spreads dyn props across rooms
+  { slug: 'horse_statue_01', size: 0.85, cell: 0, x: 0, z: -1.4, ped: true },
+  { slug: 'carved_wooden_elephant', size: 0.62, cell: 0, x: 2.5, z: -1.4, ped: true },
   { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -2.4, z: 24.7, ped: true },
   { slug: 'bronze_whale_statue', size: 1.15, cell: 11, x: 6.6, z: 22.5 },
   { slug: 'ceiling_fan', size: 1.0, cell: 10, x: 1.8, z: 24, hangCeil: 4.0 },
@@ -89,7 +91,7 @@ export const MODEL_DEFS = [
   { slug: 'mid_century_lounge_chair', size: 0.95, cell: 12, x: -4.8, z: 22.5 },
   { slug: 'modern_arm_chair_01', size: 0.95, cell: 12, x: -9.3, z: 20.8 },
   { slug: 'ClassicConsole_01', size: 1.35, cell: 12, x: -7.1, z: 24.55 },
-  { slug: 'ornate_mirror_01', size: 1.2, cell: 12, x: -10.32, z: 22.5, rotY: Math.PI / 2, yCenter: 1.6 },
+  // ornate_mirror_01 cut 2026-07-04 (hanging mirror read badly)
 ];
 
 export async function loadModelProps(matsys, manager) {

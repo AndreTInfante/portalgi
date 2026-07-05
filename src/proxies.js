@@ -1,6 +1,7 @@
 // Hand-authored occluder capsule sets + blob albedo colors (authored in-app:
 // ?proxyedit=1, DUMP, paste here). Auto-fit is the fallback for any slug not
-// keyed. Full set authored by Andre 2026-07-04.
+// keyed. Full set authored by Andre 2026-07-04; simplified pass (fewer
+// capsules, fixed colors, plant proxies added) later the same day.
 //
 // COORDINATE FRAME (both statics and props): the model's authoring-local
 // frame - scaled to its in-game size, grounded/centered exactly as the game
@@ -29,6 +30,22 @@ export const OCCLUDER_PROXIES = {
         [[-0.363, 1.709, -1.274], [0.423, 1.697, -1.128], 0.164],
         [[0.03, 1.545, -1.187], [0.03, 1.092, -0.677], 0.19],
         [[-0.761, 1.045, 0.085], [0.821, 1.201, 0.188], 0.19],
+      ],
+    },
+    potted_plant_02: {
+      color: [0.144, 0.045, 0.008],
+      capsules: [
+        [[0, 0.644, -0.009], [0, 0.644, -0.009], 0.387],
+        [[0.063, 0.23, 0.125], [0.063, 0.23, 0.125], 0.307],
+        [[0.062, 0.436, 0.122], [0.062, 0.436, 0.122], 0.269],
+      ],
+    },
+    potted_plant_04: {
+      color: [0.42, 0.4, 0.36],
+      capsules: [
+        [[0, 0.391, -0.043], [0, 0.391, -0.043], 0.403],
+        [[-0.003, 0.724, -0.045], [-0.003, 0.724, -0.045], 0.375],
+        [[-0.003, 0.723, -0.048], [-0.003, 0.723, -0.048], 0.357],
       ],
     },
   },
@@ -71,16 +88,13 @@ export const OCCLUDER_PROXIES = {
     CoffeeCart_01: {
       color: [0.15, 0.147, 0.144],
       capsules: [
-        [[0.468, 0.163, 0.126], [0.468, 0.163, 0.126], 0.178],
-        [[-0.017, 0.26, 0.126], [-0.017, 0.41, 0.126], 0.267],
-        [[-0.049, -0.148, 0.126], [0.419, -0.163, 0.126], 0.341],
+        [[-0.049, -0.163, 0.126], [0.419, -0.178, 0.126], 0.341],
       ],
     },
     BarberShopChair_01: {
       color: [0.053, 0.044, 0.036],
       capsules: [
         [[0, -0.302, -0.068], [0, 0.3, -0.358], 0.257],
-        [[0, -0.411, -0.147], [0, -0.099, -0.133], 0.28],
       ],
     },
     mid_century_lounge_chair: {
@@ -92,13 +106,13 @@ export const OCCLUDER_PROXIES = {
     modern_arm_chair_01: {
       color: [0.06, 0.051, 0.044],
       capsules: [
-        [[0, -0.154, 0.203], [0, 0.212, -0.189], 0.429],
+        [[0, -0.074, 0.117], [0, 0.132, -0.103], 0.429],
       ],
     },
     ClassicConsole_01: {
-      color: [0.03, 0.03, 0.03], // black end table
+      color: [0.03, 0.03, 0.03],
       capsules: [
-        [[-0.218, 0, 0], [0.218, 0, 0], 0.457],
+        [[-0.197, 0.031, 0], [0.239, 0.031, 0], 0.457],
       ],
     },
     ornate_mirror_01: {

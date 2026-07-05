@@ -190,11 +190,14 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
       float s = den > 1e-6 ? clamp((bb * ee - cc * dd) / den, 0.0, span) : 0.0;
       float t = clamp((bb * s + ee) / cc, 0.0, 1.0);
       s = clamp(bb * t - dd, 0.0, span);
-      if (s < 0.02) continue;                    // resting contact is AO's job
       vec3 dv = (P + dir * s) - (A.xyz + u * t);
       float dist = length(dv);
       float rw = A.w + s * 0.12;                 // ~7deg effective source size
       float pen = clamp((rw - dist) / max(rw * 0.45, 1e-3), 0.0, 1.0);
+      // near-contact RAMP, not a hard skip: the binary skip printed a bright
+      // pinprick in the middle of the shadow wherever a prop nearly touched
+      // the receiver. Contact AO owns the contact zone; hand off smoothly.
+      pen *= smoothstep(0.0, 0.12, s);
       trans *= 1.0 - pen * min(1.0, (A.w * A.w) / (rw * rw)) * uOccShadow;
     }
     if (trans < 0.1) break;

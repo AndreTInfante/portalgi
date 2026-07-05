@@ -175,6 +175,11 @@ async function boot() {
   // visibility stays all-1 (the pre-vis behavior). ?lvis=0 disables for A/B.
   if (lightmapper && params.get('lvis') !== '0') {
     matsys.globals.uLightVis.value = buildLightVisTexture(level, lightmapper.bvh);
+    if (params.get('lvis') === 'black') { // positive control: every prop
+      const t = matsys.globals.uLightVis.value; // spot must go dark
+      t.image.data.fill(0);
+      t.needsUpdate = true;
+    }
   }
 
   // optional URL overrides for comparison screenshots

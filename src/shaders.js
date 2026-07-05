@@ -828,24 +828,26 @@ void main() {
   if (uPrevMix > 0.001 && uCellPrev >= 0) {
     dl = mix(dl, probeDiffuse(uCellPrev, wp.xyz, vNormal), uPrevMix);
   }
-  // per-light visibility, trilinear over the same probe grid (row = cell,
-  // x = probe*2 + half, rgba = 4 light slots) - the spot loop multiplies
-  // it in, so the sun stops lighting geometric shade and borrowed spots
-  // stop shining through walls without the per-cell uLightLocal gate
+  // per-light visibility, trilinear over a DENSIFIED virtual grid (2x the
+  // probe dims per axis, same bounds - lightvis.js; irradiance-probe
+  // spacing is far too coarse for shadow boundaries). Row = cell,
+  // x = visIdx*2 + half, rgba = 4 light slots. The spot loop multiplies
+  // it in: the sun stops lighting geometric shade, and borrowed spots stop
+  // shining through walls without the per-cell uLightLocal gate.
   {
     vec4 m0 = hfetch(uCell, ${PROBE_META_OFF});
     vec4 m1 = hfetch(uCell, ${PROBE_META_OFF + 1});
     vec4 m2 = hfetch(uCell, ${PROBE_META_OFF + 2});
-    vec3 dims = vec3(m0.w, m1.w, m2.x);
+    vec3 dims = max(vec3(m0.w, m1.w, m2.x) * 2.0 - 1.0, 1.0); // = visDims()
     vec3 g = clamp((wp.xyz - m0.xyz) / max(m1.xyz, vec3(1e-4)), 0.0, 1.0) * (dims - 1.0);
-    vec3 g0 = min(floor(g), dims - 2.0);
-    vec3 f = g - g0;
+    vec3 g0 = max(min(floor(g), dims - 2.0), 0.0);
+    vec3 f = clamp(g - g0, 0.0, 1.0);
     ivec3 gi = ivec3(g0 + 0.5);
     ivec3 di = ivec3(dims + 0.5);
     vVisA = vec4(0.0);
     vVisB = vec4(0.0);
     for (int i = 0; i < 8; i++) {
-      ivec3 c = gi + ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+      ivec3 c = min(gi + ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1), di - 1);
       float w = mix(1.0 - f.x, f.x, float(i & 1))
               * mix(1.0 - f.y, f.y, float((i >> 1) & 1))
               * mix(1.0 - f.z, f.z, float((i >> 2) & 1));

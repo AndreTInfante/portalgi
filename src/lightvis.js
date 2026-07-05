@@ -13,12 +13,26 @@
 // retires (in the vertex-diffuse path). Boot-time, geometry-only, ~25K
 // rays: no bake artifact, no manifest coupling.
 import * as THREE from 'three';
-import { MAX_PROBES } from './atlas.js';
 
-// texture layout: row = cell, x = probeIdx * 2 + half; RGBA8 unorm packs 4
+// Visibility samples on a DENSIFIED virtual grid: VIS_MULT x the probe grid
+// per axis, same bounds. The irradiance probes are spaced for smooth
+// ambience (~3-4m in the courtyard) - far too coarse for a shadow boundary:
+// trilinear over 4m smeared the loggia shade into "mostly sunny", so the
+// sun never turned off (Andre's report). Visibility is OUR texture, baked
+// at boot - density costs only boot rays, not atlas space. The shader
+// derives the dense dims arithmetically: visD = probeDims * 2 - 1.
+export const VIS_MULT = 2;
+const visDims = d => Math.max(1, d * VIS_MULT - 1);
+
+// texture layout: row = cell, x = visIdx * 2 + half; RGBA8 unorm packs 4
 // lights per texel, two texels = the cell's 8 light slots (list order)
 export function buildLightVisTexture(level, bvh) {
-  const W = MAX_PROBES * 2, H = level.cells.length;
+  let maxVis = 1;
+  for (const c of level.cells) {
+    maxVis = Math.max(maxVis,
+      visDims(c.probeGrid.dims[0]) * visDims(c.probeGrid.dims[1]) * visDims(c.probeGrid.dims[2]));
+  }
+  const W = maxVis * 2, H = level.cells.length;
   const data = new Uint8Array(W * H * 4).fill(255); // default fully visible
   const P = new THREE.Vector3();
   const target = new THREE.Vector3();
@@ -28,7 +42,7 @@ export function buildLightVisTexture(level, bvh) {
   let rays = 0;
   for (const cell of level.cells) {
     const pg = cell.probeGrid;
-    const [dx, dy, dz] = pg.dims;
+    const [dx, dy, dz] = [visDims(pg.dims[0]), visDims(pg.dims[1]), visDims(pg.dims[2])];
     const nL = Math.min(cell.lights.length, 8);
     if (!nL) continue;
     for (let gz = 0; gz < dz; gz++) {
@@ -78,6 +92,23 @@ export function buildLightVisTexture(level, bvh) {
   const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.UnsignedByteType);
   tex.minFilter = tex.magFilter = THREE.NearestFilter;
   tex.needsUpdate = true;
-  console.log(`light visibility: ${rays} rays, ${(performance.now() - t0).toFixed(0)}ms`);
+  // per-cell occlusion stats: "all 255" in a cell with occludable lights
+  // means the rays are not hitting anything - the bake is broken, not subtle
+  const stats = level.cells.map(cell => {
+    const pg = cell.probeGrid;
+    const n = visDims(pg.dims[0]) * visDims(pg.dims[1]) * visDims(pg.dims[2]);
+    const nL = Math.min(cell.lights.length, 8);
+    let lo = 255, shaded = 0, total = 0;
+    for (let i = 0; i < n; i++) {
+      for (let li = 0; li < nL; li++) {
+        const v = data[(cell.id * W + i * 2 + (li >> 2)) * 4 + (li & 3)];
+        total++;
+        if (v < 240) shaded++;
+        if (v < lo) lo = v;
+      }
+    }
+    return `${cell.name}:${shaded}/${total}(min${lo})`;
+  });
+  console.log(`light visibility: ${rays} rays, ${(performance.now() - t0).toFixed(0)}ms | ` + stats.join(' '));
   return tex;
 }

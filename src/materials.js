@@ -3,7 +3,6 @@
 // all materials, so flipping e.g. uMaxSteps.value updates the whole scene.
 import * as THREE from 'three';
 import { SCENE_VERT, sceneFrag, sceneVertProp } from './shaders.js';
-import { MAX_PROBES } from './atlas.js';
 import { buildOccluderGroup } from './occluders.js';
 
 // hull records as a std140 uniform block: the traversal's dependent
@@ -88,7 +87,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     // texelFetch reads ZERO - a 1x1 fallback would unlight every prop spot
     uLightVis: {
       value: (() => {
-        const w = MAX_PROBES * 2, h = numCells;
+        // 256 vis-grid points x 2 texels: covers the densified virtual grid
+        // (lightvis.js VIS_MULT) for every cell
+        const w = 512, h = numCells;
         const t = new THREE.DataTexture(
           new Uint8Array(w * h * 4).fill(255), w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
         t.minFilter = t.magFilter = THREE.NearestFilter;

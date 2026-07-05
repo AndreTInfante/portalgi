@@ -63,7 +63,16 @@ function fail(msg) {
   throw new Error(msg);
 }
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: SHOT > 0 });
+// Chrome blocklists pages that crashed the GPU process ("context loss and
+// was blocked"): three then throws out of the constructor. Catch it and say
+// what actually helps instead of dying in the console.
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: SHOT > 0 });
+} catch (e) {
+  fail('WebGL is unavailable (your browser may have blocked it after an earlier crash). ' +
+    'Fully close and reopen the browser, then try again.');
+}
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);

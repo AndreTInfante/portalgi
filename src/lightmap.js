@@ -383,7 +383,7 @@ export class Lightmapper {
 
   totalSteps() {
     const acc = this.finalPasses > 1 ? 1 + this.finalPasses * this.strips : 0;
-    return 2 + this.iterations * (this.strips + 1) + acc + 2;
+    return 2 + this.iterations * (this.strips + 1) + acc + 4;
   }
 
   *bakeSteps() {
@@ -457,8 +457,9 @@ export class Lightmapper {
       }
       this.ptUniforms.uAccumW.value = 0;
     }
-    // dilation ping-pong (2 passes)
-    for (let d = 0; d < 2; d++) {
+    // dilation ping-pong (4 passes: each grows 1 texel; the pad ring is 4px
+    // now so mip levels 1-2 average dilated data, never zeros)
+    for (let d = 0; d < 4; d++) {
       this.dilateMat.uniforms.uSrc.value = this.lmA.texture;
       this.runFs(this.lmB, this.dilateMat);
       const s = this.lmA; this.lmA = this.lmB; this.lmB = s;

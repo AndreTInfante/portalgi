@@ -90,11 +90,8 @@ uniform float uOccAO;      // contact-AO strength from the same capsules
 uniform float uOccAOClamp; // AO minimum-distance clamp (m): surfaces never
                            // evaluate closer than capsule surface + this
 uniform float uOccShadow;  // dynamic directional shadow strength (capsule shadow rays)
-uniform float uOccBudget;  // dynamic-entry CAPSULE budget shared by shadows, AO and
-                           // reflection occlusion: dyn casters pack closest-first
-                           // and consume budget by capsule count - cost-based, so
-                           // six 1-blob gallery props all fit while one 8-blob cart
-                           // spends most of it. Statics never spend budget.
+// (the dyn capsule BUDGET is spent at pack time in occluders.update - it is
+// deterministic per cell per frame, so shader-side spending was pure waste)
 uniform float uOccRange;   // dynamic effects exist only within this radius of the
                            // viewer (2m feather; statics are unaffected) - the
                            // budget concentrates where anyone can see it
@@ -110,28 +107,22 @@ float capsuleAO(int cell, vec3 P, vec3 N, float dynFade) {
   if (cnt == 0) return 1.0;
   int first = int(uOccCell[cell].x);
   int dyn = int(uOccCell[cell].z);
-  int budget = int(uOccBudget);
   float aoc = 1.0;
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
-    vec4 colw = uOccColor[first + pi];
-    int packed = int(colw.w + 0.5);
-    int sc = (packed >> 6) & 7;
-    // dyn entries (packed closest-first) spend the shared capsule budget and
-    // fade with viewer distance; statics (furniture - this is their only
-    // shadow) always evaluate at full strength
-    float k = 1.0;
-    if (pi < dyn) {
-      budget -= sc;             // spend BEFORE any per-pixel test: the caster
-      if (budget < 0) continue; // set must be identical across the cell
-      k = dynFade;
-      if (k <= 0.0) continue;
-    }
+    // dyn entries (packed closest-first, budget-truncated at pack time) fade
+    // with viewer distance; statics (furniture - this is their only shadow)
+    // always evaluate at full strength
+    float k = pi < dyn ? dynFade : 1.0;
+    if (k <= 0.0) continue;
     vec4 b = uOccBound[first + pi];
     vec3 dc = b.xyz - P;
     float rb = b.w + 0.7;                        // AO reach beyond the bound
-    if (dot(dc, dc) > rb * rb) continue;
+    if (dot(dc, dc) > rb * rb) continue;         // common path: 1 vec4 read
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
     if ((packed & 63) == uOccSelf) continue;     // own-group skip
+    int sc = (packed >> 6) & 7;
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;
@@ -167,6 +158,19 @@ float capsuleAO(int cell, vec3 P, vec3 N, float dynFade) {
 float capsuleShadow(int cell, vec3 P, vec3 N) {
   int dyn = int(uOccCell[cell].z);
   if (dyn == 0) return 1.0;
+  int first = int(uOccCell[cell].x);
+  // reach pre-reject: the march is capped at 3m, so a pixel farther than
+  // bound + 3m from EVERY caster can never be shadowed - skip the whole
+  // 8-light direction loop (it was paid by every pixel in furnished rooms)
+  bool near = false;
+  for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
+    if (pi >= dyn) break;
+    vec4 b = uOccBound[first + pi];
+    vec3 dc = b.xyz - P;
+    float rr = b.w + 3.2;
+    if (dot(dc, dc) < rr * rr) { near = true; break; }
+  }
+  if (!near) return 1.0;
   vec3 acc = vec3(0.0);
   float wsum = 0.0;
   for (int i = 0; i < 8; i++) {
@@ -194,29 +198,22 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
   // shorter segment lets the per-entry bound test reject far more pixels
   // (the shadow march measured ~2ms at 125->85u; this is the cheap half)
   float span = min(len, 3.0);
-  int first = int(uOccCell[cell].x);
   // single-ray visibility: overlapping volumes block the light ONCE - take
   // the MAX coverage over capsules, not the product (the product printed
   // extra darkening wherever authored capsules overlap)
   float occl = 0.0;
-  int budget = int(uOccBudget);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= dyn) break;
-    // capsule-count budget, spent CLOSEST-FIRST and BEFORE the per-pixel
-    // bound reject: the caster set must be identical for every pixel in the
-    // cell or shadows would pop at reject boundaries
-    vec4 colw = uOccColor[first + pi];
-    int packed = int(colw.w + 0.5);
-    int sc = (packed >> 6) & 7;
-    budget -= sc;
-    if (budget < 0) break;
     vec4 b = uOccBound[first + pi];
     vec3 dc = b.xyz - P;
     float tb = clamp(dot(dc, dir), 0.0, span);
     vec3 q = dc - dir * tb;
     float rb = b.w + 0.6;                        // penumbra margin
-    if (dot(q, q) > rb * rb) continue;
+    if (dot(q, q) > rb * rb) continue;           // common path: 1 vec4 read
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
     if ((packed & 63) == uOccSelf) continue;     // own-group skip
+    int sc = (packed >> 6) & 7;
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;

@@ -71,14 +71,20 @@ export async function fetchManifest() {
   }
 }
 
-export async function loadHalfTexture(path, w, h) {
+export async function loadHalfTexture(path, w, h, mips = false) {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`missing baked texture: ${path}`);
   const buf = await res.arrayBuffer();
   if (buf.byteLength !== w * h * 4 * 2) throw new Error(`size mismatch for ${path}`);
   const tex = new THREE.DataTexture(new Uint16Array(buf), w, h, THREE.RGBAFormat, THREE.HalfFloatType);
-  tex.minFilter = tex.magFilter = THREE.LinearFilter;
-  tex.generateMipmaps = false;
+  // mips (the lightmap): distant floors/walls were sampling an unmipped
+  // 2048x2752 texture - worst-case cache locality AND minification shimmer.
+  // RGBA16F is filterable+renderable here (EXT_color_buffer_float required
+  // at boot), so generateMipmap works; chart PAD is 4px so levels 1-2 stay
+  // inside their gutters. The atlas keeps manual LOD + its own borders.
+  tex.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = mips;
   tex.needsUpdate = true;
   return tex;
 }

@@ -250,11 +250,16 @@ export class OccluderSystem {
   // Only cells a reflection ray can actually start in (visible) or reach in
   // one hop (their portal neighbors, precomputed by the caller) need slots
   // this frame - that is what buys 16 entries/cell inside the UBO budget.
-  // viewPos: dynamic entries pack CLOSEST-FIRST to it, so the shader-side
-  // shadow-caster cap (uOccMaxCast) always keeps the most relevant casters.
-  update(activeCells, viewPos = null) {
+  // viewPos: dynamic entries pack CLOSEST-FIRST to it. capsuleBudget: dyn
+  // entries are TRUNCATED here, at pack time - the budget outcome is
+  // deterministic per cell per frame, so spending it in the shader was pure
+  // per-pixel waste (and forced the color/meta read before the bound reject)
+  update(activeCells, viewPos = null, capsuleBudget = Infinity) {
     const occ = this.occ;
-    const byCell = new Map();
+    // pooled per-frame structures: this runs 72x/s and Quest-browser GC
+    // pauses read as unexplained single-frame drops
+    const byCell = this._byCell || (this._byCell = new Map());
+    for (const list of byCell.values()) list.length = 0;
     const push = (cellId, item) => {
       if (activeCells && !activeCells.has(cellId)) return;
       let list = byCell.get(cellId);
@@ -275,10 +280,8 @@ export class OccluderSystem {
       }
       // dyn: props pack at the HEAD of each cell's list so the shadow rays
       // can march just them (uOccCell.z) - statics' shadows are baked
-      const item = {
-        world: e.world, col: e.col, group: e.group, dyn: true,
-        d2: viewPos ? mesh.position.distanceToSquared(viewPos) : 0,
-      };
+      const item = e.item || (e.item = { world: e.world, col: e.col, group: e.group, dyn: true, d2: 0 });
+      item.d2 = viewPos ? mesh.position.distanceToSquared(viewPos) : 0;
       push(e.p.cell, item);
       // near a portal, register in the neighbor too: shadows, contact AO and
       // reflection occlusion clipped hard at portal planes when a caster
@@ -312,7 +315,7 @@ export class OccluderSystem {
     for (let c = 0; c < occ.numCells; c++) {
       const list = byCell.get(c);
       const first = pi;
-      let count = 0, dynCount = 0;
+      let count = 0, dynCount = 0, dynCaps = 0;
       if (list) {
         // dyn entries closest-first (a dozen items - a full sort is nothing);
         // statics keep their arbitrary order after them
@@ -320,6 +323,12 @@ export class OccluderSystem {
         for (const e of list) {
           if (count >= MAX_PER_CELL || pi >= MAX_OCC_PROPS ||
               si + e.world.length * 2 > MAX_SPHERES) break;
+          if (e.dyn) {
+            // closest-first capsule budget, spent here so every consumer
+            // (AO / shadows / reflection occlusion) sees the same caster set
+            dynCaps += e.world.length;
+            if (dynCaps > capsuleBudget) continue; // statics still follow
+          }
           // entry-level bounding sphere over both capsule endpoints
           let cx = 0, cy = 0, cz = 0;
           for (const [wa, wb] of e.world) {

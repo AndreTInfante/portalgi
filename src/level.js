@@ -211,7 +211,8 @@ export function emitSharedChart(items, n, uvFn) {
 // mesh edge blends the border texel with its dilated gutter copy = same
 // value, so seams stay continuous. (2px pad ring is filled by dilation.)
 export function packLightmapCharts(level, density = 16, atlasW = 1024) {
-  const PAD = 2;
+  const PAD = 4; // was 2: the shipped lightmap is mipped now, and 4px of
+                 // dilated gutter keeps mip levels 1-2 from crossing charts
   const entries = [];
   const seenShared = new Set();
   for (const cell of level.cells) {

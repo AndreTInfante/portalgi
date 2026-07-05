@@ -299,7 +299,9 @@ void main() {
     if (params.has('occbudget')) g.uOccBudget.value = parseFloat(params.get('occbudget'));
     if (params.has('occrange')) g.uOccRange.value = parseFloat(params.get('occrange'));
     if (params.has('occbudget') || params.has('occrange')) return;
-    if (renderer.xr.isPresenting) { g.uOccBudget.value = 9; g.uOccRange.value = 9; }
+    // Quest range 12 (was 9): the shadow reach pre-reject + pack-time budget
+    // made distant receivers nearly free, so the fade can sit farther out
+    if (renderer.xr.isPresenting) { g.uOccBudget.value = 9; g.uOccRange.value = 12; }
     else if (isTouchDevice()) { g.uOccBudget.value = 16; g.uOccRange.value = 12; }
     else { g.uOccBudget.value = 32; g.uOccRange.value = 100; }
   };
@@ -441,7 +443,7 @@ void main() {
       overlayMsg.textContent = 'Loading baked lighting...';
       const [atlasTex, lmTex] = await Promise.all([
         loadHalfTexture('./baked/atlas.bin', manifest.atlas.w, manifest.atlas.h),
-        loadHalfTexture('./baked/lightmap.bin', manifest.lightmap.w, manifest.lightmap.h),
+        loadHalfTexture('./baked/lightmap.bin', manifest.lightmap.w, manifest.lightmap.h, true),
       ]);
       matsys.globals.uAtlas.value = atlasTex;
       matsys.globals.uLightmap.value = lmTex;
@@ -542,7 +544,9 @@ void main() {
     };
   };
   // in-VR frame-rate cap toggle (A/X button on either controller)
-  const rateState = { target: 90, ready: true };
+  // ship at 72: every session started in the expensive 90Hz mode until
+  // someone pressed A/X; 72 is the mode the demo is actually tuned for
+  const rateState = { target: 72, ready: true };
   const rateCanvas = document.createElement('canvas');
   rateCanvas.width = 128; rateCanvas.height = 64;
   const rateTex = new THREE.CanvasTexture(rateCanvas);
@@ -641,7 +645,7 @@ void main() {
   if (!navigator.xr) errEl.textContent += 'XR: navigator.xr missing (no WebXR in this browser)\n';
   if (navigator.xr && !SHOT && !BAKE) {
     renderer.xr.enabled = true;
-    renderer.xr.setFoveation(1.0);
+    renderer.xr.setFoveation(0.5); // adaptive controller takes it from here
     document.body.appendChild(VRButton.createButton(renderer));
     navigator.xr.isSessionSupported('immersive-vr')
       .then(ok => { errEl.textContent += `XR: api ok, immersive-vr ${ok ? 'supported' : 'NOT SUPPORTED'}\n`; })
@@ -707,6 +711,11 @@ void main() {
   }
   let snapReady = true;
   let perfBtnReady = true;
+  // pooled per-frame vectors + the ray-mode carrier (GC pauses on the Quest
+  // browser read as unexplained one-frame drops at a locked 72)
+  const heading = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const rayCarrier = { pos: null, quat: null, viewDir: heading, vel: new THREE.Vector3(), eye: new THREE.Vector3(), mode: 'ray' };
   function xrUpdate(dt) {
     // three's XR eye cameras have their OWN layer masks (0|1 and 0|2) - our
     // dynamic layer 3 must be enabled on them or props vanish in-session
@@ -715,10 +724,10 @@ void main() {
     for (const c of xrCam.cameras) c.layers.enable(3);
     camera.getWorldPosition(headPos);
     const session = renderer.xr.getSession();
-    const heading = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(tmpQ));
+    heading.set(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(tmpQ));
     heading.y = 0;
     heading.normalize();
-    const right = new THREE.Vector3(-heading.z, 0, heading.x);
+    right.set(-heading.z, 0, heading.x);
     for (const src of session.inputSources) {
       const a = src.gamepad && src.gamepad.axes;
       if (!a || a.length < 4) continue;
@@ -788,16 +797,49 @@ void main() {
       if (!cc) continue;
       cc.getWorldPosition(tmpV);
       const hist = cc.userData.hist || (cc.userData.hist = []);
-      hist.push({ p: tmpV.clone(), t: now });
-      while (hist.length > 2 && now - hist[0].t > 0.12) hist.shift();
+      let spare = null; // recycle expired entries instead of allocating
+      while (hist.length > 2 && now - hist[0].t > 0.12) spare = hist.shift();
+      if (spare) { spare.p.copy(tmpV); spare.t = now; hist.push(spare); }
+      else hist.push({ p: tmpV.clone(), t: now });
     }
     const holder = [0, 1].map(i => renderer.xr.getController(i)).find(c => c && c.userData.holding);
-    xrCarrier = holder ? ctrlCarrier(holder)
-      : { pos: player.pos, quat: null, viewDir: heading, vel: new THREE.Vector3(), eye: headPos.clone(), mode: 'ray' };
+    if (holder) {
+      xrCarrier = ctrlCarrier(holder);
+    } else {
+      rayCarrier.pos = player.pos;
+      rayCarrier.vel.set(0, 0, 0);
+      rayCarrier.eye.copy(headPos);
+      xrCarrier = rayCarrier;
+    }
   }
 
   const occActive = new Set();
   const skyCells = [level.cells.find(c => c.sky).id, level.cells.find(c => c.hollow).id];
+  // adaptive quality: sharp periphery (low foveation) + full dyn range in the
+  // cheap rooms - most of them - ratcheting up foveation and pulling the dyn
+  // range in only when frames actually drop. Load is very room-dependent;
+  // static worst-case settings taxed every room for the two hot views.
+  const adapt = { fov: 0.5, t: 0 };
+  const adaptTick = dt => {
+    adapt.t += dt;
+    if (adapt.t < 0.5) return;
+    adapt.t = 0;
+    const med = perf.medianMs();
+    const ds = perf.deltas;
+    if (!med || ds.length < 40) return;
+    let drops = 0;
+    const n = Math.min(60, ds.length);
+    for (let i = ds.length - n; i < ds.length; i++) if (ds[i] > med * 1.5) drops++;
+    const rate = drops / n;
+    const prev = adapt.fov;
+    if (rate > 0.05) adapt.fov = Math.min(1.0, adapt.fov + 0.15);      // degrade fast
+    else if (rate < 0.01) adapt.fov = Math.max(0.35, adapt.fov - 0.05); // recover slow
+    if (adapt.fov !== prev) renderer.xr.setFoveation(adapt.fov);
+    // the dyn-effects range rides the same signal (params/desktop pins win)
+    if (!params.has('occrange') && renderer.xr.isPresenting) {
+      matsys.globals.uOccRange.value = adapt.fov > 0.85 ? 9 : 12;
+    }
+  };
   let last = performance.now(), fpsAvg = 0;
   renderer.setAnimationLoop(() => {
     const now = performance.now();
@@ -809,6 +851,7 @@ void main() {
         try {
           xrUpdate(dt);
           props.update(dt, xrCarrier);
+          adaptTick(dt);
         } catch (e) { // surface XR-path crashes on the page (visible after exit)
           errEl.textContent += `XR loop error: ${e.message}\n`;
         }
@@ -844,8 +887,9 @@ void main() {
         }
         active = occActive;
       }
-      // closest-first dyn packing keys the shadow-caster cap to the viewer
-      occluders.update(active, inXR ? headPos : player.pos);
+      // closest-first dyn packing; the capsule budget truncates at pack time
+      occluders.update(active, inXR ? headPos : player.pos,
+        matsys.globals.uOccBudget.value);
     }
     if (!inXR) {
       player.applyToCamera(camera);

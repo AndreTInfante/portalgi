@@ -55,12 +55,14 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     get lightmap() { return g.uUseLightmap.value > 0.5; }, set lightmap(v) { matsys.setUseLightmap(v); },
   };
   const f1 = gui.addFolder('Traversal');
-  f1.add(proxy, 'steps', 0, 6, 1).name('portal hops (0=PCCM)');
-  f1.add(proxy, 'roughHops').name('rough-scaled hops');
+  // floors/props run ONE unrolled hop (hop1); these two only steer the full
+  // multi-hop march that survives in glass/chrome/pane (0 = PCCM everywhere)
+  f1.add(proxy, 'steps', 0, 6, 1).name('portal hops (glass; 0=PCCM)');
+  f1.add(proxy, 'roughHops').name('rough-scaled hops (glass)');
   f1.add(proxy, 'edgeBlend').name('edge blend');
-  f1.add(proxy, 'blendBase', 0, 0.4, 0.01).name('blend width base');
-  f1.add(proxy, 'blendRough', 0, 3, 0.05).name('blend - rough-dist');
-  f1.add(proxy, 'distRough', 0, 1, 0.01).name('rough growth /m');
+  f1.add(proxy, 'blendBase', 0, 0.4, 0.01).name('blend width base (m)');
+  f1.add(proxy, 'blendRough', 0, 3, 0.05).name('blend width / rough-m');
+  f1.add(proxy, 'distRough', 0, 2, 0.05).name('rough growth (1=physical)');
   // blendedIrr is compiled into the static program only in lightmap-off
   // fallback mode (shader variants); this dial is inert during normal play
   f1.add(proxy, 'irrBlend', 0, 6, 0.05).name('irr blend (lm-off only)');
@@ -75,6 +77,10 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   }
   if (onStaticImposters) f2.add({ si: true }, 'si').name('statues via proxies (rebakes)').onChange(onStaticImposters);
   {
+    // occluders now split by receiver: STATICS read the texture-space layer
+    // (dynocc.js splat - ao/shadow dials feed it live), PROPS evaluate the
+    // capsules per VERTEX, reflections march occSegment. One switch, one
+    // set of dials, three consumers.
     const fo = gui.addFolder('Occluders');
     const op = {
       get on() { return g.uOccOn.value > 0.5; }, set on(v) { g.uOccOn.value = v ? 1 : 0; },
@@ -82,11 +88,14 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
       get widen() { return g.uOccWiden.value; }, set widen(v) { g.uOccWiden.value = v; },
       get hops() { return g.uOccHops.value; }, set hops(v) { g.uOccHops.value = v; },
       get tint() { return g.uOccTint.value; }, set tint(v) { g.uOccTint.value = v; },
+      get lod() { return g.uOccLod.value; }, set lod(v) { g.uOccLod.value = v; },
     };
-    fo.add(op, 'on').name('analytic occluders');
-    fo.add(op, 'density', 0, 3, 0.01);
-    fo.add(op, 'widen', 0, 2, 0.01).name('cone / rough-m (fade)');
-    fo.add(op, 'tint', 0, 1, 0.01).name('diffuse re-emit');
+    fo.add(op, 'on').name('occluders (AO+shadows+blobs)');
+    fo.add(op, 'density', 0, 3, 0.01).name('blob density');
+    fo.add(op, 'widen', 0, 2, 0.01).name('blob cone / rough-m');
+    fo.add(op, 'tint', 0, 1, 0.01).name('blob diffuse re-emit');
+    fo.add(op, 'lod', 0, 6, 0.25).name('blob LOD (0=always march)');
+    fo.add(op, 'hops', 0, 4, 1).name('blob hops (glass walk)');
     fo.add({ get ao() { return g.uOccAO.value; }, set ao(v) { g.uOccAO.value = v; } },
       'ao', 0, 1.5, 0.01).name('contact AO');
     fo.add({ get ac() { return g.uOccAOClamp.value; }, set ac(v) { g.uOccAOClamp.value = v; } },
@@ -94,13 +103,16 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     fo.add({ get sh() { return g.uOccShadow.value; }, set sh(v) { g.uOccShadow.value = v; } },
       'sh', 0, 1, 0.01).name('dyn shadows');
     fo.add({ get mc() { return g.uOccBudget.value; }, set mc(v) { g.uOccBudget.value = v; } },
-      'mc', 0, 32, 1).name('dyn blob budget (closest-first)');
+      'mc', 0, 32, 1).name('dyn capsule budget (pack)');
+    // range now gates only prop-receiver effects + reflection blobs; the
+    // static layer has no view fade (texel-bounded)
     fo.add({ get rg() { return g.uOccRange.value; }, set rg(v) { g.uOccRange.value = v; } },
-      'rg', 4, 20, 0.5).name('dyn range (m)');
-    fo.add(op, 'hops', 0, 4, 1).name('LOD (cells of walk)');
+      'rg', 4, 100, 1).name('dyn range (props+blobs, m)');
     fo.add({ dump: () => {
       const j = JSON.stringify({ density: g.uOccDensity.value,
-        widen: g.uOccWiden.value, tint: g.uOccTint.value, hops: g.uOccHops.value }, null, 2);
+        widen: g.uOccWiden.value, tint: g.uOccTint.value, hops: g.uOccHops.value,
+        lod: g.uOccLod.value, ao: g.uOccAO.value, aoClamp: g.uOccAOClamp.value,
+        shadow: g.uOccShadow.value, distRough: g.uDistRough.value }, null, 2);
       console.log('occluder params:', j);
       if (navigator.clipboard) navigator.clipboard.writeText(j).catch(() => {});
     } }, 'dump').name('DUMP values (console+clipboard)');

@@ -23,6 +23,7 @@ import { OccluderSystem } from './occluders.js';
 import { DynOccLayer } from './dynocc.js';
 import { buildWarpField } from './warpfield.js';
 import { buildLightVisTexture } from './lightvis.js';
+import { VRMenu } from './vrmenu.js';
 import { AudioSystem } from './audio.js';
 import { TouchControls, isTouchDevice } from './touch.js';
 import { PhysicsWorld } from './physics.js';
@@ -809,6 +810,7 @@ void main() {
     perfTex.needsUpdate = true;
   }
 
+  let vrMenu = null; // built inside the XR block, read by xrUpdate
   if (!navigator.xr) errEl.textContent += 'XR: navigator.xr missing (no WebXR in this browser)\n';
   if (navigator.xr && !SHOT && !BAKE) {
     renderer.xr.enabled = true;
@@ -828,9 +830,57 @@ void main() {
       }
       props.dropHeld();
     });
+    // in-VR debug menu on the LEFT hand (X toggles; right stick + A drive
+    // it) plus an always-on prompt so an outsider knows the controls exist
+    {
+      const g = matsys.globals;
+      const viewNames = ['none', 'cell tint', 'heatmap', 'irradiance', 'white', 'lightmap'];
+      const clampi = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+      vrMenu = new VRMenu([
+        { name: 'debug view', value: () => viewNames[g.uDebugMode.value],
+          adjust: d => {
+            g.uDebugMode.value = (g.uDebugMode.value + d + 6) % 6;
+            matsys.setDebugCompiled(g.uDebugMode.value > 0); // rebuild hitch, expected
+          } },
+        { name: 'lightmap', value: () => g.uUseLightmap.value > 0.5 ? 'on' : 'off',
+          adjust: () => matsys.setUseLightmap(!(g.uUseLightmap.value > 0.5)) },
+        { name: 'occluders', value: () => g.uOccOn.value > 0.5 ? 'on' : 'off',
+          adjust: () => { g.uOccOn.value = g.uOccOn.value > 0.5 ? 0 : 1; } },
+        { name: 'dyn shadows', value: () => g.uOccShadow.value > 0.001 ? 'on' : 'off',
+          adjust: () => { g.uOccShadow.value = g.uOccShadow.value > 0.001 ? 0 : 0.85; } },
+        { name: 'portal hops (glass)', value: () => String(g.uMaxSteps.value),
+          adjust: d => { g.uMaxSteps.value = clampi(g.uMaxSteps.value + d, 0, 6); } },
+        { name: 'blob hops', value: () => String(g.uOccHops.value),
+          adjust: d => { g.uOccHops.value = clampi(g.uOccHops.value + d, 0, 4); } },
+        { name: 'exposure EV', value: () => Math.log2(g.uExposure.value).toFixed(2),
+          adjust: d => { g.uExposure.value = Math.pow(2, Math.log2(g.uExposure.value) + d * 0.25); } },
+        { name: 'portal wires', value: () => wires.visible ? 'on' : 'off',
+          adjust: () => { wires.visible = !wires.visible; } },
+        { name: 'portal culling', value: () => culler.enabled ? 'on' : 'off',
+          adjust: () => { culler.enabled = !culler.enabled; } },
+        { name: 'target rate', value: () => rateState.target + 'Hz',
+          adjust: () => {
+            rateState.target = rateState.target === 90 ? 72 : 90;
+            drawRate();
+            applyRate(renderer.xr.getSession());
+          } },
+        { name: 'perf batch', value: () => (perf.batch || perf.sweep) ? 'RUNNING' : 'run',
+          adjust: () => {
+            if (perf.batch || perf.sweep) perf.cancelBatch();
+            else { const b = perf.batchSetup(); perf.startBatch(b.configs, b.restore); }
+          } },
+      ]);
+    }
     for (const i of [0, 1]) {
       const c = renderer.xr.getController(i);
       rig.add(c);
+      // the menu + prompt ride whichever controller reports LEFT handedness
+      c.addEventListener('connected', e => {
+        if (e.data && e.data.handedness === 'left' && vrMenu) {
+          c.add(vrMenu.mesh);
+          c.add(vrMenu.prompt);
+        }
+      });
       // visible hand: emissive puck + aim laser (layer 3: XR-only, never captured)
       const puck = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12),
         matsys.makeMaterial(0, { tint: [0.02, 0.02, 0.02], emissive: [1.5, 1.6, 1.8] }));
@@ -897,6 +947,14 @@ void main() {
     heading.y = 0;
     heading.normalize();
     right.set(-heading.z, 0, heading.x);
+    // debug menu first: while open it owns the right stick + A (snap turn
+    // and the rate toggle are suppressed); left X toggles it
+    let leftPad = null, rightPad = null;
+    for (const src of session.inputSources) {
+      if (src.handedness === 'left') leftPad = src.gamepad;
+      else if (src.handedness === 'right') rightPad = src.gamepad;
+    }
+    const menuActive = vrMenu ? vrMenu.update(leftPad, rightPad) : false;
     for (const src of session.inputSources) {
       const a = src.gamepad && src.gamepad.axes;
       if (!a || a.length < 4) continue;
@@ -905,7 +963,7 @@ void main() {
         rig.position.addScaledVector(heading, -y * 2.5 * dt);
         rig.position.addScaledVector(right, x * 2.5 * dt);
       }
-      if (src.handedness === 'right') {
+      if (src.handedness === 'right' && !menuActive) {
         if (Math.abs(x) > 0.7 && snapReady) {
           snapReady = false;
           const ang = x > 0 ? -Math.PI / 6 : Math.PI / 6;
@@ -922,12 +980,12 @@ void main() {
         if (Math.abs(x) < 0.3) snapReady = true;
       }
     }
-    // A/X button: toggle the target frame-rate cap between 72 and 90
-    let ratePressed = false;
-    for (const src of session.inputSources) {
-      const b = src.gamepad && src.gamepad.buttons;
-      if (b && b[4] && b[4].pressed) ratePressed = true;
-    }
+    // A button (RIGHT hand): toggle the target frame-rate cap between 72
+    // and 90. Left X belongs to the debug menu now; while the menu is open
+    // A drives it instead.
+    let ratePressed = !menuActive &&
+      !!(rightPad && rightPad.buttons && rightPad.buttons[4] && rightPad.buttons[4].pressed);
+    if (menuActive) rateState.ready = false;
     if (ratePressed && rateState.ready) {
       rateState.ready = false;
       rateState.target = rateState.target === 90 ? 72 : 90;

@@ -105,7 +105,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
                                 // (cone footprint is 0; the old 0.04 floor
                                 // over-blurred portals - user-tuned 2026-07-04)
     uBlendRough: { value: 1.0 }, // ~cone footprint radius per (roughness - meter); silhouette edges only
-    uDistRough: { value: 0.12 },
+    uDistRough: { value: 1.0 },  // dimensionless: 1 = physical t*rough/d
+                                 // angular-footprint growth (was 0.12/m,
+                                 // which froze d at ~8m - see traceSpec)
     uIrrBlend: { value: 3.0 },
     uBake: { value: 0.0 },
     uExposure: { value: 0.3 },

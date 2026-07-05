@@ -406,7 +406,12 @@ MP vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, MP floa
     if (bestPlane < 0) bestT = 0.0;
     vec3 hitP = pos + dir * bestT;
     float tHit = tTot + bestT;
-    float effR = min(1.0, rough * (1.0 + tHit * uDistRough));
+    // distance-grown roughness from first principles: atlas mips blur
+    // ANGULARLY as seen from the capture point, so matching the surface
+    // lobe needs (lobe footprint at hit)/(hit distance from capture) =
+    // t*rough/d. uDistRough is a dimensionless scale (1 = physical); the
+    // old 0.12/m constant was this formula with d frozen at ~8m.
+    float effR = min(1.0, rough * (1.0 + uDistRough * tHit / max(distance(hitP, h0.xyz), 0.5)));
     MP float lod = roughToLod(effR);
 ${useUbo ? /* glsl */`
     // occluder transmittance over this cell's segment attenuates everything
@@ -567,7 +572,8 @@ MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   }
   if (bestPlane < 0) bestT = 0.0;
   vec3 hitP = pos + dir * bestT;
-  float effR = min(1.0, rough * (1.0 + bestT * uDistRough));
+  // t*rough/d angular-footprint growth (see traceSpec)
+  float effR = min(1.0, rough * (1.0 + uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5)));
   MP float lod = roughToLod(effR);
   MP vec3 acc = vec3(0.0);
   MP float w = 1.0;
@@ -629,7 +635,8 @@ MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   }
   if (t2 > 1e7) t2 = 0.0;
   vec3 hit2 = pos2 + dir * t2;
-  MP float lod2 = roughToLod(min(1.0, rough * (1.0 + (bestT + t2) * uDistRough)));
+  MP float lod2 = roughToLod(min(1.0,
+    rough * (1.0 + uDistRough * (bestT + t2) / max(distance(hit2, g0.xyz), 0.5))));
   acc += w * sampleSpec(nextCell, hit2 - g0.xyz, lod2);
   return acc;
 }
@@ -677,7 +684,8 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   }
   if (bestPlane < 0) bestT = 0.0;
   vec3 hitP = pos + dir * bestT;
-  float effR = min(1.0, rough * (1.0 + bestT * uDistRough));
+  // t*rough/d angular-footprint growth (see traceSpec)
+  float effR = min(1.0, rough * (1.0 + uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5)));
   MP float lod = roughToLod(effR);
   MP vec3 acc = vec3(0.0);
   MP float w = 1.0;
@@ -757,10 +765,12 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
         if (kFar > 0.002) {
           float tB = dot(same, vec4(s00.x, s10.x, s01.x, s11.x)) / wSum;
           float tTot = bestT + tB;
-          MP float lod2 = roughToLod(min(1.0, rough * (1.0 + tTot * uDistRough)));
           int term = int(id + 0.5);
           vec3 endP = hitP + dir * tB;
-          farS = sampleSpec(term, endP - hfetch(term, 0).xyz, lod2);
+          vec3 termC = hfetch(term, 0).xyz;
+          MP float lod2 = roughToLod(min(1.0,
+            rough * (1.0 + uDistRough * tTot / max(distance(endP, termC), 0.5))));
+          farS = sampleSpec(term, endP - termC, lod2);
         }
         break;
       }

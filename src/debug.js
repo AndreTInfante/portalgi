@@ -91,8 +91,10 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
       'ao', 0, 1.5, 0.01).name('contact AO');
     fo.add({ get sh() { return g.uOccShadow.value; }, set sh(v) { g.uOccShadow.value = v; } },
       'sh', 0, 1, 0.01).name('dyn shadows');
-    fo.add({ get mc() { return g.uOccShadowBudget.value; }, set mc(v) { g.uOccShadowBudget.value = v; } },
-      'mc', 0, 32, 1).name('shadow blob budget (closest-first)');
+    fo.add({ get mc() { return g.uOccBudget.value; }, set mc(v) { g.uOccBudget.value = v; } },
+      'mc', 0, 32, 1).name('dyn blob budget (closest-first)');
+    fo.add({ get rg() { return g.uOccRange.value; }, set rg(v) { g.uOccRange.value = v; } },
+      'rg', 4, 20, 0.5).name('dyn range (m)');
     fo.add(op, 'hops', 0, 4, 1).name('LOD (cells of walk)');
     fo.add({ dump: () => {
       const j = JSON.stringify({ density: g.uOccDensity.value,

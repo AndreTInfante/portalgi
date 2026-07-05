@@ -88,11 +88,14 @@ uniform float uOccWiden;   // reflection-cone growth per (roughness * meter)
 uniform float uOccTint;    // blocked light re-emits this much occluder diffuse
 uniform float uOccAO;      // contact-AO strength from the same capsules
 uniform float uOccShadow;  // dynamic directional shadow strength (capsule shadow rays)
-uniform float uOccShadowBudget; // shadow-march CAPSULE budget: casters are packed
-                           // closest-first and consume budget by their capsule
-                           // count - cost-based, so six 1-blob gallery props all
-                           // fit while one 8-blob cart spends most of it (Andre:
-                           // entries are not the unit of work, blobs are)
+uniform float uOccBudget;  // dynamic-entry CAPSULE budget shared by shadows, AO and
+                           // reflection occlusion: dyn casters pack closest-first
+                           // and consume budget by capsule count - cost-based, so
+                           // six 1-blob gallery props all fit while one 8-blob cart
+                           // spends most of it. Statics never spend budget.
+uniform float uOccRange;   // dynamic effects exist only within this radius of the
+                           // viewer (2m feather; statics are unaffected) - the
+                           // budget concentrates where anyone can see it
 uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shades:
                            // an occluder never occludes the surfaces it approximates
 
@@ -100,21 +103,33 @@ uniform int uOccSelf;      // occlusion GROUP of the surfaces this material shad
 // the same capsules that occlude reflections darken nearby diffuse. Proxied
 // statics are OUT of the lightmap BVH - this is their only shadow, exactly
 // one representation per object per lighting domain.
-float capsuleAO(int cell, vec3 P, vec3 N) {
+float capsuleAO(int cell, vec3 P, vec3 N, float dynFade) {
   int cnt = int(uOccCell[cell].y);
   if (cnt == 0) return 1.0;
   int first = int(uOccCell[cell].x);
+  int dyn = int(uOccCell[cell].z);
+  int budget = int(uOccBudget);
   float aoc = 1.0;
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
+    int sc = (packed >> 6) & 7;
+    // dyn entries (packed closest-first) spend the shared capsule budget and
+    // fade with viewer distance; statics (furniture - this is their only
+    // shadow) always evaluate at full strength
+    float k = 1.0;
+    if (pi < dyn) {
+      budget -= sc;             // spend BEFORE any per-pixel test: the caster
+      if (budget < 0) continue; // set must be identical across the cell
+      k = dynFade;
+      if (k <= 0.0) continue;
+    }
     vec4 b = uOccBound[first + pi];
     vec3 dc = b.xyz - P;
     float rb = b.w + 0.7;                        // AO reach beyond the bound
     if (dot(dc, dc) > rb * rb) continue;
-    vec4 colw = uOccColor[first + pi];
-    int packed = int(colw.w + 0.5);
     if ((packed & 63) == uOccSelf) continue;     // own-group skip
-    int sc = (packed >> 6) & 7;
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;
@@ -132,7 +147,7 @@ float capsuleAO(int cell, vec3 P, vec3 N) {
       // smooth range falloff to zero BEFORE the binary entry reject radius -
       // the reject alone printed a visible AO edge line around objects
       float reach = clamp(1.0 - (d2 * invd - A.w) / 0.6, 0.0, 1.0);
-      aoc *= 1.0 - min(o1 * reach * reach * uOccAO, 0.85);
+      aoc *= 1.0 - min(o1 * reach * reach * uOccAO, 0.85) * k;
     }
     if (aoc < 0.15) break;
   }
@@ -182,7 +197,7 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
   // the MAX coverage over capsules, not the product (the product printed
   // extra darkening wherever authored capsules overlap)
   float occl = 0.0;
-  int budget = int(uOccShadowBudget);
+  int budget = int(uOccBudget);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= dyn) break;
     // capsule-count budget, spent CLOSEST-FIRST and BEFORE the per-pixel
@@ -240,11 +255,13 @@ float capsuleShadow(int cell, vec3 P, vec3 N) {
 // Subtractive and saturating - no sorting. Each bite of transmittance
 // accumulates the biter's albedo into col so the caller can re-emit blocked
 // light as darkened occluder diffuse instead of pitch black.
-float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase, inout vec3 col) {
+float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase, float dynFade, inout vec3 col) {
   float trans = 1.0;
   int cnt = int(uOccCell[cell].y);
   if (cnt == 0) return trans;
   int first = int(uOccCell[cell].x);
+  int dyn = int(uOccCell[cell].z);
+  int budget = int(uOccBudget);
   // low-end knee: GGX blur is strongly nonlinear at small roughness (alpha ~
   // rough^2), so near-mirror surfaces (chrome/glass ~0.04) widen almost
   // nothing - linear widening made their blobs ghostly-faint while their
@@ -252,16 +269,25 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
   float wr = rough * clamp(rough * 6.667, 0.0, 1.0);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
+    vec4 colw = uOccColor[first + pi];
+    int packed = int(colw.w + 0.5);
+    int sc = (packed >> 6) & 7;
+    // dyn prefix: shared closest-first capsule budget + viewer-distance fade;
+    // statics (furniture reflections - captures exclude them) always march
+    float k = 1.0;
+    if (pi < dyn) {
+      budget -= sc;
+      if (budget < 0) continue;
+      k = dynFade;
+      if (k <= 0.0) continue;
+    }
     vec4 b = uOccBound[first + pi];
     vec3 oc = b.xyz - o;
     float tc = clamp(dot(oc, d), 0.0, tMax);
     vec3 pc = oc - d * tc;
     float rb = b.w + uOccWiden * wr * (tBase + tc) + 0.05;
     if (dot(pc, pc) > rb * rb) continue;          // entry-level reject
-    vec4 colw = uOccColor[first + pi];
-    int packed = int(colw.w + 0.5);
     if ((packed & 63) == uOccSelf) continue;      // own-group skip
-    int sc = (packed >> 6) & 7;
     int sf = packed >> 9;
     for (int si = 0; si < ${MAX_SPH_PER_PROP}; si++) {
       if (si >= sc) break;
@@ -281,7 +307,7 @@ float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBase,
       float q = 1.0 - dot(ps, ps) / (rw * rw);    // 0 at the widened silhouette
       if (q <= 0.0) continue;
       float cover = (A.w * A.w) / (rw * rw);      // blur spreads, peak dims
-      float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0);
+      float taken = trans * clamp(uOccDensity * q * cover, 0.0, 1.0) * k;
       trans -= taken;
       col += taken * colw.rgb;
     }
@@ -305,7 +331,7 @@ uniform float uDistRough;   // roughness growth per meter of path length
 // roughness-scaled edge blend, then either terminate on the local cubemap or
 // hop into the neighbor cell. A straight ray can never revisit a convex cell,
 // so this always makes forward progress.
-vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap${dbg ? ', out float stepsUsed' : ''}) {
+vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, float dynFade${dbg ? ', out float stepsUsed' : ''}) {
   // roughness-scaled hop budget: a reflection too blurry to resolve an image
   // can't resolve a second portal either. Anything reflective keeps >= 1 hop
   // (portal-boundary artifacts appear at 0); the rough > 0.65 irradiance
@@ -356,7 +382,7 @@ ${useUbo ? /* glsl */`
       vec3 ocol = vec3(0.0);
       // surface roughness (not distance-grown effR) drives the cone: the
       // footprint model already accounts for distance inside occSegment
-      float tr = occSegment(cell, pos, dir, bestT, rough, tTot, ocol);
+      float tr = occSegment(cell, pos, dir, bestT, rough, tTot, dynFade, ocol);
       // tinted re-emission taps irradiance only at PERCEPTIBLE occlusion
       // (>= 5%; the old 0.3% threshold bought an extra atlas fetch across
       // every faintly-grazed pixel of cone-widened blob area). Kept per-hop:
@@ -630,22 +656,28 @@ void main() {
   }
   float NoV = max(dot(N, V), 0.0);
   ${dbg ? 'float steps = 0.0;' : ''}
+${useUbo ? /* glsl */`
+  // dynamic-occluder effects (contact AO, shadow rays, reflection blobs)
+  // exist only within uOccRange of the viewer, feathered over 2m - the
+  // capsule budget concentrates where anyone can see it. Statics never fade.
+  float dynFade = 1.0 - smoothstep(uOccRange - 2.0, uOccRange, distance(P, cameraPosition));
+` : 'float dynFade = 1.0;'}
   vec3 color;
 ${GLASS ? /* glsl */`
   // glass: chrome sampled the opposite way. The fresnel reflection is a
   // faint overlay over the dominant fake refraction: 1 hop is plenty for it
   vec3 R = reflect(-V, N);
   float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
-  vec3 refl = traceSpec(uCell, P, R, uRough, 1${dbg ? ', steps' : ''});
+  vec3 refl = traceSpec(uCell, P, R, uRough, 1, dynFade${dbg ? ', steps' : ''});
   ${dbg ? 'float s2;' : ''}
-  vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
+  vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, dynFade${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
   color = mix(thru, refl, F);
 ` : PANE ? /* glsl */`
   // debug pane: continue the eye ray straight through with zero roughness -
   // a direct, unrefracted window into the hull cubemap structure (a -R trick
   // here would mirror the lateral ray component and act like an inverting
   // lens). Faint green cast marks the glass.
-  color = traceSpec(uCell, P, -V, 0.0, 8${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
+  color = traceSpec(uCell, P, -V, 0.0, 8, dynFade${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
 ` : /* glsl */`
   vec3 albedo = texture(uMap, vUv).rgb * uTint;
   ${dbg ? 'if (uDebugMode == 4) albedo = vec3(0.75);' : ''}
@@ -687,14 +719,17 @@ ${PROP ? /* glsl */`
 `}
 ${useUbo ? /* glsl */`
   // live contact AO from the occluder capsules (props AND proxied statics -
-  // the statics cast nothing in the lightmap by design)
+  // the statics cast nothing in the lightmap by design; dyn entries fade
+  // with dynFade inside)
   if (uOccOn > 0.5) {
-    diffuseL *= capsuleAO(uCell, P, N);
+    diffuseL *= capsuleAO(uCell, P, N, dynFade);
     // dynamic directional shadows: one capsule-marched ray toward the
     // weighted local light direction ("we have raytracing at home").
     // Ng, NOT the bumped N: bump facets tilting past a facing gate punched
     // bright acne pinpricks through the shadow interior
-    if (uOccShadow > 0.001) diffuseL *= capsuleShadow(uCell, P, Ng);
+    if (uOccShadow > 0.001 && dynFade > 0.0) {
+      diffuseL *= mix(1.0, capsuleShadow(uCell, P, Ng), dynFade);
+    }
   }
 ` : ''}
   vec3 F0 = mix(vec3(0.04), albedo, metal);
@@ -706,7 +741,7 @@ ${useUbo ? /* glsl */`
     // along R - skip the whole hull walk (Tier 1)
     vec3 pre = ${matte ? 'sampleIrr(uCell, R)'
       : `(rough > 0.65) ? sampleIrr(uCell, R)
-                              : traceSpec(uCell, P, R, rough, 8${dbg ? ', steps' : ''})`};
+                              : traceSpec(uCell, P, R, rough, 8, dynFade${dbg ? ', steps' : ''})`};
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
   }
 `}

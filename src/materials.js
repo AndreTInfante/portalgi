@@ -3,6 +3,7 @@
 // all materials, so flipping e.g. uMaxSteps.value updates the whole scene.
 import * as THREE from 'three';
 import { SCENE_VERT, sceneFrag, sceneVertProp } from './shaders.js';
+import { MAX_PROBES } from './atlas.js';
 import { buildOccluderGroup } from './occluders.js';
 
 // hull records as a std140 uniform block: the traversal's dependent
@@ -82,6 +83,19 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     uDynOcc: { value: flatOrm },    // white until DynOccLayer swaps its RT in
     uWarpTex: { value: warp ? warp.texture : blackTex },
     uWarpMeta: { value: warp ? warp.metaTex : blackTex },
+    // all-visible until lightvis.js bakes. FULL-SIZE white, not 1x1: the
+    // vertex shader texelFetches probe/cell coords, and out-of-bounds
+    // texelFetch reads ZERO - a 1x1 fallback would unlight every prop spot
+    uLightVis: {
+      value: (() => {
+        const w = MAX_PROBES * 2, h = numCells;
+        const t = new THREE.DataTexture(
+          new Uint8Array(w * h * 4).fill(255), w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+        t.minFilter = t.magFilter = THREE.NearestFilter;
+        t.needsUpdate = true;
+        return t;
+      })(),
+    },
     uUseLightmap: { value: 0.0 },
     uMaxSteps: { value: 3 },
     uRoughHops: { value: 1.0 },

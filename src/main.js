@@ -22,6 +22,7 @@ import { PerfHarness } from './perf.js';
 import { OccluderSystem } from './occluders.js';
 import { DynOccLayer } from './dynocc.js';
 import { buildWarpField } from './warpfield.js';
+import { buildLightVisTexture } from './lightvis.js';
 import { AudioSystem } from './audio.js';
 import { TouchControls, isTouchDevice } from './touch.js';
 import { PhysicsWorld } from './physics.js';
@@ -169,6 +170,12 @@ async function boot() {
     rays: lmSettings.lmrays, iterations: lmSettings.lmit,
     panelSamples: lmSettings.lmps, finalPasses: lmSettings.lmfp,
   }) : null;
+  // per-light probe visibility for prop spot direct (lightvis.js): CPU rays
+  // against the lightmapper's BVH at boot. Without it (?lm=0 debug boots)
+  // visibility stays all-1 (the pre-vis behavior). ?lvis=0 disables for A/B.
+  if (lightmapper && params.get('lvis') !== '0') {
+    matsys.globals.uLightVis.value = buildLightVisTexture(level, lightmapper.bvh);
+  }
 
   // optional URL overrides for comparison screenshots
   if (params.has('steps')) matsys.globals.uMaxSteps.value = parseInt(params.get('steps'));

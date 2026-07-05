@@ -799,7 +799,10 @@ varying vec4 vTan;
 varying vec2 vUv;
 varying vec2 vUv2;
 varying vec3 vDiff;
+varying vec4 vVisA; // per-light visibility of the cell's 8 light slots,
+varying vec4 vVisB; // trilinear over the probe grid (lightvis.js)
 uniform sampler2D uAtlas;
+uniform sampler2D uLightVis;
 uniform int uCell;
 uniform int uCellPrev;
 uniform float uPrevMix;
@@ -824,6 +827,33 @@ void main() {
   vec3 dl = probeDiffuse(uCell, wp.xyz, vNormal);
   if (uPrevMix > 0.001 && uCellPrev >= 0) {
     dl = mix(dl, probeDiffuse(uCellPrev, wp.xyz, vNormal), uPrevMix);
+  }
+  // per-light visibility, trilinear over the same probe grid (row = cell,
+  // x = probe*2 + half, rgba = 4 light slots) - the spot loop multiplies
+  // it in, so the sun stops lighting geometric shade and borrowed spots
+  // stop shining through walls without the per-cell uLightLocal gate
+  {
+    vec4 m0 = hfetch(uCell, ${PROBE_META_OFF});
+    vec4 m1 = hfetch(uCell, ${PROBE_META_OFF + 1});
+    vec4 m2 = hfetch(uCell, ${PROBE_META_OFF + 2});
+    vec3 dims = vec3(m0.w, m1.w, m2.x);
+    vec3 g = clamp((wp.xyz - m0.xyz) / max(m1.xyz, vec3(1e-4)), 0.0, 1.0) * (dims - 1.0);
+    vec3 g0 = min(floor(g), dims - 2.0);
+    vec3 f = g - g0;
+    ivec3 gi = ivec3(g0 + 0.5);
+    ivec3 di = ivec3(dims + 0.5);
+    vVisA = vec4(0.0);
+    vVisB = vec4(0.0);
+    for (int i = 0; i < 8; i++) {
+      ivec3 c = gi + ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+      float w = mix(1.0 - f.x, f.x, float(i & 1))
+              * mix(1.0 - f.y, f.y, float((i >> 1) & 1))
+              * mix(1.0 - f.z, f.z, float((i >> 2) & 1));
+      if (w < 1e-4) continue;
+      int idx = c.x + di.x * (c.y + di.y * c.z);
+      vVisA += w * texelFetch(uLightVis, ivec2(idx * 2, uCell), 0);
+      vVisB += w * texelFetch(uLightVis, ivec2(idx * 2 + 1, uCell), 0);
+    }
   }
 ${useUbo ? /* glsl */`
   MP float dynFade = 1.0 - smoothstep(uOccRange - 2.0, uOccRange, distance(wp.xyz, cameraPosition));
@@ -911,7 +941,9 @@ varying vec3 vNormal;
 varying vec4 vTan;
 varying vec2 vUv;
 varying vec2 vUv2;
-${PVD ? 'varying vec3 vDiff; // probe irradiance x AO x shadow, per vertex' : ''}
+${PVD ? `varying vec3 vDiff; // probe irradiance x AO x shadow, per vertex
+varying vec4 vVisA; // per-light visibility (lightvis.js), light slots 0-3
+varying vec4 vVisB; // slots 4-7` : ''}
 
 uniform sampler2D uAtlas;
 uniform MP sampler2D uMap;     // MP samplers: fetch RESULTS are fp16 (color /
@@ -1036,17 +1068,22 @@ ${PROP ? /* glsl */`
   // analytic SPOT direct on props: the probe grid averages a room's light but
   // cannot represent a narrow beam, so props in a spotlight stayed flat.
   // Point lights (w = -2) skip - their energy is already in the probes. Cone
-  // math matches the lightmapper's (soft 0.08-cos shoulder), unshadowed.
+  // math matches the lightmapper's (soft 0.08-cos shoulder).
+  // ${PVD ? 'Shadowed by the baked per-light probe visibility (lightvis.js):'
+          : 'Unshadowed; borrowed spots gate per-cell (uLightLocal):'}
   for (int li = 0; li < 8; li++) {
     if (li >= uLightCount) break;
-    if (uLightDir[li].w < -1.5 || uLightLocal[li] < 0.5) continue;
+    ${PVD ? /* glsl */`if (uLightDir[li].w < -1.5) continue;
+    MP float vis = li < 4 ? vVisA[li] : vVisB[li & 3];
+    if (vis <= 0.004) continue;` : /* glsl */`if (uLightDir[li].w < -1.5 || uLightLocal[li] < 0.5) continue;
+    MP float vis = 1.0;`}
     vec3 Lv = uLightPos[li] - P;
     float ld2 = dot(Lv, Lv);
     vec3 Lnn = Lv * inversesqrt(ld2);
     float ndl = dot(N, Lnn);
     if (ndl <= 0.0) continue;
     MP float spot = smoothstep(uLightDir[li].w, uLightDir[li].w + 0.08, dot(-Lnn, uLightDir[li].xyz));
-    diffuseL += uLightColor[li] * (spot * ndl / max(ld2, 0.05));
+    diffuseL += uLightColor[li] * (spot * ndl * vis / max(ld2, 0.05));
   }
 ` : /* glsl */`
 #ifdef LM_FALLBACK

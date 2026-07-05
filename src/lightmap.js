@@ -97,9 +97,13 @@ void main() {
   ivec2 tx = ivec2(gl_FragCoord.xy);
   vec4 pw = texelFetch(uPos, tx, 0);
   if (pw.a < 0.5) {
-    // jittered G-buffers can uncover a border texel in one pass and not the
-    // next: keep the accumulated value instead of zeroing it
-    fragColor = uAccumW > 0.0 ? texelFetch(uAccum, tx, 0) : vec4(0.0);
+    // jittered G-buffers cover razor-edge texels (DIAGONAL chart borders -
+    // the only edges the half-texel inset cannot protect) in only SOME
+    // passes. Always pass the accumulator through: the old uAccumW guard
+    // zeroed them on final pass 0, and that zero averaged into every later
+    // pass - dashed dark seams along every diagonal cut. uAccum holds valid
+    // data even on pass 0 (the converged iteration map).
+    fragColor = texelFetch(uAccum, tx, 0);
     return;
   }
   vec3 P = pw.xyz;

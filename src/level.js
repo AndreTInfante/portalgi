@@ -309,12 +309,16 @@ const LIGHT_DEFS = [
     { p: [-8.7, 3.85, 21.4], c: WARM, i: 14, d: [-0.6, -3.25, -0.6], cone: 18 },// arm chair
     { p: [-5.4, 3.85, 22.5], c: WARM, i: 14, d: [0.6, -3.25, 0], cone: 18 },    // lounge chair
   ],
-  // courtyard: the sun - a far, hot point whose rays enter through the open
+  // courtyard: the sun - a far, hot cone whose rays enter through the open
   // ceiling; global shadow rays keep it out of every roofed room, and the
   // slant pools light through the doorway into the pillar hall.
   // i 6500 (was 3000): outdoors read as bright as the interiors, which is
-  // physically implausible - midday should push toward overexposure
-  [{ p: [34, 22, -10], c: [1.0, 0.92, 0.78], i: 6500 }],
+  // physically implausible - midday should push toward overexposure.
+  // SPOT, not point: props take analytic direct from spots only (point
+  // energy is probe-averaged, but probes cannot carry direct sun - props
+  // stood in full sunlight looking dull). The 42deg cone covers the whole
+  // courtyard + the door beam, so the bake is unchanged.
+  [{ p: [34, 22, -10], c: [1.0, 0.92, 0.78], i: 6500, d: [-13.4, -22, 10], cone: 42 }],
 ];
 
 const PANEL_DEFS = [

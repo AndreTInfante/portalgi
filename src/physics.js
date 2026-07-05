@@ -28,25 +28,14 @@ export class PhysicsWorld {
     // colliders register in addStaticModels, which runs after buildLevel
     // (reading earlier silently skipped every statue)
     for (const cc of level.colliders) {
-      // statics with authored occluder capsules (statues, plants) get sphere
-      // compounds instead of a crude box - props bounced erratically off the
-      // invisible box corners around the whale and horse
-      const authored = cc.slug && OCCLUDER_PROXIES.statics[cc.slug];
-      if (authored && cc.proxyFrame) {
-        const f = cc.proxyFrame;
-        const co = Math.cos(f.rotY), sn = Math.sin(f.rotY);
+      // statics with mesh-fit physics spheres (statues, plants): world-space
+      // vertical band fit computed at model load. NOT the authored occluder
+      // capsules - those are tuned for reflection blobs, and their artistic
+      // shapes left props proud of fat blobs and inside uncovered parts.
+      if (cc.physSpheres && cc.physSpheres.length) {
         const body = new CANNON.Body({ type: CANNON.Body.STATIC });
-        for (const [a, b, r] of authored.capsules) {
-          // authoring-local -> world (same convention as occluders.capToWorld)
-          const A = [f.x + co * a[0] + sn * a[2], a[1], f.z - sn * a[0] + co * a[2]];
-          const B = [f.x + co * b[0] + sn * b[2], b[1], f.z - sn * b[0] + co * b[2]];
-          const len = Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]);
-          const n = Math.min(4, Math.max(2, Math.ceil(len / Math.max(r, 0.05)) + 1));
-          for (let k = 0; k < n; k++) {
-            const t = n === 1 ? 0 : k / (n - 1);
-            body.addShape(new CANNON.Sphere(r), new CANNON.Vec3(
-              A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t));
-          }
+        for (const [x, y, z, r] of cc.physSpheres) {
+          body.addShape(new CANNON.Sphere(r), new CANNON.Vec3(x, y, z));
         }
         this.world.addBody(body);
         continue;

@@ -34,6 +34,7 @@ export async function addStaticModels(level) {
         .multiply(new THREE.Matrix4().makeScale(scale, scale, scale))
         .multiply(new THREE.Matrix4().makeTranslation(-center.x, -box.min.y, -center.z));
       gltf.scene.updateMatrixWorld(true);
+      const physPts = []; // subsampled WORLD verts -> physics band fit below
       gltf.scene.traverse(o => {
         if (!o.isMesh) return;
         if (!o.geometry.getAttribute('tangent')) {
@@ -42,6 +43,13 @@ export async function addStaticModels(level) {
         let g = o.geometry.clone();
         g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(M, o.matrixWorld));
         if (g.index) g = g.toNonIndexed();
+        {
+          const pa = g.getAttribute('position');
+          const step = Math.max(1, Math.floor(pa.count / 600));
+          for (let i = 0; i < pa.count; i += step) {
+            physPts.push([pa.getX(i), pa.getY(i), pa.getZ(i)]);
+          }
+        }
         const gb = new GeoBuilder();
         gb.pos = Array.from(g.getAttribute('position').array);
         gb.nrm = Array.from(g.getAttribute('normal').array);
@@ -66,14 +74,34 @@ export async function addStaticModels(level) {
           },
         });
       });
+      // physics spheres: vertical band fit over the REAL world vertices
+      // (centroid + 90th-percentile radius per band). The authored occluder
+      // capsules are tuned for reflection blobs, not contact - the horse's
+      // fat plinth ball left props standing proud while uncovered legs let
+      // them sink clean inside (Andre report)
+      const physSpheres = [];
+      if (physPts.length > 12) {
+        let minY = Infinity, maxY = -Infinity;
+        for (const p of physPts) { if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1]; }
+        const K = 4;
+        for (let b = 0; b < K; b++) {
+          const lo = minY + ((maxY - minY) * b) / K;
+          const hi = minY + ((maxY - minY) * (b + 1)) / K;
+          const band = physPts.filter(p => p[1] >= lo && p[1] <= hi);
+          if (band.length < 8) continue;
+          const c = [0, 0, 0];
+          for (const p of band) { c[0] += p[0]; c[1] += p[1]; c[2] += p[2]; }
+          c[0] /= band.length; c[1] /= band.length; c[2] /= band.length;
+          const ds = band.map(p => Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2])).sort((a, b2) => a - b2);
+          physSpheres.push([c[0], c[1], c[2], Math.max(ds[Math.floor(ds.length * 0.9)], 0.12)]);
+        }
+      }
       // r: generous player-collision radius (can't clip the statue overhang);
-      // rx/rz: reflection-contact footprint = the plinth, NOT the collision r.
-      // slug/proxyFrame: physics builds sphere compounds from the authored
-      // occluder capsules instead of a crude box
+      // rx/rz: reflection-contact footprint = the plinth, NOT the collision r
       level.colliders.push({
         x: def.x, z: def.z, r: def.size * 0.42,
         rx: def.size * 0.25, rz: def.size * 0.25, rot: 0,
-        slug: def.slug, proxyFrame: { x: def.x, z: def.z, rotY: def.rotY || 0 },
+        physSpheres,
       });
     } catch (e) {
       console.error(`static model failed: ${def.slug}`, e);

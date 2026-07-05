@@ -1,54 +1,194 @@
 {
   "asset": {
-    "generator": "Khronos glTF Blender I/O v4.4.56",
+    "generator": "glTF-Transform v3.10.1",
     "version": "2.0"
   },
-  "extensionsUsed": [
-    "KHR_materials_specular"
-  ],
-  "scene": 0,
-  "scenes": [
+  "accessors": [
     {
-      "name": "Scene",
-      "nodes": [
+      "type": "VEC3",
+      "componentType": 5126,
+      "count": 5365,
+      "max": [
+        0.15896688401699066,
         0,
-        1
-      ]
-    }
-  ],
-  "nodes": [
-    {
-      "mesh": 0,
-      "name": "ceiling_fan"
+        0.15896691381931305
+      ],
+      "min": [
+        -0.15896692872047424,
+        -0.516343355178833,
+        -0.15896688401699066
+      ],
+      "bufferView": 0,
+      "byteOffset": 0
     },
     {
-      "mesh": 1,
-      "name": "ceiling_fan_blades"
+      "type": "VEC3",
+      "componentType": 5126,
+      "count": 5365,
+      "bufferView": 0,
+      "byteOffset": 12
+    },
+    {
+      "type": "VEC2",
+      "componentType": 5126,
+      "count": 5365,
+      "bufferView": 0,
+      "byteOffset": 24
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5126,
+      "count": 2142,
+      "max": [
+        0.7305503487586975,
+        -0.35511550307273865,
+        0.7322510480880737
+      ],
+      "min": [
+        -0.7323667407035828,
+        -0.42777419090270996,
+        -0.7306660413742065
+      ],
+      "bufferView": 1,
+      "byteOffset": 0
+    },
+    {
+      "type": "VEC3",
+      "componentType": 5126,
+      "count": 2142,
+      "bufferView": 1,
+      "byteOffset": 12
+    },
+    {
+      "type": "VEC2",
+      "componentType": 5126,
+      "count": 2142,
+      "bufferView": 1,
+      "byteOffset": 24
+    },
+    {
+      "type": "SCALAR",
+      "componentType": 5123,
+      "count": 21120,
+      "bufferView": 2,
+      "byteOffset": 0
+    },
+    {
+      "type": "SCALAR",
+      "componentType": 5123,
+      "count": 8316,
+      "bufferView": 2,
+      "byteOffset": 42240
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 171680,
+      "byteStride": 32,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 171680,
+      "byteLength": 68544,
+      "byteStride": 32,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 240224,
+      "byteLength": 58872,
+      "target": 34963
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987,
+      "wrapS": 10497,
+      "wrapT": 10497
+    }
+  ],
+  "textures": [
+    {
+      "source": 3,
+      "sampler": 0
+    },
+    {
+      "source": 0,
+      "sampler": 0
+    },
+    {
+      "source": 2,
+      "sampler": 0
+    },
+    {
+      "source": 4,
+      "sampler": 0
+    },
+    {
+      "source": 1,
+      "sampler": 0
+    }
+  ],
+  "images": [
+    {
+      "name": "ceiling_fan_emissive",
+      "mimeType": "image/jpeg",
+      "uri": "textures/ceiling_fan_emissive_1k.jpg"
+    },
+    {
+      "name": "ceiling_fan_spec",
+      "mimeType": "image/jpeg",
+      "uri": "textures/ceiling_fan_spec_1k.jpg"
+    },
+    {
+      "name": "ceiling_fan_nor_gl",
+      "mimeType": "image/jpeg",
+      "uri": "textures/ceiling_fan_nor_gl_1k.jpg"
+    },
+    {
+      "name": "ceiling_fan_diff",
+      "mimeType": "image/jpeg",
+      "uri": "textures/ceiling_fan_diff_1k.jpg"
+    },
+    {
+      "name": "ceiling_fan_metal-ceiling_fan_rough",
+      "mimeType": "image/jpeg",
+      "uri": "textures/ceiling_fan_arm_1k.jpg"
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "ceiling_fan.bin",
+      "byteLength": 299096
     }
   ],
   "materials": [
     {
+      "name": "ceiling_fan",
       "doubleSided": true,
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicRoughnessTexture": {
+          "index": 3
+        }
+      },
       "emissiveTexture": {
-        "index": 0
+        "index": 1
+      },
+      "normalTexture": {
+        "index": 2
       },
       "extensions": {
         "KHR_materials_specular": {
           "specularTexture": {
-            "index": 1
+            "index": 4
           }
-        }
-      },
-      "name": "ceiling_fan",
-      "normalTexture": {
-        "index": 2
-      },
-      "pbrMetallicRoughness": {
-        "baseColorTexture": {
-          "index": 3
-        },
-        "metallicRoughnessTexture": {
-          "index": 4
         }
       }
     }
@@ -63,8 +203,9 @@
             "NORMAL": 1,
             "TEXCOORD_0": 2
           },
-          "indices": 3,
-          "material": 0
+          "mode": 4,
+          "material": 0,
+          "indices": 6
         }
       ]
     },
@@ -73,195 +214,38 @@
       "primitives": [
         {
           "attributes": {
-            "POSITION": 4,
-            "NORMAL": 5,
-            "TEXCOORD_0": 6
+            "POSITION": 3,
+            "NORMAL": 4,
+            "TEXCOORD_0": 5
           },
-          "indices": 7,
-          "material": 0
+          "mode": 4,
+          "material": 0,
+          "indices": 7
         }
       ]
     }
   ],
-  "textures": [
+  "nodes": [
     {
-      "sampler": 0,
-      "source": 0
+      "name": "ceiling_fan",
+      "mesh": 0
     },
     {
-      "sampler": 0,
-      "source": 1
-    },
-    {
-      "sampler": 0,
-      "source": 2
-    },
-    {
-      "sampler": 0,
-      "source": 3
-    },
-    {
-      "sampler": 0,
-      "source": 4
+      "name": "ceiling_fan_blades",
+      "mesh": 1
     }
   ],
-  "images": [
+  "scenes": [
     {
-      "mimeType": "image/jpeg",
-      "name": "ceiling_fan_emissive",
-      "uri": "textures/ceiling_fan_emissive_1k.jpg"
-    },
-    {
-      "mimeType": "image/jpeg",
-      "name": "ceiling_fan_spec",
-      "uri": "textures/ceiling_fan_spec_1k.jpg"
-    },
-    {
-      "mimeType": "image/jpeg",
-      "name": "ceiling_fan_nor_gl",
-      "uri": "textures/ceiling_fan_nor_gl_1k.jpg"
-    },
-    {
-      "mimeType": "image/jpeg",
-      "name": "ceiling_fan_diff",
-      "uri": "textures/ceiling_fan_diff_1k.jpg"
-    },
-    {
-      "mimeType": "image/jpeg",
-      "name": "ceiling_fan_metal-ceiling_fan_rough",
-      "uri": "textures/ceiling_fan_arm_1k.jpg"
-    }
-  ],
-  "accessors": [
-    {
-      "bufferView": 0,
-      "componentType": 5126,
-      "count": 8041,
-      "max": [
-        0.15896688401699066,
+      "name": "Scene",
+      "nodes": [
         0,
-        0.15896691381931305
-      ],
-      "min": [
-        -0.15896692872047424,
-        -0.516343355178833,
-        -0.15896688401699066
-      ],
-      "type": "VEC3"
-    },
-    {
-      "bufferView": 1,
-      "componentType": 5126,
-      "count": 8041,
-      "type": "VEC3"
-    },
-    {
-      "bufferView": 2,
-      "componentType": 5126,
-      "count": 8041,
-      "type": "VEC2"
-    },
-    {
-      "bufferView": 3,
-      "componentType": 5123,
-      "count": 35208,
-      "type": "SCALAR"
-    },
-    {
-      "bufferView": 4,
-      "componentType": 5126,
-      "count": 3112,
-      "max": [
-        0.7305503487586975,
-        -0.35511550307273865,
-        0.7322510480880737
-      ],
-      "min": [
-        -0.7323667407035828,
-        -0.42777419090270996,
-        -0.7306660413742065
-      ],
-      "type": "VEC3"
-    },
-    {
-      "bufferView": 5,
-      "componentType": 5126,
-      "count": 3112,
-      "type": "VEC3"
-    },
-    {
-      "bufferView": 6,
-      "componentType": 5126,
-      "count": 3112,
-      "type": "VEC2"
-    },
-    {
-      "bufferView": 7,
-      "componentType": 5123,
-      "count": 13860,
-      "type": "SCALAR"
+        1
+      ]
     }
   ],
-  "bufferViews": [
-    {
-      "buffer": 0,
-      "byteLength": 96492,
-      "byteOffset": 0,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteLength": 96492,
-      "byteOffset": 96492,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteLength": 64328,
-      "byteOffset": 192984,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteLength": 70416,
-      "byteOffset": 257312,
-      "target": 34963
-    },
-    {
-      "buffer": 0,
-      "byteLength": 37344,
-      "byteOffset": 327728,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteLength": 37344,
-      "byteOffset": 365072,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteLength": 24896,
-      "byteOffset": 402416,
-      "target": 34962
-    },
-    {
-      "buffer": 0,
-      "byteLength": 27720,
-      "byteOffset": 427312,
-      "target": 34963
-    }
-  ],
-  "samplers": [
-    {
-      "magFilter": 9729,
-      "minFilter": 9987
-    }
-  ],
-  "buffers": [
-    {
-      "byteLength": 455032,
-      "uri": "ceiling_fan.bin"
-    }
+  "scene": 0,
+  "extensionsUsed": [
+    "KHR_materials_specular"
   ]
 }

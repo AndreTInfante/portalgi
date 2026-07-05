@@ -215,17 +215,21 @@ export class DynOccLayer {
   // staticGroup: the charted static meshes (they carry lmuv + world
   // transforms + their material's occlusion group in uOccSelf). Construct
   // AFTER the occluder system has assigned every static group id.
-  constructor(renderer, level, staticGroup) {
+  // div: layer density divisor vs the lightmap (2 = half, 4 = quarter -
+  // platform-chosen in main.js; sweeping shadows crawl at quarter res)
+  constructor(renderer, level, staticGroup, div = 4) {
     this.renderer = renderer;
     const [lw, lh] = level.lightmapSize;
-    this.w = Math.max(64, lw >> 2); // quarter linear density of the lightmap
-    this.h = Math.max(64, lh >> 2);
+    this.w = Math.max(64, Math.floor(lw / div));
+    this.h = Math.max(64, Math.floor(lh / div));
     const rt = (type, filter) => new THREE.WebGLRenderTarget(this.w, this.h, {
       type, minFilter: filter, magFilter: filter,
       generateMipmaps: false, depthBuffer: false,
     });
+    // positions stay fp32 (contact AO clamps at 3cm - fp16's ~4cm error at
+    // room scale is too coarse); normals + group ids are fp16-exact
     this.posRT = rt(THREE.FloatType, THREE.NearestFilter);
-    this.nrmRT = rt(THREE.FloatType, THREE.NearestFilter);
+    this.nrmRT = rt(THREE.HalfFloatType, THREE.NearestFilter);
     this.baseRT = rt(THREE.UnsignedByteType, THREE.NearestFilter);
     this.layerRT = rt(THREE.UnsignedByteType, THREE.LinearFilter);
     this.spareRT = rt(THREE.UnsignedByteType, THREE.NearestFilter);

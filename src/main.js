@@ -313,11 +313,16 @@ void main() {
   // (constructed here, AFTER every static occluder group id is assigned);
   // props re-splat per frame - but only when one actually moved. The dials
   // stay live for the dyn layer; base-layer dial changes need a reload.
-  // splat penumbra floor ~ 1.5 layer texels (layer = quarter lightmap
-  // density): shadows narrower than a texel dim out instead of aliasing.
+  // layer density divisor vs the lightmap: 2 = half-res (sweeping shadows
+  // crawl less), 4 = quarter. Quest defaults to 4 until the on-device verdict
+  // on half-res cost (?dynres=2 to test); desktop/phones take half now.
+  const dynDiv = params.has('dynres') ? parseInt(params.get('dynres'))
+    : (navigator.userAgent.includes('OculusBrowser') ? 4 : 2);
+  // splat penumbra floor ~ 1.5 LAYER texels (scales with the divisor):
+  // shadows narrower than a texel dim out instead of aliasing.
   // ?pensoft= overrides (meters; 0 = the old hard-edged splat).
   const penSoft = params.has('pensoft')
-    ? parseFloat(params.get('pensoft')) : 6 / lmSettings.lmden;
+    ? parseFloat(params.get('pensoft')) : 1.5 * dynDiv / lmSettings.lmden;
   const occDialsObj = { ao: 0, aoClamp: 0, shadow: 0, penSoft };
   const occDials = () => {
     occDialsObj.ao = matsys.globals.uOccAO.value;
@@ -327,7 +332,7 @@ void main() {
   };
   let dynOcc = null;
   if (occluders && matsys.texOcc) {
-    dynOcc = new DynOccLayer(renderer, level, staticGroup);
+    dynOcc = new DynOccLayer(renderer, level, staticGroup, dynDiv);
     dynOcc.bakeBase(occluders.statics, occDials());
     matsys.globals.uDynOcc.value = dynOcc.texture;
   }

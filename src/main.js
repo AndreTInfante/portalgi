@@ -288,7 +288,8 @@ void main() {
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf, audio);
+  const gui = buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf, audio);
+  if (isTouchDevice()) gui.close(); // phones: collapsed to the title bar by default
 
   if (!SHOT && !BAKE) {
     renderer.domElement.addEventListener('mousedown', e => {

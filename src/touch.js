@@ -23,6 +23,19 @@ export class TouchControls {
     this.nub = document.getElementById('joy-nub');
     document.getElementById('touch-help').classList.remove('hidden');
     player.moveAxis = { x: 0, y: 0 };
+    // first gesture: fullscreen + landscape lock (Android Chrome needs
+    // fullscreen for orientation.lock; iOS supports neither - users rotate)
+    const lockOnce = () => {
+      dom.removeEventListener('touchend', lockOnce);
+      const el = document.documentElement;
+      if (el.requestFullscreen) {
+        el.requestFullscreen()
+          .then(() => screen.orientation && screen.orientation.lock &&
+            screen.orientation.lock('landscape'))
+          .catch(() => {});
+      }
+    };
+    dom.addEventListener('touchend', lockOnce);
     dom.addEventListener('touchstart', e => this.onStart(e), { passive: false });
     dom.addEventListener('touchmove', e => this.onMove(e), { passive: false });
     dom.addEventListener('touchend', e => this.onEnd(e), { passive: false });

@@ -8,6 +8,15 @@ import * as THREE from 'three';
 import { ConvexHull } from '../libs/math/ConvexHull.js';
 import { OCCLUDER_PROXIES } from './proxies.js';
 
+function hullVertCount(hull) {
+  const s = new Set();
+  for (const f of hull.faces) {
+    let e = f.edge;
+    do { s.add(e.head().point); e = e.next; } while (e !== f.edge);
+  }
+  return s.size;
+}
+
 // prop-local convex hull of the REAL mesh vertices -> cannon ConvexPolyhedron.
 // Replaces the capsule-compound approximation (authored capsules are tuned
 // for reflection blobs, not contact: chairs wobbled on sphere strings). The
@@ -42,7 +51,27 @@ export function convexFromMesh(root) {
   });
   if (pts.length < 8) return null;
   try {
-    const hull = new ConvexHull().setFromPoints(pts);
+    // hull vertex budget: cannon's convex-convex narrowphase tests every
+    // edge PAIR - two ~150-vert statue hulls in contact ran the frame into
+    // single digits (Andre: elephant + horse touching). Coarsen the dedup
+    // grid until the hull fits; kept points are exact surface points (the
+    // grid only sparsifies), so resting contact never drifts.
+    let hull = new ConvexHull().setFromPoints(pts);
+    let grid = 0.04;
+    while (hullVertCount(hull) > 28 && grid < 0.3) {
+      grid *= 1.6;
+      const s2 = new Set();
+      const sparse = [];
+      for (const p of pts) {
+        const k = ((Math.round(p.x / grid) + 512) << 20) |
+                  ((Math.round(p.y / grid) + 512) << 10) |
+                   (Math.round(p.z / grid) + 512);
+        if (s2.has(k)) continue;
+        s2.add(k);
+        sparse.push(p);
+      }
+      hull = new ConvexHull().setFromPoints(sparse);
+    }
     const idOf = new Map();
     const verts = [];
     const faces = [];
@@ -61,6 +90,25 @@ export function convexFromMesh(root) {
         e = e.next;
       } while (e !== f.edge);
       faces.push(idx);
+    }
+    // robust outward winding: slim triangles (dense clouds hulled after
+    // sparsification) can fool a cross-product normal - cannon then warns
+    // and SAT can pick bogus separating axes. Newell normal per face,
+    // flipped if it points toward the hull centroid.
+    let cx = 0, cy = 0, cz = 0;
+    for (const v of verts) { cx += v.x; cy += v.y; cz += v.z; }
+    cx /= verts.length; cy /= verts.length; cz /= verts.length;
+    for (const idx of faces) {
+      let nx = 0, ny = 0, nz = 0, fx = 0, fy = 0, fz = 0;
+      for (let i = 0; i < idx.length; i++) {
+        const a = verts[idx[i]], b = verts[idx[(i + 1) % idx.length]];
+        nx += (a.y - b.y) * (a.z + b.z);
+        ny += (a.z - b.z) * (a.x + b.x);
+        nz += (a.x - b.x) * (a.y + b.y);
+        fx += a.x; fy += a.y; fz += a.z;
+      }
+      fx /= idx.length; fy /= idx.length; fz /= idx.length;
+      if (nx * (fx - cx) + ny * (fy - cy) + nz * (fz - cz) < 0) idx.reverse();
     }
     return new CANNON.ConvexPolyhedron({ vertices: verts, faces });
   } catch (err) {

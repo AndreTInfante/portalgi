@@ -698,9 +698,9 @@ void main() {
     };
   };
   // in-VR frame-rate cap toggle (A/X button on either controller)
-  // ship at 72: every session started in the expensive 90Hz mode until
-  // someone pressed A/X; 72 is the mode the demo is actually tuned for
-  const rateState = { target: 72, ready: true };
+  // ship at 90 (Andre 2026-07-05: locked at 90 with dynamic resolution -
+  // show it off); A/X still toggles down to 72
+  const rateState = { target: 90, ready: true };
   const rateCanvas = document.createElement('canvas');
   rateCanvas.width = 128; rateCanvas.height = 64;
   const rateTex = new THREE.CanvasTexture(rateCanvas);

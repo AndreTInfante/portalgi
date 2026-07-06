@@ -131,8 +131,13 @@ export class Props {
           p.body.velocity.copy(p.vel);
         }
       } else if (p.body && p.body.sleepState !== CANNON.Body.SLEEPING) {
-        p.mesh.position.copy(p.body.position);
-        p.mesh.quaternion.copy(p.body.quaternion);
+        // interpolated, NOT the raw stepped transform: physics is a fixed 90Hz
+        // (FIXED_DT) but we render at 72, so the discrete body.position advances
+        // in 1/90 chunks against 1/72 frames = uneven per-frame motion = judder
+        // on fast throws. cannon lerp/slerps these from the leftover accumulator
+        // time each step() for smooth rendering at any display rate.
+        p.mesh.position.copy(p.body.interpolatedPosition);
+        p.mesh.quaternion.copy(p.body.interpolatedQuaternion);
       }
       const pos = p.mesh.position;
       const prevCell = p.cell;

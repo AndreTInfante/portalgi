@@ -17,48 +17,19 @@ function hullVertCount(hull) {
   return s.size;
 }
 
-// prop-local convex hull of the REAL mesh vertices -> cannon ConvexPolyhedron.
-// Replaces the capsule-compound approximation (authored capsules are tuned
-// for reflection blobs, not contact: chairs wobbled on sphere strings). The
-// hull's bottom face spans the leg tips, so furniture gets its flat resting
-// base for free. Points are quantized to a 4cm grid before hulling to keep
-// the vertex count (and cannon's convex-convex narrowphase) small.
-export function convexFromMesh(root) {
-  root.updateMatrixWorld(true);
-  // body space = root position+rotation WITHOUT scale (cannon shapes carry
-  // no scale, but the body tracks mesh position/quaternion only) - any root
-  // scale must bake into the hull points
-  const rootInv = new THREE.Matrix4()
-    .compose(root.position, root.quaternion, new THREE.Vector3(1, 1, 1))
-    .invert();
-  const v = new THREE.Vector3();
-  const seen = new Set();
-  const pts = [];
-  root.traverse(o => {
-    if (!o.isMesh) return;
-    const pos = o.geometry.getAttribute('position');
-    const m = new THREE.Matrix4().multiplyMatrices(rootInv, o.matrixWorld);
-    const step = Math.max(1, Math.floor(pos.count / 600));
-    for (let i = 0; i < pos.count; i += step) {
-      v.fromBufferAttribute(pos, i).applyMatrix4(m);
-      const k = ((Math.round(v.x * 25) + 512) << 20) |
-                ((Math.round(v.y * 25) + 512) << 10) |
-                 (Math.round(v.z * 25) + 512);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      pts.push(v.clone());
-    }
-  });
+// convex hull of REAL surface points -> cannon ConvexPolyhedron, under a
+// vertex budget: cannon's convex-convex narrowphase tests every edge PAIR -
+// two ~150-vert statue hulls in contact ran the frame into single digits
+// (Andre: elephant + horse touching). The dedup grid coarsens until the
+// hull fits; kept points are exact surface points (the grid only
+// sparsifies), so resting contact never drifts. Budget scales with object
+// size: a whale at 28 verts is a potato.
+export function convexFromPoints(pts, budget = 28) {
   if (pts.length < 8) return null;
   try {
-    // hull vertex budget: cannon's convex-convex narrowphase tests every
-    // edge PAIR - two ~150-vert statue hulls in contact ran the frame into
-    // single digits (Andre: elephant + horse touching). Coarsen the dedup
-    // grid until the hull fits; kept points are exact surface points (the
-    // grid only sparsifies), so resting contact never drifts.
     let hull = new ConvexHull().setFromPoints(pts);
     let grid = 0.04;
-    while (hullVertCount(hull) > 28 && grid < 0.3) {
+    while (hullVertCount(hull) > budget && grid < 0.3) {
       grid *= 1.6;
       const s2 = new Set();
       const sparse = [];
@@ -117,6 +88,39 @@ export function convexFromMesh(root) {
   }
 }
 
+// prop-local convex hull of the REAL mesh vertices. Replaces the
+// capsule-compound approximation (authored capsules are tuned for
+// reflection blobs, not contact: chairs wobbled on sphere strings). The
+// hull's bottom face spans the leg tips = flat resting base for free.
+export function convexFromMesh(root, budget = 28) {
+  root.updateMatrixWorld(true);
+  // body space = root position+rotation WITHOUT scale (cannon shapes carry
+  // no scale, but the body tracks mesh position/quaternion only) - any root
+  // scale must bake into the hull points
+  const rootInv = new THREE.Matrix4()
+    .compose(root.position, root.quaternion, new THREE.Vector3(1, 1, 1))
+    .invert();
+  const v = new THREE.Vector3();
+  const seen = new Set();
+  const pts = [];
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    const pos = o.geometry.getAttribute('position');
+    const m = new THREE.Matrix4().multiplyMatrices(rootInv, o.matrixWorld);
+    const step = Math.max(1, Math.floor(pos.count / 600));
+    for (let i = 0; i < pos.count; i += step) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m);
+      const k = ((Math.round(v.x * 25) + 512) << 20) |
+                ((Math.round(v.y * 25) + 512) << 10) |
+                 (Math.round(v.z * 25) + 512);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      pts.push(v.clone());
+    }
+  });
+  return convexFromPoints(pts, budget);
+}
+
 const FIXED_DT = 1 / 90;
 
 export class PhysicsWorld {
@@ -138,10 +142,22 @@ export class PhysicsWorld {
     // colliders register in addStaticModels, which runs after buildLevel
     // (reading earlier silently skipped every statue)
     for (const cc of level.colliders) {
-      // statics with mesh-fit physics spheres (statues, plants): world-space
-      // vertical band fit computed at model load. NOT the authored occluder
-      // capsules - those are tuned for reflection blobs, and their artistic
-      // shapes left props proud of fat blobs and inside uncovered parts.
+      // statics with sampled world vertices (statues, plants): a proper
+      // convex hull at a generous budget - the 4-band sphere fit left the
+      // whale's and big horse's contact "all over the place" (Andre, with
+      // the collision viewer): extremities uncovered, midsections proud.
+      // Points are world-space, so the body sits at the origin.
+      if (cc.physPts && cc.physPts.length >= 8) {
+        const hull = convexFromPoints(
+          cc.physPts.map(p => new THREE.Vector3(p[0], p[1], p[2])), 50);
+        if (hull) {
+          const body = new CANNON.Body({ type: CANNON.Body.STATIC });
+          body.addShape(hull);
+          this.world.addBody(body);
+          continue;
+        }
+      }
+      // sphere-band fallback (hull failure only)
       if (cc.physSpheres && cc.physSpheres.length) {
         const body = new CANNON.Body({ type: CANNON.Body.STATIC });
         for (const [x, y, z, r] of cc.physSpheres) {

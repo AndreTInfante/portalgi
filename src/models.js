@@ -97,11 +97,14 @@ export async function addStaticModels(level) {
         }
       }
       // r: generous player-collision radius (can't clip the statue overhang);
-      // rx/rz: reflection-contact footprint = the plinth, NOT the collision r
+      // rx/rz: reflection-contact footprint = the plinth, NOT the collision r.
+      // physPts: the raw world-space samples - physics.js hulls them at a
+      // 50-vert budget (the band spheres survive only as a hull-failure
+      // fallback; they left statue contact "all over the place")
       level.colliders.push({
         x: def.x, z: def.z, r: def.size * 0.42,
         rx: def.size * 0.25, rz: def.size * 0.25, rot: 0,
-        physSpheres,
+        physSpheres, physPts,
       });
     } catch (e) {
       console.error(`static model failed: ${def.slug}`, e);

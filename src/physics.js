@@ -62,13 +62,19 @@ export function convexFromPoints(pts, budget = 28) {
       } while (e !== f.edge);
       faces.push(idx);
     }
-    // robust outward winding: slim triangles (dense clouds hulled after
-    // sparsification) can fool a cross-product normal - cannon then warns
-    // and SAT can pick bogus separating axes. Newell normal per face,
-    // flipped if it points toward the hull centroid.
+    // CENTER the hull on its centroid and return the centroid as a shape
+    // offset: cannon assumes a convex shape's LOCAL ORIGIN IS INSIDE it
+    // (its winding check tests normals against the origin) - world-space
+    // statue hulls with the body at the origin spammed "points into the
+    // shape?" warnings for every origin-facing face (Andre)
     let cx = 0, cy = 0, cz = 0;
     for (const v of verts) { cx += v.x; cy += v.y; cz += v.z; }
     cx /= verts.length; cy /= verts.length; cz /= verts.length;
+    for (const v of verts) { v.x -= cx; v.y -= cy; v.z -= cz; }
+    // robust outward winding: slim triangles (dense clouds hulled after
+    // sparsification) can fool a cross-product normal - cannon then warns
+    // and SAT can pick bogus separating axes. Newell normal per face,
+    // flipped if it points toward the (now-origin) centroid.
     for (const idx of faces) {
       let nx = 0, ny = 0, nz = 0, fx = 0, fy = 0, fz = 0;
       for (let i = 0; i < idx.length; i++) {
@@ -78,10 +84,12 @@ export function convexFromPoints(pts, budget = 28) {
         nz += (a.x - b.x) * (a.y + b.y);
         fx += a.x; fy += a.y; fz += a.z;
       }
-      fx /= idx.length; fy /= idx.length; fz /= idx.length;
-      if (nx * (fx - cx) + ny * (fy - cy) + nz * (fz - cz) < 0) idx.reverse();
+      if (nx * fx + ny * fy + nz * fz < 0) idx.reverse();
     }
-    return new CANNON.ConvexPolyhedron({ vertices: verts, faces });
+    return {
+      shape: new CANNON.ConvexPolyhedron({ vertices: verts, faces }),
+      offset: new CANNON.Vec3(cx, cy, cz),
+    };
   } catch (err) {
     console.warn('physics: convex hull failed, capsule fallback:', err.message);
     return null;
@@ -152,7 +160,7 @@ export class PhysicsWorld {
           cc.physPts.map(p => new THREE.Vector3(p[0], p[1], p[2])), 50);
         if (hull) {
           const body = new CANNON.Body({ type: CANNON.Body.STATIC });
-          body.addShape(hull);
+          body.addShape(hull.shape, hull.offset); // offset = world centroid
           this.world.addBody(body);
           continue;
         }
@@ -197,7 +205,7 @@ export class PhysicsWorld {
     } else if (p.boxHalf) {
       body.addShape(new CANNON.Box(new CANNON.Vec3(...p.boxHalf)));
     } else if (hull) {
-      body.addShape(hull);
+      body.addShape(hull.shape, hull.offset);
     } else if (proxy) {
       for (const [a, b, r] of proxy.capsules) {
         const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);

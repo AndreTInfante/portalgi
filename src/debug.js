@@ -108,6 +108,9 @@ export function buildPortalWires(scene, level) {
 
 export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onStaticImposters, perf, audio, physWires) {
   const gui = new GUI({ title: 'PortalGI' });
+  // ?dev=1 reveals the internal tools (perf sweeps, bake buttons); the public
+  // deploy shows only the demo-facing folders
+  const DEV = new URLSearchParams(location.search).has('dev');
   const g = matsys.globals;
   const proxy = {
     get steps() { return g.uMaxSteps.value; }, set steps(v) { g.uMaxSteps.value = v; },
@@ -199,7 +202,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     fa.add(audio, 'sfx', 0, 1, 0.01).name('sfx volume');
     fa.close();
   }
-  if (perf) {
+  if (perf && DEV) {
     const fp = gui.addFolder('Perf');
     const pp = { get burn() { return perf.burn; }, set burn(v) { perf.setBurn(v); } };
     fp.add(pp, 'burn', 0, 600, 5).name('burn (units)');
@@ -216,12 +219,14 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
       .name('print sweep log');
     fp.close();
   }
-  const f3 = gui.addFolder('Bake');
-  f3.add(proxy, 'lightmap').name('use lightmap');
-  f3.add(state, 'bounces', 1, 3, 1);
-  if (onRelight) f3.add({ relight: onRelight }, 'relight').name('re-trace lightmap (L)');
-  f3.add({ rebake: onRebake }, 'rebake').name('re-bake cubemaps (B)');
-  f3.add({ offline: () => { location.search = '?bake=1'; } }, 'offline')
-    .name('offline bake - baked/ (slow)');
+  if (DEV) {
+    const f3 = gui.addFolder('Bake');
+    f3.add(proxy, 'lightmap').name('use lightmap');
+    f3.add(state, 'bounces', 1, 3, 1);
+    if (onRelight) f3.add({ relight: onRelight }, 'relight').name('re-trace lightmap (L)');
+    f3.add({ rebake: onRebake }, 'rebake').name('re-bake cubemaps (B)');
+    f3.add({ offline: () => { location.search = '?bake=1'; } }, 'offline')
+      .name('offline bake - baked/ (slow)');
+  }
   return gui;
 }

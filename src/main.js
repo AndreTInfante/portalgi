@@ -90,7 +90,9 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);
 if (!renderer.capabilities.isWebGL2) fail('WebGL2 is required.');
 if (!renderer.extensions.get('EXT_color_buffer_float')) fail('EXT_color_buffer_float is required (HDR render targets).');
+let glLost = false;
 renderer.domElement.addEventListener('webglcontextlost', () => {
+  glLost = true;
   errEl.textContent += 'WEBGL CONTEXT LOST\n';
 });
 
@@ -504,6 +506,14 @@ void main() {
     overlayMsg.textContent = 'Baking hull cubemaps...';
     return new Promise(resolve => {
       const tick = () => {
+        // a dead GL context no-ops every call: the generator would sprint
+        // to the end and "finish" a black bake (Andre's master-bake run).
+        // Stop loudly instead - there is nothing sane to resume.
+        if (glLost) {
+          overlayMsg.textContent = 'GPU CONTEXT LOST - bake aborted';
+          overlaySub.textContent = 'lower lmrays / lmps and reload the page';
+          return;
+        }
         const budget = (SHOT || BAKE) ? Infinity : 6;
         for (let i = 0; i < budget; i++) {
           if (steps.next().done) {
@@ -532,6 +542,11 @@ void main() {
     const total = lightmapper.totalSteps();
     return new Promise(resolve => {
       const tick = () => {
+        if (glLost) { // see rebake(): dead context = black "success"
+          overlayMsg.textContent = 'GPU CONTEXT LOST - bake aborted';
+          overlaySub.textContent = 'lower lmrays / lmps and reload the page';
+          return;
+        }
         if (steps.next().done) {
           matsys.globals.uLightmap.value = lightmapper.texture;
           matsys.setUseLightmap(true);

@@ -347,6 +347,18 @@ export class Lightmapper {
       pb.push(new THREE.Vector4(pn.sz / 2, e * c[0], e * c[1], e * c[2]));
     }
     this.nPanels = pa.length;
+    // per-draw workload budget, anchored to the config that has NEVER
+    // crashed a driver (64-row strips at 384 gather rays + 32 panel
+    // samples), with a 0.75 safety factor: heavier settings SHRINK the
+    // strip instead of lengthening the draw. Andre's master bake (rays
+    // 512 after the cap + lmps=64) still tripped Windows' 2s watchdog at
+    // 64 rows - per-draw time is what kills the context, so per-draw
+    // work is what must stay constant.
+    const drawCost = (rays, ps) => rays + ps * this.nPanels + 24 * 4;
+    this.stripRows = Math.max(8, Math.min(64,
+      Math.floor(0.75 * 64 * drawCost(384, 32) / drawCost(this.rays, this.panelSamples)) & ~7));
+    console.log(`lightmap: ${this.rays} rays/pass x ${this.finalPasses} final passes, ` +
+      `${this.stripRows}-row strips, ${this.nPanels} panels`);
     if (pa.length > 24) throw new Error('too many panel lights (max 24)');
     while (pa.length < 24) { pa.push(new THREE.Vector4()); pb.push(new THREE.Vector4()); }
 
@@ -404,7 +416,7 @@ export class Lightmapper {
     this.renderer.render(this.fsScene, this.cam);
   }
 
-  get strips() { return Math.ceil(this.size[1] / 64); }
+  get strips() { return Math.ceil(this.size[1] / this.stripRows); }
 
   totalSteps() {
     const acc = this.finalPasses > 1 ? 1 + this.finalPasses * this.strips : 0;
@@ -437,7 +449,7 @@ export class Lightmapper {
       this.ptUniforms.uGather.value = it === 0 ? 0 : 1;
       this.ptUniforms.uSeed.value = 0.173 + it * 0.619;
       for (let s = 0; s < this.strips; s++) {
-        this.runFs(this.lmA, this.ptMat, s * 64, 64);
+        this.runFs(this.lmA, this.ptMat, s * this.stripRows, this.stripRows);
         yield;
       }
       const t = this.lmA; this.lmA = this.lmB; this.lmB = t; // newest -> lmB
@@ -475,7 +487,7 @@ export class Lightmapper {
         this.ptUniforms.uAccum.value = this.lmA.texture;
         this.ptUniforms.uAccumW.value = a / (a + 1);
         for (let s = 0; s < this.strips; s++) {
-          this.runFs(this.lmB, this.ptMat, s * 64, 64);
+          this.runFs(this.lmB, this.ptMat, s * this.stripRows, this.stripRows);
           yield;
         }
         const u = this.lmA; this.lmA = this.lmB; this.lmB = u; // accum -> lmA

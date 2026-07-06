@@ -195,13 +195,13 @@ export const REAL_SETS = {
   // sampled near-uniform max mips - boosting it did nothing visible).
   // Walls stay on the cheap zero-hop program via the explicit matte flag
   // in level.js, not the roughness threshold.
-  concreteWall: { slug: 'concrete_wall_009', res: '2k', roughMin: 0.5, roughMul: 0.85 },
+  concreteWall: { slug: 'concrete_wall_009', res: '2k', roughMin: 0.4, roughMul: 0.6 },
   walnut: { slug: 'dark_wood', res: '1k' },
   brick: { slug: 'red_bricks_04', res: '2k' }, // courtyard paving
   // mild flatten reins in the photo's stains without going flat-procedural
   // (also feeds plasterPlain = ceilings/jambs). rough lowered from the 0.7
   // matte floor for a readable eggshell sheen; matte is forced in level.js
-  plaster: { slug: 'painted_plaster_wall', res: '1k', target: [230, 226, 219], flatten: 0.65, norFlat: 0.7, roughMin: 0.5, roughMul: 0.85 },
+  plaster: { slug: 'painted_plaster_wall', res: '1k', target: [230, 226, 219], flatten: 0.65, norFlat: 0.7, roughMin: 0.4, roughMul: 0.6 },
 };
 
 // AO (R) + roughness (G) images -> one ORM texture (metal = 0)

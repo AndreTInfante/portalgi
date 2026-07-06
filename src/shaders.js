@@ -1025,16 +1025,19 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = 1) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = 1, hopSpec = false) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   const PVD = pvd && PROP; // prop diffuse arrives from the vertex shader
-  // matte + very-rough pixels: 1 = one-hop PCCM at material roughness
-  // (default; the hop kills virtual-portal seams on continuous walls),
-  // 2 = legacy zero-hop PCCM (perf A/B), 0 = flat irradiance-along-R.
-  // ONLY matte programs compile the one-hop variant: the rough>0.65
-  // early-out in floor/prop programs keeps zero-hop (blur hides cut
-  // seams there, and those programs sit on the register-occupancy edge)
-  const MATTE_HOP = matteSpec === 1 && matte;
+  // matte + very-rough pixels: ?mattespec 1 = TIERED one-hop PCCM at
+  // material roughness (default: only materials tagged hopSpec compile
+  // the hop - open-plan walls/ceilings, the only surfaces that can
+  // straddle a virtual cut; single-cell rooms keep the cheap zero-hop
+  // program), 3 = one-hop on ALL matte (tiering A/B), 2 = zero-hop
+  // everywhere (seams at open-plan cuts), 0 = flat irradiance-along-R.
+  // The rough>0.65 early-out in floor/prop programs is always zero-hop
+  // (blur hides cut seams there, and those programs sit on the
+  // register-occupancy edge)
+  const MATTE_HOP = matte && (matteSpec === 3 || (matteSpec === 1 && hopSpec));
   const ROUGH_SPEC = matteSpec
     ? (MATTE_HOP ? 'pccmSpec(uCell, P, Ng, R, rough)' : 'pccmSpec(uCell, P, R, rough)')
     : 'sampleIrr(uCell, R)';

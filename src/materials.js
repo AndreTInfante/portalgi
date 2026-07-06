@@ -49,9 +49,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // debug variants compile in the traversal step accumulator + debug views;
   // shipping programs carry none of that register pressure
   let debugCompiled = false;
-  const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false) => {
-    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd, matteSpec));
+  const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false, hopSpec = false) => {
+    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '') + (hopSpec ? 'H' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd, matteSpec, hopSpec));
   };
 
   let hullGroup = null;
@@ -179,10 +179,14 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
       (!opts.orm && opts.roughFactor !== undefined && opts.roughFactor <= 0.12);
     const hop1 = hop1Sys && !opts.matte &&
       (mode === 0 || (mode === 4 && !sharp));
+    // hopSpec: matte surfaces that can straddle a virtual cut (open-plan
+    // walls/ceilings) compile the one-hop matte program; the rest keep
+    // the cheap zero-hop variant (tiering - the 90Hz recovery)
+    const hopSpec = !!opts.hopSpec;
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: vertFor(mode),
-      fragmentShader: fragFor(mode, debugCompiled, !!opts.matte, hop1),
+      fragmentShader: fragFor(mode, debugCompiled, !!opts.matte, hop1, hopSpec),
       // FrontSide: winding is normal-oriented at emit time; DoubleSide was a
       // crutch that doubled binning/hidden-surface work on tiled GPUs (Tier 1)
       side: THREE.FrontSide,
@@ -215,6 +219,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     mat.userData.mode = mode;
     mat.userData.matte = !!opts.matte;
     mat.userData.hop1 = hop1;
+    mat.userData.hopSpec = hopSpec;
     mat.userData.spec0 = mat.uniforms.uSpecBoost.value; // setSpecular restore
     // statics boot with the pre-lightmap fallback compiled in; setUseLightmap
     // strips it (and its register pressure) once the lightmap exists
@@ -249,7 +254,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     if (on === debugCompiled) return;
     debugCompiled = on;
     for (const m of allMaterials) {
-      m.fragmentShader = fragFor(m.userData.mode, on, m.userData.matte, m.userData.hop1);
+      m.fragmentShader = fragFor(m.userData.mode, on, m.userData.matte, m.userData.hop1, m.userData.hopSpec);
       m.needsUpdate = true;
     }
   }
@@ -318,7 +323,7 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
         roughFactor: rf,
         metalFactor: o.metalFactor !== undefined ? o.metalFactor : (o.texMap ? 1 : 0),
         specBoost: o.specBoost, tint: o.tint, emissive: o.emissive,
-        matte,
+        matte, hopSpec: o.hopSpec,
       }));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key

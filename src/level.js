@@ -751,8 +751,13 @@ export function buildLevel() {
       })), [0, 1, 0], uvf);
       const ceilIds = solid.filter(id => !cells[id].sky);
       if (ceilIds.length) {
+        // hopSpec: this ceiling straddles virtual cuts - it compiles the
+        // one-hop matte program so both sides of a cut sample the same
+        // neighbor data (zero-hop seams once walls sample structured mips).
+        // Runs before the per-cell mesh loop, so these cells' plasterPlain
+        // builders (jambs included) carry the tag via first-call-wins.
         emitSharedChart(ceilIds.map(id => ({
-          geo: getBuilder(cells[id], 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true }),
+          geo: getBuilder(cells[id], 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, hopSpec: true }),
           pts: cells[id].fp.map(q => [q[0], cells[id].ceilY, q[1]]),
         })), [0, -1, 0], uvf);
       }
@@ -788,13 +793,15 @@ export function buildLevel() {
       if (edge.open) continue;
       // concrete walls use the wall-styled set (form-tie panels); the plain
       // 'concrete' key stays on floors where panel seams would look wrong.
-      // specBoost: walls run zero-hop PCCM now (pccmSpec) - dielectric F0
+      // specBoost: walls run matte PCCM (pccmSpec) - dielectric F0
       // at plaster roughness reads as almost nothing, so the same
       // clear-coat cheat the floors use (2.5 boost did nothing - the 0.7 rough floor
-      // was the real culprit; rough dropped instead, matte FORCED explicitly)
+      // was the real culprit; rough dropped instead, matte FORCED explicitly).
+      // hopSpec only where a wall can straddle a virtual cut (open-plan
+      // rooms); single-cell rooms keep the cheap zero-hop matte program.
       const wb = getBuilder(cell, edge.mat, {
         mapKey: edge.mat === 'concrete' ? 'concreteWall' : edge.mat,
-        specBoost: 1.8, matte: true });
+        specBoost: 1.8, matte: true, hopSpec: openPlan.has(cell.id) });
       const len = Math.hypot(edge.b[0] - edge.a[0], edge.b[1] - edge.a[1]);
       const h = cell.ceilY - cell.floorY;
       const u = [(edge.b[0] - edge.a[0]) / len, (edge.b[1] - edge.a[1]) / len];

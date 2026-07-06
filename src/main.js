@@ -166,8 +166,10 @@ async function boot() {
       hop1: params.get('hop1') !== '0', warp,
       // ?pvd=0: prop diffuse (probes/AO/shadows) back to per-pixel (A/B)
       pvd: params.get('pvd') !== '0',
-      // ?mattespec: 1 = one-hop PCCM (default, seam-free at open-plan
-      // cuts), 2 = legacy zero-hop (perf A/B), 0 = flat irradiance
+      // ?mattespec: 1 = tiered (default: one-hop only on open-plan
+      // walls/ceilings that straddle cuts, zero-hop elsewhere),
+      // 3 = one-hop on ALL matte (tiering perf A/B), 2 = zero-hop
+      // everywhere (seams at cuts), 0 = flat irradiance
       matteSpec: params.has('mattespec') ? (parseInt(params.get('mattespec')) || 0) : 1,
       // ?occdynprop=999 restores uncapped prop-program dyn casters (A/B)
       occDynProp: params.has('occdynprop') ? parseInt(params.get('occdynprop')) : 4 });

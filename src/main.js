@@ -495,11 +495,12 @@ void main() {
   applyDynBudget();
   renderer.xr.addEventListener('sessionstart', applyDynBudget);
   renderer.xr.addEventListener('sessionend', applyDynBudget);
-  // eye-buffer scale: ~19% fill at 0.9 for near-invisible sharpness loss
-  // (Tier 2 item 3; ground-truth ~1.9ms at the gallery worst view).
-  // Applies at session START - re-enter VR after changing the GUI slider
+  // eye-buffer resolution floor: 0.8 (Andre, to lock 90) = ~36% fewer eye
+  // pixels than native for near-invisible sharpness loss in VR; adaptive
+  // foveation reduces the periphery further on top of this base scale.
+  // Applies at session START - re-enter VR after changing the GUI slider.
   renderer.xr.setFramebufferScaleFactor(
-    params.has('fbscale') ? parseFloat(params.get('fbscale')) : 0.9);
+    params.has('fbscale') ? parseFloat(params.get('fbscale')) : 0.8);
   window.__setFbScale = v => renderer.xr.setFramebufferScaleFactor(v);
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries

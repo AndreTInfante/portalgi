@@ -1170,6 +1170,30 @@ void main() {
     }
   };
   let last = performance.now(), fpsAvg = 0;
+  // scripted gag: the hall-A ceiling fan drops 1.5s after you walk in.
+  // its dynamic body spawns asleep at the ceiling (gravity frozen while
+  // sleeping - that is what holds it up); one wakeUp() and it falls and
+  // clatters on the floor (the collide event fires the impact thunk).
+  // ?fandrop=1 forces the drop at boot to spot-check the landing.
+  const fanDrop = (() => {
+    const fan = props.list.find(p => p.slug === 'ceiling_fan');
+    if (!fan) { console.warn('ceiling_fan not found - drop gag disabled'); return { tick() {} }; }
+    const room = fan.cell; // hall A, captured before the fan can move
+    const force = params.get('fandrop') === '1';
+    let t = 0, done = false;
+    return {
+      tick(dt, cell) {
+        if (done || !fan.body) return;
+        if (force) { fan.body.wakeUp(); done = true; return; }
+        // count only while you are in the room, so you always witness it -
+        // step out before 1.5s and the countdown restarts on re-entry
+        if (cell !== room) { t = 0; return; }
+        t += dt;
+        if (t >= 1.5) { fan.body.wakeUp(); done = true; }
+      },
+    };
+  })();
+
   renderer.setAnimationLoop(() => {
     const now = performance.now();
     const dt = Math.min((now - last) / 1000, 0.05);
@@ -1188,6 +1212,7 @@ void main() {
         player.update(dt, level.colliders);
         props.update(dt, player);
       }
+      fanDrop.tick(dt, player.cell); // player.cell is fresh in both modes here
       // listener follows the (XR) camera; footsteps from horizontal travel.
       // VR passes walking=true - the speed gate in audio ignores head sway
       audio.update(dt, inXR ? renderer.xr.getCamera() : camera, player.pos,

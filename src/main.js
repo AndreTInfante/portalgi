@@ -62,6 +62,7 @@ const SHOT_POSES = {
   17: { pos: [17.4, 1.6, -1.8], look: [21.5, 2.6, 1.6] },   // inside the courtyard (sky + sun)
   18: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.0, 22.5] },  // hall B spot-lit exhibits
   19: { pos: [13.6, 1.6, -12.6], look: [14.8, 1.25, -17.6] }, // L2 -> darkroom door (brown-stripe repro)
+  20: { pos: [11.7, 1.6, 4.2], look: [11.2, 1.2, 0] },        // pillar hall: debug pane grazing the pillar silhouette
 };
 
 const overlay = document.getElementById('overlay');
@@ -746,9 +747,10 @@ void main() {
     const pose = SHOT_POSES[SHOT] || SHOT_POSES[1];
     camera.position.set(...pose.pos);
     camera.lookAt(...pose.look);
-    if (SHOT === 7 || SHOT === 12) { // pose the debug pane as if held up in front of the camera
+    if (SHOT === 7 || SHOT === 12 || SHOT === 20) { // pose the debug pane as if held up in front of the camera
       const pane = props.list.find(p => p.debugPane);
       if (SHOT === 7) pane.mesh.position.set(1.2, 1.35, -1.2);
+      else if (SHOT === 20) pane.mesh.position.set(11.55, 1.4, 2.2);
       else pane.mesh.position.set(0, 1.4, 12.4);
       pane.mesh.lookAt(camera.position);
     }

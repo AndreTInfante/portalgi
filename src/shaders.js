@@ -476,7 +476,13 @@ ${useUbo ? /* glsl */`
           // doorway-through-doorway views (in-headset report). The deep
           // partial samples stay single-tap, so this costs half its original
           // price.
-          float bw = uBlendBase + uBlendRough * effR * max(tHit, 0.3);
+          // FLOOR the blend width: a mirror-sharp reflector (rough 0 -> effR 0,
+          // e.g. the debug pane) gives bw = uBlendBase = 0, and blendD/0 is +Inf
+          // away from the silhouette (a hard, lurching crossing) but 0/0 = NaN
+          // right AT the edge = garbage that warps as you orbit a portal corner.
+          // 2cm keeps sharp reflections sharp while smoothing the seam and
+          // killing the NaN; gameplay reflectors already exceed it.
+          float bw = max(0.02, uBlendBase + uBlendRough * effR * max(tHit, 0.3));
           blend = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
           nextCell = int(ph.y);
           break;
@@ -631,7 +637,7 @@ ${matte ? '' : `  if (uOccOn > 0.5 && uOccHops > 0.0) {     // local occluder se
           if ((silMask & (1 << e)) != 0) blendD = min(blendD, d);
         }
         if (insideD > 0.0) {
-          float bw = uBlendBase + uBlendRough * ${matte ? 'rough' : 'effR'} * max(bestT, 0.3);
+          float bw = max(0.02, uBlendBase + uBlendRough * ${matte ? 'rough' : 'effR'} * max(bestT, 0.3)); // floor: no blendD/0 NaN (see traceSpec)
           blend = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
           nextCell = int(ph.y);
           break;

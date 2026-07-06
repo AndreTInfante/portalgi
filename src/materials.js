@@ -190,7 +190,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     // the cheap zero-hop variant (tiering - the 90Hz recovery)
     const hopSpec = !!opts.hopSpec;
     // ceilings compile with no specular term at all unless ?ceilspec=1
-    const noSpec = !!opts.ceil && !!opts.matte && !ceilSpec;
+    // noSpec = diffuse-only program (whole specular chain compiled out):
+    // hard-diffuse ceilings (ceil), or a wall LOD twin (opts.noSpec forced)
+    const noSpec = opts.noSpec !== undefined ? !!opts.noSpec : (!!opts.ceil && !!opts.matte && !ceilSpec);
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: vertFor(mode),
@@ -216,6 +218,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
         // artistic clear-coat cheat: dielectric F0=0.04 spec reads as nothing
         // on a bright floor - polished stone needs help to read as polished
         uSpecBoost: { value: opts.specBoost !== undefined ? opts.specBoost : 1 },
+        uLodFade: { value: 1 }, // wall LOD spec fade (main.js updateWallLod); 1 = full
         uLightPos: { value: lp },
         uLightColor: { value: lc },
         uLightDir: { value: ld },
@@ -304,6 +307,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
 // through the chart-aware builders, so it all has lightmap UVs and one path.
 export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) {
   const group = new THREE.Group();
+  const lodWalls = []; // walls with a diffuse-only twin for distance LOD
   for (const cell of level.cells) {
     for (const [key, b] of cell.builders) {
       if (b.geo.empty) continue;
@@ -327,20 +331,30 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       // traversal-free program while their roughness drops below 0.65 for
       // a readable sheen (they just never resolve through-portal content)
       const matte = o.matte !== undefined ? !!o.matte : minG * rf > 0.65;
-      const mesh = new THREE.Mesh(b.geo.buildGeometry(), matsys.makeMaterial(cell.id, {
+      const matOpts = {
         map: set.map, nrm: set.normalMap, orm: set.ormMap,
         roughFactor: rf,
         metalFactor: o.metalFactor !== undefined ? o.metalFactor : (o.texMap ? 1 : 0),
         specBoost: o.specBoost, tint: o.tint, emissive: o.emissive,
         matte, hopSpec: o.hopSpec, ceil: o.ceil,
-      }));
+      };
+      const mesh = new THREE.Mesh(b.geo.buildGeometry(), matsys.makeMaterial(cell.id, matOpts));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key
       if (o.slug) mesh.userData.slug = o.slug; // authored occluder proxy key
       if (o.proxyFrame) mesh.userData.proxyFrame = o.proxyFrame;
+      // distance LOD: walls carry a pre-built diffuse-only twin material so the
+      // frame loop can demote distant wall fill to the cheap program with no
+      // recompile - walls are static, so the twin's uniforms never need syncing
+      if (o.wall) {
+        mesh.userData.lodFull = mesh.material;
+        mesh.userData.lodTwin = matsys.makeMaterial(cell.id, { ...matOpts, noSpec: true });
+        lodWalls.push(mesh);
+      }
       group.add(mesh);
     }
   }
   scene.add(group);
+  group.userData.lodWalls = lodWalls;
   return group;
 }

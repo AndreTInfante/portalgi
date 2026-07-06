@@ -812,7 +812,7 @@ export function buildLevel() {
       // rooms); single-cell rooms keep the cheap zero-hop matte program.
       const wb = getBuilder(cell, edge.mat, {
         mapKey: edge.mat === 'concrete' ? 'concreteWall' : edge.mat,
-        specBoost: 1.8, matte: true, hopSpec: openPlan.has(cell.id) });
+        specBoost: 1.8, matte: true, hopSpec: openPlan.has(cell.id), wall: true });
       const len = Math.hypot(edge.b[0] - edge.a[0], edge.b[1] - edge.a[1]);
       const h = cell.ceilY - cell.floorY;
       const u = [(edge.b[0] - edge.a[0]) / len, (edge.b[1] - edge.a[1]) / len];

@@ -211,6 +211,49 @@ async function boot() {
   const manager = new THREE.LoadingManager();
   const paintingTexs = loadPaintingTextures(manager);
   const staticGroup = buildStaticMeshes(scene, level, matsys, textures, paintingTexs);
+  // distance LOD for wall specular: distant walls swap to a pre-built
+  // diffuse-only twin (see buildStaticMeshes), collapsing their fill to the
+  // cheap program in long-sightline views (the gallery-down-the-hall worst
+  // case). Walls are static, so centers precompute once and the twin's
+  // uniforms never need syncing. ?lod=0 disables; ?lodrad sets the demote
+  // radius; promote is 2m nearer (hysteresis, so a wall at the boundary
+  // doesn't swap programs every frame).
+  const lodWalls = staticGroup.userData.lodWalls || [];
+  const lodState = {
+    on: params.get('lod') !== '0',
+    radius: params.has('lodrad') ? parseFloat(params.get('lodrad')) : 15,
+  };
+  for (const m of lodWalls) {
+    m.geometry.computeBoundingSphere();
+    m.userData.lodCenter = m.geometry.boundingSphere.center.clone();
+    m.userData.lodFar = false;
+  }
+  const updateWallLod = pos => {
+    if (!lodState.on) { // live A/B: restore every wall to the full program
+      for (const m of lodWalls) {
+        if (m.userData.lodFar || m.material.uniforms.uLodFade.value !== 1) {
+          m.material = m.userData.lodFull;
+          m.userData.lodFull.uniforms.uLodFade.value = 1;
+          m.userData.lodFar = false;
+        }
+      }
+      return;
+    }
+    const Rd = lodState.radius, Rf = Math.max(0.1, Rd - 3); // spec fades over [Rf, Rd]
+    for (const m of lodWalls) {
+      const c = m.userData.lodCenter;
+      const dx = pos.x - c.x, dy = pos.y - c.y, dz = pos.z - c.z;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      // fade surface spec 1 (near) -> 0 (at the demote radius) so the program
+      // swap lands where there is no spec left to pop. Set every frame on the
+      // full material (the twin ignores it), so a swap-in is already at ~0.
+      m.userData.lodFull.uniforms.uLodFade.value = Math.min(1, Math.max(0, (Rd - d) / (Rd - Rf)));
+      // 0.2m swap hysteresis avoids per-frame thrash at the boundary; the fade
+      // makes the crossing itself seamless in either direction
+      if (!m.userData.lodFar) { if (d > Rd) { m.material = m.userData.lodTwin; m.userData.lodFar = true; } }
+      else if (d < Rd - 0.2) { m.material = m.userData.lodFull; m.userData.lodFar = false; }
+    }
+  };
   // sky dome (CC0 Poly Haven, tonemapped): pure visual - not a builder, so it
   // is absent from the lightmap bake and BVH, but present in cubemap captures
   // (reflections + traversal exits through the courtyard's open ceiling see
@@ -674,6 +717,14 @@ void main() {
     else await rebake();
   }
 
+  // pre-warm the wall-LOD twin programs so the first distance-demote mid-view
+  // doesn't hitch on a shader compile (all twins share ~2 programs)
+  if (lodWalls.length) {
+    for (const m of lodWalls) m.material = m.userData.lodTwin;
+    renderer.compile(scene, camera);
+    for (const m of lodWalls) m.material = m.userData.lodFull;
+  }
+
   if (BAKE) {
     overlay.classList.remove('hidden');
     overlayMsg.textContent = 'Saving offline bake...';
@@ -701,6 +752,7 @@ void main() {
       pane.mesh.lookAt(camera.position);
     }
     props.update(0.016, player);
+    updateWallLod(camera.position); // shots reflect the same wall LOD as the loop
     if (occluders) occluders.update();
     updateDynOcc();
     renderer.setRenderTarget(null);
@@ -1237,6 +1289,7 @@ void main() {
       audio.update(dt, inXR ? renderer.xr.getCamera() : camera, player.pos,
         inXR || (player.locked && !player.noclip));
     }
+    if (!state.baking) updateWallLod(inXR ? headPos : player.pos);
     // portal-frustum culling: only cells reachable through on-screen portals
     // draw (reflections are atlas-based and immune). All-visible during bakes.
     if (culler.enabled && !state.baking) {

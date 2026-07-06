@@ -1071,6 +1071,9 @@ uniform MP sampler2D uOrmMap;  // coordinate precision is unaffected
 uniform float uRoughFactor;
 uniform float uMetalFactor;
 uniform float uSpecBoost;
+uniform MP float uLodFade; // wall LOD: fades surface spec to 0 approaching the
+                           // demote radius so the swap to the diffuse-only twin
+                           // is seamless (1 everywhere else)
 uniform MP sampler2D uLightmap;
 ${texOcc && STATIC ? '// texture-space occlusion layer over the lightmap UVs (dynocc.js)\nuniform MP sampler2D uDynOcc;' : ''}
 uniform float uUseLightmap;
@@ -1265,7 +1268,7 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
       fragOut = vec4(pow(acesTonemap(pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost * uExposure * 8.0), vec3(1.0 / 2.2)), 1.0);
       return;
     }` : ''}
-    color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
+    color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost * uLodFade;
   }`}
 `}
 ${STATIC ? /* glsl */`

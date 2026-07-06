@@ -71,7 +71,7 @@ float roughToLod(float r) {
 // scan (Andre 2026-07-05: props interact with far fewer objects than
 // floors). 999 in every other program - the guards constant-fold away.
 // Statics (packed after the dyn prefix) are never skipped.
-const traceGlsl = (numCells, useUbo, dbg = false, dynCap = 999) => /* glsl */`
+const traceGlsl = (numCells, useUbo, dbg = false, dynCap = 999, fullDepth = false) => /* glsl */`
 ${useUbo ? /* glsl */`
 layout(std140) uniform HullData {
   vec4 uHull[${numCells * HULL_TEX_W}];
@@ -370,8 +370,12 @@ MP vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, MP floa
   // early-out at the call site is the 0-hop rung of the same ladder.
   // hopCap: callers whose contribution is faint (glass fresnel reflection,
   // ~4-10% of the mix) cap their depth instead of paying the full budget.
-  int maxHops = min(uMaxSteps, hopCap);
-  if (uRoughHops > 0.5) {
+  // fullDepth (the debug pane): march the caller's full hopCap regardless of
+  // the gameplay uMaxSteps dial - a diagnostic must show ground-truth portal
+  // recursion even when portal rendering is turned down/off. Gameplay callers
+  // (glass, floors) stay capped at min(uMaxSteps, hopCap).
+  int maxHops = ${fullDepth ? 'hopCap' : 'min(uMaxSteps, hopCap)'};
+  if (uRoughHops > 0.5${fullDepth ? ' && false' : ''}) {
     if (rough > 0.35) maxHops = min(uMaxSteps, 1);
     else if (rough > 0.12) maxHops = min(uMaxSteps, 2);
   }
@@ -697,6 +701,28 @@ MP vec3 pccmSpec(int cell, vec3 pos, vec3 dir, float rough) {
   // doorjambs reflecting content centimeters away (t ~ 0) sharpened to lod 0
   // mirrors. Plain PCCM (mip from material roughness alone) keeps fixtures
   // visible as broad parallax-correct blobs, which is the point of this path.
+  return sampleSpec(cell, hitP - h0.xyz, roughToLod(rough));
+}
+`;
+
+// Static matte receivers lie exactly on authored hull planes. Use the
+// geometric normal to nudge them into the cell instead of re-scanning every
+// hull plane first; the one-hop matte path does the same. This is the
+// zero-hop wall/ceiling budget path, so deleting 12 UBO reads matters.
+const PCCM_MATTE_GLSL = /* glsl */`
+MP vec3 pccmSpecMatte(int cell, vec3 pos, vec3 nrm, vec3 dir, float rough) {
+  pos += nrm * 0.01;
+  vec4 h0 = hfetch(cell, 0);
+  int pc = int(h0.w);
+  float bestT = 1e8;
+  for (int j = 0; j < 12; j++) {
+    if (j >= pc) break;
+    vec4 pl = hfetch(cell, ${PLANES_OFF} + j);
+    float dn = dot(pl.xyz, dir);
+    if (dn < -1e-5) bestT = min(bestT, -(dot(pl.xyz, pos) + pl.w) / dn);
+  }
+  if (bestT > 1e7) bestT = 0.0;
+  vec3 hitP = pos + dir * bestT;
   return sampleSpec(cell, hitP - h0.xyz, roughToLod(rough));
 }
 `;
@@ -1043,7 +1069,9 @@ export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte 
   // irradiance tiles differ at a cut. No view-dependent term = no seam.)
   const MATTE_HOP = matte && !noSpec && (matteSpec === 3 || (matteSpec === 1 && hopSpec));
   const ROUGH_SPEC = matteSpec
-    ? (MATTE_HOP ? 'pccmSpec(uCell, P, Ng, R, rough)' : 'pccmSpec(uCell, P, R, rough)')
+    ? (MATTE_HOP ? 'pccmSpec(uCell, P, Ng, R, rough)'
+      : matte ? 'pccmSpecMatte(uCell, P, Ng, R, rough)'
+        : 'pccmSpec(uCell, P, R, rough)')
     : 'sampleIrr(uCell, R)';
   // warp fields replace the recursive walk in STATIC programs only: props/
   // glass/pane are near-mirror small-fill and keep the exact loop; debug
@@ -1097,8 +1125,8 @@ uniform int uDebugMode;   // 0 off, 1 cell tint, 2 step heatmap, 3 irradiance, 4
 ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
-${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
-${(STATIC || PROP) && matteSpec && !noSpec ? (MATTE_HOP ? hop1Glsl(true) : PCCM_GLSL) : ''}
+${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999, PANE)}
+${(STATIC || PROP) && matteSpec && !noSpec ? (MATTE_HOP ? hop1Glsl(true) : (matte ? PCCM_MATTE_GLSL : PCCM_GLSL)) : ''}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}

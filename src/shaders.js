@@ -1297,9 +1297,25 @@ out vec4 fragColor;
 ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 void main() {
-  vec2 f = ((gl_FragCoord.xy - uTileOrigin - BORDER_PX) / uTileSize) * 2.0 - 1.0;
-  vec3 dir = octDecode(f);
-  fragColor = vec4(texture(uCube, vec3(dir.x * uFlipX, dir.y, dir.z)).rgb, 1.0);
+  // LOD0 is the sharpest mip and the only one near-mirror surfaces (glass,
+  // chrome, grazing floors) sample. A single cube tap per oct texel combed
+  // high-contrast edges (a bright doorway against dark floor) into visible
+  // spikes: the octahedral map's non-uniform texel density undersamples the
+  // edge, and the prefiltered mips hide it but LOD0 shows it raw. Box-filter
+  // each output texel over its footprint (SSxSS jittered taps into the
+  // higher-res cube) so the edge lands as a clean sub-texel gradient without
+  // dulling the mip - the prefilter chain above builds on an antialiased base.
+  const int SS = 4;
+  vec2 base = gl_FragCoord.xy - uTileOrigin - BORDER_PX;
+  vec3 sum = vec3(0.0);
+  for (int j = 0; j < SS; j++) {
+    for (int i = 0; i < SS; i++) {
+      vec2 off = (vec2(float(i), float(j)) + 0.5) / float(SS) - 0.5; // -0.5..0.5 px
+      vec3 dir = octDecode(((base + off) / uTileSize) * 2.0 - 1.0);
+      sum += texture(uCube, vec3(dir.x * uFlipX, dir.y, dir.z)).rgb;
+    }
+  }
+  fragColor = vec4(sum / float(SS * SS), 1.0);
 }
 `;
 }

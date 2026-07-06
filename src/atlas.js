@@ -3,7 +3,14 @@
 // octahedral wrap content) sit side by side, plus one irradiance tile.
 // Trilinear filtering is done manually in the shader (2 bilinear taps).
 
-export const LOD_SIZES = [256, 128, 64, 32, 16, 8, 4];
+// Doubled 2026-07-06 (was [256..4]): near-mirror surfaces (glass, chrome,
+// grazing floors) sample LOD0/1, where the old 256px oct texels were large
+// enough that a high-contrast reflected edge stair-stepped into visible
+// teeth when magnified. Same count so roughToLod (hence the blur at each
+// roughness) is unchanged - purely 2x the angular resolution per mip.
+// Requires a re-bake (atlas dimensions changed; the dim guard in main.js
+// rejects the old baked/atlas.bin).
+export const LOD_SIZES = [512, 256, 128, 64, 32, 16, 8];
 export const BORDER = 2;
 export const N_LODS = LOD_SIZES.length;
 

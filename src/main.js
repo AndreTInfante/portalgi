@@ -13,7 +13,7 @@ import { createMaterialSystem, buildStaticMeshes } from './materials.js';
 import { Player } from './player.js';
 import { Props } from './props.js';
 import { buildGUI, buildPortalWires, buildPhysicsWires } from './debug.js';
-import { fetchManifest, loadHalfTexture, saveBaked } from './bakedio.js';
+import { fetchManifest, loadHalfTexture, saveBaked, saveAtlasOnly } from './bakedio.js';
 import { loadModelProps, addStaticModels } from './models.js';
 import { findCell } from './level.js';
 import { VRButton } from '../libs/webxr-VRButton.js';
@@ -620,6 +620,24 @@ void main() {
     manager.onError = url => { errEl.textContent += 'load failed: ' + url + '\n'; };
     setTimeout(res, 8000); // don't hang forever if a texture is missing
   });
+
+  // ?recube: regenerate ONLY the cubemap atlas (after an atlas-resolution
+  // change) reusing the existing master lightmap. The lightmap is the
+  // expensive path-traced artifact and is unaffected by the atlas layout,
+  // so this skips the hour-long relight: load the lightmap, capture cubemaps
+  // from the scene it lights, save atlas.bin + manifest (lightmap.bin stays).
+  if (params.has('recube')) {
+    if (!manifest) throw new Error('?recube needs an existing baked/manifest.json to reuse the lightmap');
+    overlayMsg.textContent = 'Re-cube: loading master lightmap...';
+    const lmTex = await loadHalfTexture('./baked/lightmap.bin', manifest.lightmap.w, manifest.lightmap.h, true);
+    matsys.globals.uLightmap.value = lmTex;
+    matsys.setUseLightmap(true);
+    await rebake(); // cubemaps only, scene lit by the loaded lightmap
+    const mb = await saveAtlasOnly(renderer, baker.atlasA, manifest);
+    overlayMsg.textContent = `Atlas re-cubed (${mb.toFixed(1)} MB) at ${baker.atlasA.width}x${baker.atlasA.height}`;
+    document.title = 'BAKE_SAVED';
+    return;
+  }
 
   // fast path: distributed baked textures -- no baking at all
   let usedBaked = false;

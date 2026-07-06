@@ -103,3 +103,20 @@ export async function saveBaked(renderer, atlasRT, lightmapRT, settings) {
   }, null, 2));
   return (atlas.length + lm.length) / 1e6;
 }
+
+// Rewrite ONLY the cubemap atlas (e.g. after an atlas-resolution change),
+// reusing the existing lightmap.bin untouched. The lightmap is the expensive
+// path-traced artifact and is unaffected by the atlas layout, so this skips
+// the hour-long relight entirely. prevManifest carries the lightmap dims +
+// original bake settings forward unchanged.
+export async function saveAtlasOnly(renderer, atlasRT, prevManifest) {
+  const atlas = textureToHalfBytes(renderer, atlasRT.texture, atlasRT.width, atlasRT.height);
+  await putFile('./baked/atlas.bin', atlas);
+  await putFile('./baked/manifest.json', JSON.stringify({
+    ...prevManifest,
+    date: new Date().toISOString(),
+    atlas: { w: atlasRT.width, h: atlasRT.height },
+    recubedFrom: prevManifest.date, // provenance: lightmap predates this atlas
+  }, null, 2));
+  return atlas.length / 1e6;
+}

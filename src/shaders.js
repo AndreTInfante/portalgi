@@ -1127,6 +1127,13 @@ void main() {
   vec3 P = vWorldPos;
   vec3 Ng = normalize(vNormal);
   if (!gl_FrontFacing) Ng = -Ng;
+${noSpec ? /* glsl */`
+  // diffuse-only fill (hard-diffuse ceilings): the specular chain is compiled
+  // out, so the view vector, the uNrmMap fetch, and the tangent frame are all
+  // dead work. The flat lightmap is non-directional (vUv2) and texture-space
+  // AO also reads vUv2; N is only touched by the capsule-AO fallback / boot
+  // LM_FALLBACK, where the geometric normal is fine. Pure texture fill.
+  vec3 N = Ng;` : /* glsl */`
   vec3 V = normalize(cameraPosition - P);
 
   // tangent-space normal mapping (specular + probe response; the flat lightmap
@@ -1141,7 +1148,7 @@ void main() {
     vec3 nTS = texture(uNrmMap, vUv).xyz * 2.0 - 1.0;
     N = normalize(T * nTS.x + B * nTS.y + Ng * nTS.z);
   }
-  MP float NoV = max(dot(N, V), 0.0);
+  MP float NoV = max(dot(N, V), 0.0);`}
   ${dbg ? 'float steps = 0.0;' : ''}
 ${useUbo ? /* glsl */`
   // dynamic-occluder effects (contact AO, shadow rays, reflection blobs)
@@ -1169,7 +1176,7 @@ ${GLASS ? /* glsl */`
   MP vec3 albedo = texture(uMap, vUv).rgb * uTint;
   ${dbg ? 'if (uDebugMode == 4) albedo = vec3(0.75);' : ''}
   MP vec3 orm = texture(uOrmMap, vUv).rgb;
-  float rough = clamp(orm.g * uRoughFactor, 0.03, 1.0);
+  ${noSpec ? '' : 'float rough = clamp(orm.g * uRoughFactor, 0.03, 1.0);'}
   MP float metal = clamp(orm.b * uMetalFactor, 0.0, 1.0);
   MP float ao = orm.r;
   MP vec3 diffuseL;
@@ -1239,7 +1246,7 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
     }
   }
 `) : ''}
-  MP vec3 F0 = mix(vec3(0.04), albedo, metal);
+  ${noSpec ? '' : 'MP vec3 F0 = mix(vec3(0.04), albedo, metal);'}
   color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
   ${noSpec ? (dbg ? /* glsl */`
   if (uDebugMode == 6) { fragOut = vec4(0.0, 0.0, 0.0, 1.0); return; } // hard diffuse: no spec term

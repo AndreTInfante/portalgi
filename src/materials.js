@@ -307,12 +307,17 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       // possible pixel - then the program compiles with no traversal at all
       const minG = set.ormMap && set.ormMap.userData && set.ormMap.userData.minG !== undefined
         ? set.ormMap.userData.minG : 0;
+      // o.matte overrides the roughness-threshold rule: matte now means
+      // "zero-hop PCCM", which is valid at ANY roughness - walls keep the
+      // traversal-free program while their roughness drops below 0.65 for
+      // a readable sheen (they just never resolve through-portal content)
+      const matte = o.matte !== undefined ? !!o.matte : minG * rf > 0.65;
       const mesh = new THREE.Mesh(b.geo.buildGeometry(), matsys.makeMaterial(cell.id, {
         map: set.map, nrm: set.normalMap, orm: set.ormMap,
         roughFactor: rf,
         metalFactor: o.metalFactor !== undefined ? o.metalFactor : (o.texMap ? 1 : 0),
         specBoost: o.specBoost, tint: o.tint, emissive: o.emissive,
-        matte: minG * rf > 0.65,
+        matte,
       }));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key

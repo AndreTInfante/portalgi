@@ -61,6 +61,7 @@ const SHOT_POSES = {
   16: { pos: [13.2, 1.6, 0], look: [17.5, 1.3, 0] },        // pillar hall -> courtyard door (sun pool)
   17: { pos: [17.4, 1.6, -1.8], look: [21.5, 2.6, 1.6] },   // inside the courtyard (sky + sun)
   18: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.0, 22.5] },  // hall B spot-lit exhibits
+  19: { pos: [13.6, 1.6, -12.6], look: [14.8, 1.25, -17.6] }, // L2 -> darkroom door (brown-stripe repro)
 };
 
 const overlay = document.getElementById('overlay');

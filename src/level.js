@@ -756,11 +756,16 @@ export function buildLevel() {
         // neighbor data (zero-hop seams once walls sample structured mips).
         // Runs before the per-cell mesh loop, so these cells' plasterPlain
         // builders (jambs included) carry the tag via first-call-wins.
+        // MUST stay under the 'plasterPlain' key (shared with the door jambs
+        // at jb below): the master lightmap was packed with ceilings+jambs in
+        // one builder. Splitting them into a separate 'ceil' key reshuffled
+        // the shelf-pack (equal-height charts reorder) and stranded the jamb
+        // uv2 on stale lightmap data - a brown stripe over doorways. The
+        // ceil:true material demotion is opt-only and does NOT affect the
+        // pack; first-call-wins (ceiling precedes jb) hard-diffuses the jambs
+        // too, which is imperceptible on the narrow door surrounds.
         emitSharedChart(ceilIds.map(id => ({
-          // 'ceil' key (not 'plasterPlain'): ceilings carry ceil: true so
-          // materials can demote them to irradiance (?ceilspec) without
-          // dragging the doorjambs along via first-call-wins opts sharing
-          geo: getBuilder(cells[id], 'ceil', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, ceil: true, hopSpec: true }),
+          geo: getBuilder(cells[id], 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, ceil: true, hopSpec: true }),
           pts: cells[id].fp.map(q => [q[0], cells[id].ceilY, q[1]]),
         })), [0, -1, 0], uvf);
       }
@@ -773,7 +778,10 @@ export function buildLevel() {
     const fb = getBuilder(cell, 'floor',
       { mapKey: cell.floor.key, roughFactor: cell.floor.roughFactor,
         specBoost: cell.floor.specBoost });
-    const cb = getBuilder(cell, 'ceil', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, ceil: true });
+    // 'plasterPlain' (NOT a separate 'ceil' key): shares the builder with the
+    // door jambs so the lightmap pack matches the master bake (see the shared
+    // ceiling above). ceil:true (opt-only, no pack impact) hard-diffuses it.
+    const cb = getBuilder(cell, 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, ceil: true });
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
     const floorPts = cell.fp.map(p => [p[0], cell.floorY, p[1]]);
     if (!openPlan.has(cell.id)) {

@@ -406,12 +406,15 @@ MP vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, MP floa
     if (bestPlane < 0) bestT = 0.0;
     vec3 hitP = pos + dir * bestT;
     float tHit = tTot + bestT;
-    // distance-grown roughness from first principles: atlas mips blur
-    // ANGULARLY as seen from the capture point, so matching the surface
-    // lobe needs (lobe footprint at hit)/(hit distance from capture) =
-    // t*rough/d. uDistRough is a dimensionless scale (1 = physical); the
-    // old 0.12/m constant was this formula with d frozen at ~8m.
-    float effR = min(1.0, rough * (1.0 + uDistRough * tHit / max(distance(hitP, h0.xyz), 0.5)));
+    // parallax-corrected roughness (Lagarde): the surface lobe's angular
+    // width AS SEEN FROM THE CAPTURE POINT scales by t/d, so mip roughness
+    // = rough * t/d - the PURE ratio. (An earlier 1 + t/d baseline
+    // double-counted the lobe: at the typical t ~ d it pinned every wall
+    // at the max-blur mip, which is why neither specBoost nor material
+    // roughness changed anything visible. The pure ratio also models real
+    // contact sharpening: content close to the reflector stays crisp.)
+    // uDistRough stays a dimensionless scale (1 = physical).
+    float effR = min(1.0, rough * uDistRough * tHit / max(distance(hitP, h0.xyz), 0.5));
     MP float lod = roughToLod(effR);
 ${useUbo ? /* glsl */`
     // occluder transmittance over this cell's segment attenuates everything
@@ -573,7 +576,7 @@ MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   if (bestPlane < 0) bestT = 0.0;
   vec3 hitP = pos + dir * bestT;
   // t*rough/d angular-footprint growth (see traceSpec)
-  float effR = min(1.0, rough * (1.0 + uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5)));
+  float effR = min(1.0, rough * uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5));
   MP float lod = roughToLod(effR);
   MP vec3 acc = vec3(0.0);
   MP float w = 1.0;
@@ -636,7 +639,7 @@ MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   if (t2 > 1e7) t2 = 0.0;
   vec3 hit2 = pos2 + dir * t2;
   MP float lod2 = roughToLod(min(1.0,
-    rough * (1.0 + uDistRough * (bestT + t2) / max(distance(hit2, g0.xyz), 0.5))));
+    rough * uDistRough * (bestT + t2) / max(distance(hit2, g0.xyz), 0.5)));
   acc += w * sampleSpec(nextCell, hit2 - g0.xyz, lod2);
   return acc;
 }
@@ -669,7 +672,7 @@ MP vec3 pccmSpec(int cell, vec3 pos, vec3 dir, float rough) {
   }
   if (bestT > 1e7) bestT = 0.0;
   vec3 hitP = pos + dir * bestT;
-  float effR = min(1.0, rough * (1.0 + uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5)));
+  float effR = min(1.0, rough * uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5));
   return sampleSpec(cell, hitP - h0.xyz, roughToLod(effR));
 }
 `;
@@ -717,7 +720,7 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   if (bestPlane < 0) bestT = 0.0;
   vec3 hitP = pos + dir * bestT;
   // t*rough/d angular-footprint growth (see traceSpec)
-  float effR = min(1.0, rough * (1.0 + uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5)));
+  float effR = min(1.0, rough * uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5));
   MP float lod = roughToLod(effR);
   MP vec3 acc = vec3(0.0);
   MP float w = 1.0;
@@ -801,7 +804,7 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
           vec3 endP = hitP + dir * tB;
           vec3 termC = hfetch(term, 0).xyz;
           MP float lod2 = roughToLod(min(1.0,
-            rough * (1.0 + uDistRough * tTot / max(distance(endP, termC), 0.5))));
+            rough * uDistRough * tTot / max(distance(endP, termC), 0.5)));
           farS = sampleSpec(term, endP - termC, lod2);
         }
         break;

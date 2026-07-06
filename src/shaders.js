@@ -569,15 +569,18 @@ vec3 blendedIrr(int cell, vec3 P, vec3 N) {
 //     mechanism that keeps the floors seamless. uMaxSteps=0 (the VR
 //     "portal rendering" toggle) still collapses it to zero-hop PCCM.
 const hop1Glsl = (matte) => /* glsl */`
-MP vec3 ${matte ? 'pccmSpec' : 'traceSpec1'}(int cell, vec3 pos, vec3 dir, float rough${matte ? '' : ', MP float dynFade'}) {
+MP vec3 ${matte ? 'pccmSpec' : 'traceSpec1'}(int cell, vec3 pos, ${matte ? 'vec3 nrm, ' : ''}vec3 dir, float rough${matte ? '' : ', MP float dynFade'}) {
   vec4 h0 = hfetch(cell, 0);
   int pc = int(h0.w);
-  for (int j = 0; j < 12; j++) {            // nudge start point inside the hull
+${matte ? `  // matte callers shade points ON a hull plane: a 1cm push along the
+  // geometric normal replaces the 12-fetch nudge loop (walls/ceilings
+  // are the biggest fill in the scene - this is the matte perf budget)
+  pos += nrm * 0.01;` : `  for (int j = 0; j < 12; j++) {            // nudge start point inside the hull
     if (j >= pc) break;
     vec4 pl = hfetch(cell, ${PLANES_OFF} + j);
     float d = dot(pl.xyz, pos) + pl.w;
     if (d < 0.01) pos += pl.xyz * (0.01 - d);
-  }
+  }`}
   float bestT = 1e8;
   int bestPlane = -1;
   for (int j = 0; j < 12; j++) {            // local hull exit
@@ -1027,8 +1030,14 @@ export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte 
   const PVD = pvd && PROP; // prop diffuse arrives from the vertex shader
   // matte + very-rough pixels: 1 = one-hop PCCM at material roughness
   // (default; the hop kills virtual-portal seams on continuous walls),
-  // 2 = legacy zero-hop PCCM (perf A/B), 0 = flat irradiance-along-R
-  const ROUGH_SPEC = matteSpec ? 'pccmSpec(uCell, P, R, rough)' : 'sampleIrr(uCell, R)';
+  // 2 = legacy zero-hop PCCM (perf A/B), 0 = flat irradiance-along-R.
+  // ONLY matte programs compile the one-hop variant: the rough>0.65
+  // early-out in floor/prop programs keeps zero-hop (blur hides cut
+  // seams there, and those programs sit on the register-occupancy edge)
+  const MATTE_HOP = matteSpec === 1 && matte;
+  const ROUGH_SPEC = matteSpec
+    ? (MATTE_HOP ? 'pccmSpec(uCell, P, Ng, R, rough)' : 'pccmSpec(uCell, P, R, rough)')
+    : 'sampleIrr(uCell, R)';
   // warp fields replace the recursive walk in STATIC programs only: props/
   // glass/pane are near-mirror small-fill and keep the exact loop; debug
   // variants keep it too so the step heatmap stays a ground-truth view
@@ -1079,7 +1088,7 @@ ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
 ${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
-${(STATIC || PROP) && matteSpec ? (matteSpec === 2 ? PCCM_GLSL : hop1Glsl(true)) : ''}
+${(STATIC || PROP) && matteSpec ? (MATTE_HOP ? hop1Glsl(true) : PCCM_GLSL) : ''}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}

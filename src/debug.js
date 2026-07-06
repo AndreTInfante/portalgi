@@ -1,6 +1,80 @@
 // lil-gui panel wired to the shared shader globals + portal wireframe overlay.
 import * as THREE from 'three';
+import * as CANNON from '../libs/cannon-es.js';
 import GUI from 'lil-gui';
+
+// wireframes for every cannon collision shape (statics steel-blue, dynamics
+// orange): the ground-truth view of what physics actually collides against -
+// authored proxies, mesh-fit statue spheres, and prop convex hulls all
+// diverge from the visual mesh in their own ways
+export function buildPhysicsWires(world) {
+  const group = new THREE.Group();
+  group.visible = false;
+  const dyn = []; // [{ body, obj }] - only dynamics need per-frame sync
+  const matS = new THREE.LineBasicMaterial({ color: 0x4d9fd6, depthTest: false, transparent: true, opacity: 0.7 });
+  const matD = new THREE.LineBasicMaterial({ color: 0xff9a3d, depthTest: false, transparent: true, opacity: 0.9 });
+  const shapeWire = (shape, mat) => {
+    if (shape instanceof CANNON.Sphere) {
+      return new THREE.LineSegments(
+        new THREE.WireframeGeometry(new THREE.SphereGeometry(shape.radius, 10, 6)), mat);
+    }
+    if (shape instanceof CANNON.Box) {
+      const h = shape.halfExtents;
+      return new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(h.x * 2, h.y * 2, h.z * 2)), mat);
+    }
+    if (shape instanceof CANNON.ConvexPolyhedron) {
+      const pts = [];
+      for (const face of shape.faces) {
+        for (let i = 0; i < face.length; i++) {
+          const a = shape.vertices[face[i]], b = shape.vertices[face[(i + 1) % face.length]];
+          pts.push(new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z));
+        }
+      }
+      return new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), mat);
+    }
+    return null; // planes etc.
+  };
+  for (const body of world.bodies) {
+    const isDyn = body.type === CANNON.Body.DYNAMIC || body.type === CANNON.Body.KINEMATIC;
+    const obj = new THREE.Group();
+    let any = false;
+    for (let i = 0; i < body.shapes.length; i++) {
+      const w = shapeWire(body.shapes[i], isDyn ? matD : matS);
+      if (!w) continue;
+      any = true;
+      w.position.copy(body.shapeOffsets[i]);
+      w.quaternion.copy(body.shapeOrientations[i]);
+      w.layers.set(3); // debug-only: out of cubemap captures
+      obj.add(w);
+    }
+    if (!any) continue;
+    obj.position.copy(body.position);
+    obj.quaternion.copy(body.quaternion);
+    group.add(obj);
+    if (isDyn) dyn.push({ body, obj });
+  }
+  // shape census: a missing CLASS of collider (e.g. the statue sphere
+  // bands) is invisible in gameplay until something falls through it
+  const census = { sphere: 0, box: 0, hull: 0, plane: 0 };
+  for (const b of world.bodies) {
+    for (const s of b.shapes) {
+      census[s instanceof CANNON.Sphere ? 'sphere' : s instanceof CANNON.Box ? 'box'
+        : s instanceof CANNON.ConvexPolyhedron ? 'hull' : 'plane']++;
+    }
+  }
+  console.log(`physics: ${world.bodies.length} bodies -`,
+    JSON.stringify(census));
+  return {
+    group,
+    update() { // call per frame while visible
+      for (const d of dyn) {
+        d.obj.position.copy(d.body.position);
+        d.obj.quaternion.copy(d.body.quaternion);
+      }
+    },
+  };
+}
 
 export function buildPortalWires(scene, level) {
   const group = new THREE.Group();
@@ -32,7 +106,7 @@ export function buildPortalWires(scene, level) {
   return group;
 }
 
-export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onStaticImposters, perf, audio) {
+export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onStaticImposters, perf, audio, physWires) {
   const gui = new GUI({ title: 'PortalGI' });
   const g = matsys.globals;
   const proxy = {
@@ -70,6 +144,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   f2.add(proxy, 'exposure', -5, 2, 0.1).name('exposure (EV)');
   f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5 });
   f2.add(proxy, 'portals').name('show portals');
+  if (physWires) f2.add(physWires.group, 'visible').name('show collision shapes');
   if (culler) f2.add(culler, 'enabled').name('portal culling');
   if (typeof window !== 'undefined' && window.__setFbScale) {
     f2.add({ fb: 1.0 }, 'fb', 0.7, 1.2, 0.05).name('eye buffer scale (re-enter VR)')

@@ -12,7 +12,7 @@ import { Lightmapper } from './lightmap.js';
 import { createMaterialSystem, buildStaticMeshes } from './materials.js';
 import { Player } from './player.js';
 import { Props } from './props.js';
-import { buildGUI, buildPortalWires } from './debug.js';
+import { buildGUI, buildPortalWires, buildPhysicsWires } from './debug.js';
 import { fetchManifest, loadHalfTexture, saveBaked } from './bakedio.js';
 import { loadModelProps, addStaticModels } from './models.js';
 import { findCell } from './level.js';
@@ -253,6 +253,12 @@ void main() {
   const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
   const physics = new PhysicsWorld(level); // cannon-es: props vs level/furniture/each other
   const props = new Props(scene, level, matsys, modelProps, physics);
+  // collision-shape wireframes (Display > 'show collision shapes'): built
+  // AFTER Props so every prop body exists. Ground truth for contact bugs -
+  // statue sphere bands and prop hulls both diverge from the visual mesh.
+  const physWires = buildPhysicsWires(physics.world);
+  if (params.get('physwires') === '1') physWires.group.visible = true;
+  scene.add(physWires.group);
   const audio = new AudioSystem();
   props.onImpact = (pos, speed, p) => audio.impact(pos, speed, p.radius);
   if (!SHOT && !BAKE) {
@@ -440,7 +446,7 @@ void main() {
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
   const state = { bounces: useLightmap ? 1 : 3, baking: false };
-  const gui = buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf, audio);
+  const gui = buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf, audio, physWires);
   if (isTouchDevice()) gui.close(); // phones: collapsed to the title bar by default
 
   if (!SHOT && !BAKE) {
@@ -929,6 +935,8 @@ void main() {
               g.uExposure.value = Math.pow(2, ev);
             } },
           mkToggle('portal wires', () => wires.visible, on => { wires.visible = on; }),
+          mkToggle('collision wires', () => physWires.group.visible,
+            on => { physWires.group.visible = on; }),
           mkToggle('portal culling', () => culler.enabled, on => { culler.enabled = on; }),
           { name: 'perf batch', value: () => (perf.batch || perf.sweep) ? 'RUNNING' : 'run',
             adjust: () => {
@@ -1211,6 +1219,7 @@ void main() {
         matsys.globals.uOccBudget.value);
       updateDynOcc(dt); // after occluders.update: it reads the fresh e.world
     }
+    if (physWires.group.visible) physWires.update(); // sync dynamic bodies
     if (!inXR) {
       player.applyToCamera(camera);
       const aimed = !props.held && props.aim(player.pos, player.viewDir);

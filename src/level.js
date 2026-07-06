@@ -757,7 +757,10 @@ export function buildLevel() {
         // Runs before the per-cell mesh loop, so these cells' plasterPlain
         // builders (jambs included) carry the tag via first-call-wins.
         emitSharedChart(ceilIds.map(id => ({
-          geo: getBuilder(cells[id], 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, hopSpec: true }),
+          // 'ceil' key (not 'plasterPlain'): ceilings carry ceil: true so
+          // materials can demote them to irradiance (?ceilspec) without
+          // dragging the doorjambs along via first-call-wins opts sharing
+          geo: getBuilder(cells[id], 'ceil', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, ceil: true, hopSpec: true }),
           pts: cells[id].fp.map(q => [q[0], cells[id].ceilY, q[1]]),
         })), [0, -1, 0], uvf);
       }
@@ -770,7 +773,7 @@ export function buildLevel() {
     const fb = getBuilder(cell, 'floor',
       { mapKey: cell.floor.key, roughFactor: cell.floor.roughFactor,
         specBoost: cell.floor.specBoost });
-    const cb = getBuilder(cell, 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true });
+    const cb = getBuilder(cell, 'ceil', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, ceil: true });
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
     const floorPts = cell.fp.map(p => [p[0], cell.floorY, p[1]]);
     if (!openPlan.has(cell.id)) {

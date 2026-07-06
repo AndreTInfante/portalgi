@@ -38,6 +38,12 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // (default), 2 = legacy zero-hop (?mattespec=2, seams at open-plan
   // cell cuts - perf A/B), 0 = flat irradiance-along-R (?mattespec=0)
   const matteSpec = sysOpts.matteSpec === undefined ? 1 : +sysOpts.matteSpec;
+  // ceilings demoted to HARD diffuse by default (the 90Hz budget call:
+  // least noticeable satin surface, biggest fill after walls; the spec
+  // block compiles out entirely - an irradiance-tap demotion still
+  // seamed at cuts because irradiance tiles are per-cell). ?ceilspec=1
+  // restores the satin ceiling PCCM for the A/B.
+  const ceilSpec = sysOpts.ceilSpec === true;
   let propVert = null;
   const vertFor = m => (m === 4 && pvd)
     ? (propVert || (propVert = sceneVertProp(numCells, USE_HULL_UBO, fp16, occDynCap)))
@@ -49,9 +55,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // debug variants compile in the traversal step accumulator + debug views;
   // shipping programs carry none of that register pressure
   let debugCompiled = false;
-  const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false, hopSpec = false) => {
-    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '') + (hopSpec ? 'H' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd, matteSpec, hopSpec));
+  const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false, hopSpec = false, noSpec = false) => {
+    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '') + (hopSpec ? 'H' : '') + (noSpec ? 'I' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd, matteSpec, hopSpec, noSpec));
   };
 
   let hullGroup = null;
@@ -183,10 +189,12 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     // walls/ceilings) compile the one-hop matte program; the rest keep
     // the cheap zero-hop variant (tiering - the 90Hz recovery)
     const hopSpec = !!opts.hopSpec;
+    // ceilings compile with no specular term at all unless ?ceilspec=1
+    const noSpec = !!opts.ceil && !!opts.matte && !ceilSpec;
     const mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: vertFor(mode),
-      fragmentShader: fragFor(mode, debugCompiled, !!opts.matte, hop1, hopSpec),
+      fragmentShader: fragFor(mode, debugCompiled, !!opts.matte, hop1, hopSpec, noSpec),
       // FrontSide: winding is normal-oriented at emit time; DoubleSide was a
       // crutch that doubled binning/hidden-surface work on tiled GPUs (Tier 1)
       side: THREE.FrontSide,
@@ -220,6 +228,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     mat.userData.matte = !!opts.matte;
     mat.userData.hop1 = hop1;
     mat.userData.hopSpec = hopSpec;
+    mat.userData.noSpec = noSpec;
     mat.userData.spec0 = mat.uniforms.uSpecBoost.value; // setSpecular restore
     // statics boot with the pre-lightmap fallback compiled in; setUseLightmap
     // strips it (and its register pressure) once the lightmap exists
@@ -254,7 +263,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     if (on === debugCompiled) return;
     debugCompiled = on;
     for (const m of allMaterials) {
-      m.fragmentShader = fragFor(m.userData.mode, on, m.userData.matte, m.userData.hop1, m.userData.hopSpec);
+      m.fragmentShader = fragFor(m.userData.mode, on, m.userData.matte, m.userData.hop1, m.userData.hopSpec, m.userData.noSpec);
       m.needsUpdate = true;
     }
   }
@@ -323,7 +332,7 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
         roughFactor: rf,
         metalFactor: o.metalFactor !== undefined ? o.metalFactor : (o.texMap ? 1 : 0),
         specBoost: o.specBoost, tint: o.tint, emissive: o.emissive,
-        matte, hopSpec: o.hopSpec,
+        matte, hopSpec: o.hopSpec, ceil: o.ceil,
       }));
       mesh.name = `${cell.name}:${key}`;
       mesh.userData.cell = cell.id; // portal-visibility culling key

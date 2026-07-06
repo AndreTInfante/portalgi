@@ -171,6 +171,10 @@ async function boot() {
       // 3 = one-hop on ALL matte (tiering perf A/B), 2 = zero-hop
       // everywhere (seams at cuts), 0 = flat irradiance
       matteSpec: params.has('mattespec') ? (parseInt(params.get('mattespec')) || 0) : 1,
+      // ?ceilspec=1 restores satin PCCM ceilings (default: ceilings are
+      // HARD diffuse, spec block compiled out - the 90Hz budget trade,
+      // walls keep satin; irradiance-tap demotion still seamed at cuts)
+      ceilSpec: params.get('ceilspec') === '1',
       // ?occdynprop=999 restores uncapped prop-program dyn casters (A/B)
       occDynProp: params.has('occdynprop') ? parseInt(params.get('occdynprop')) : 4 });
   const useLightmap = BAKE || params.get('lm') !== '0';

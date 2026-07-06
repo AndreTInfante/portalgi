@@ -1025,7 +1025,7 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = 1, hopSpec = false) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = 1, hopSpec = false, noSpec = false) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   const PVD = pvd && PROP; // prop diffuse arrives from the vertex shader
   // matte + very-rough pixels: ?mattespec 1 = TIERED one-hop PCCM at
@@ -1037,7 +1037,11 @@ export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte 
   // The rough>0.65 early-out in floor/prop programs is always zero-hop
   // (blur hides cut seams there, and those programs sit on the
   // register-occupancy edge)
-  const MATTE_HOP = matte && (matteSpec === 3 || (matteSpec === 1 && hopSpec));
+  // noSpec (demoted ceilings): HARD diffuse - the whole specular block
+  // compiles out. (An irradiance-tap demotion was tried first and still
+  // seamed: the tap is direction-only but PER-CELL, and adjacent cells'
+  // irradiance tiles differ at a cut. No view-dependent term = no seam.)
+  const MATTE_HOP = matte && !noSpec && (matteSpec === 3 || (matteSpec === 1 && hopSpec));
   const ROUGH_SPEC = matteSpec
     ? (MATTE_HOP ? 'pccmSpec(uCell, P, Ng, R, rough)' : 'pccmSpec(uCell, P, R, rough)')
     : 'sampleIrr(uCell, R)';
@@ -1091,7 +1095,7 @@ ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
 ${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
-${(STATIC || PROP) && matteSpec ? (MATTE_HOP ? hop1Glsl(true) : PCCM_GLSL) : ''}
+${(STATIC || PROP) && matteSpec && !noSpec ? (MATTE_HOP ? hop1Glsl(true) : PCCM_GLSL) : ''}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}
@@ -1237,7 +1241,9 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
 `) : ''}
   MP vec3 F0 = mix(vec3(0.04), albedo, metal);
   color = albedo * (1.0 - metal) * ao * diffuseL + uEmissive;
-  ${STATIC ? 'if (uBake < 0.5) {' : '{'}  // split-sum: prefiltered radiance - env BRDF
+  ${noSpec ? (dbg ? /* glsl */`
+  if (uDebugMode == 6) { fragOut = vec4(0.0, 0.0, 0.0, 1.0); return; } // hard diffuse: no spec term
+` : '') : /* glsl */`${STATIC ? 'if (uBake < 0.5) {' : '{'}  // split-sum: prefiltered radiance - env BRDF
     vec3 R = reflect(-V, N);
     // very rough surfaces (most wall/ceiling area): the traversal's max-lod
     // result is indistinguishable from one cosine-convolved irradiance tap
@@ -1253,7 +1259,7 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
       return;
     }` : ''}
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
-  }
+  }`}
 `}
 ${STATIC ? /* glsl */`
   if (uBake > 0.5) {                     // HDR capture pass: linear, no tonemap

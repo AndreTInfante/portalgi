@@ -504,6 +504,11 @@ void main() {
     let done = 0;
     overlay.classList.remove('hidden');
     overlayMsg.textContent = 'Baking hull cubemaps...';
+    // fence-paced like relight(): at most one tick's worth of capture work
+    // in flight (the old BAKE-mode budget of Infinity issued EVERY capture
+    // in one JS turn - same queue-flood hazard, smaller draws)
+    const gl = renderer.getContext();
+    let fence = null;
     return new Promise(resolve => {
       const tick = () => {
         // a dead GL context no-ops every call: the generator would sprint
@@ -514,8 +519,15 @@ void main() {
           overlaySub.textContent = 'lower lmrays / lmps and reload the page';
           return;
         }
-        const budget = (SHOT || BAKE) ? Infinity : 6;
-        for (let i = 0; i < budget; i++) {
+        if (fence) {
+          if (gl.clientWaitSync(fence, 0, 0) === gl.TIMEOUT_EXPIRED) {
+            requestAnimationFrame(tick);
+            return;
+          }
+          gl.deleteSync(fence);
+          fence = null;
+        }
+        for (let i = 0; i < 6; i++) {
           if (steps.next().done) {
             state.baking = false;
             overlay.classList.add('hidden');
@@ -524,6 +536,8 @@ void main() {
           }
           done++;
         }
+        fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush();
         overlaySub.textContent = `${done} / ${total}`;
         requestAnimationFrame(tick);
       };
@@ -540,12 +554,29 @@ void main() {
     const steps = lightmapper.bakeSteps();
     let done = 0;
     const total = lightmapper.totalSteps();
+    // GPU FENCE PACING: the bake never touches the canvas, so nothing
+    // backpressures rAF - the driver was ENQUEUEING strips at 60/s while
+    // the GPU executed ~2/s. Minutes of queued work froze the whole
+    // desktop's graphics and Chrome's GPU watchdog killed the process
+    // (the master-bake context losses; progress was counting submissions,
+    // not completions). One in-flight strip at a time: browser stays
+    // interactive, the watchdog stays happy, progress becomes real.
+    const gl = renderer.getContext();
+    let fence = null;
     return new Promise(resolve => {
       const tick = () => {
         if (glLost) { // see rebake(): dead context = black "success"
           overlayMsg.textContent = 'GPU CONTEXT LOST - bake aborted';
           overlaySub.textContent = 'lower lmrays / lmps and reload the page';
           return;
+        }
+        if (fence) {
+          if (gl.clientWaitSync(fence, 0, 0) === gl.TIMEOUT_EXPIRED) {
+            requestAnimationFrame(tick); // GPU still chewing the last strip
+            return;
+          }
+          gl.deleteSync(fence);
+          fence = null;
         }
         if (steps.next().done) {
           matsys.globals.uLightmap.value = lightmapper.texture;
@@ -554,6 +585,8 @@ void main() {
           resolve(rebake());
           return;
         }
+        fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush(); // fences signal only once submitted
         overlaySub.textContent = `${++done} / ${total}`;
         requestAnimationFrame(tick);
       };

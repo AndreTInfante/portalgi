@@ -216,10 +216,18 @@ export class Lightmapper {
   constructor(renderer, level, textures, opts = {}) {
     this.renderer = renderer;
     this.level = level;
-    this.rays = opts.rays || 64;
+    // TDR guard: rays is a compile-time loop bound INSIDE one strip draw -
+    // past ~512/texel a strip takes multiple seconds and Windows' 2s GPU
+    // watchdog kills the GL context (browser crash on lmrays=3840, Andre
+    // 2026-07-05). Excess rays convert into extra INDEPENDENT final passes:
+    // same total rays and variance reduction, MORE AA jitters, and every
+    // draw stays watchdog-sized.
+    const wantRays = opts.rays || 64;
+    this.rays = Math.min(wantRays, 512);
     this.iterations = opts.iterations || 3;
     this.panelSamples = opts.panelSamples || 2;
-    this.finalPasses = opts.finalPasses || 1; // independent final gathers, averaged
+    this.finalPasses = Math.max(1, // independent final gathers, averaged
+      Math.round((opts.finalPasses || 1) * (wantRays / this.rays)));
     const [W, H] = level.lightmapSize;
     this.size = [W, H];
 

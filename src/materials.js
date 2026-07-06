@@ -295,7 +295,10 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       const o = b.opts || {};
       const set = o.texMap ? { map: o.texMap, normalMap: o.texNrm, ormMap: o.texOrm }
         : o.paintingIndex !== undefined
-          ? { map: paintingTexs[o.paintingIndex] } // varnished canvas: flat maps, glossy factor
+          // varnished canvas: glossy factor + brushstroke relief derived
+          // from the painting's own luminance (textures.js)
+          ? { map: paintingTexs[o.paintingIndex],
+              normalMap: paintingTexs[o.paintingIndex].userData.nrmTex }
           : textures[o.mapKey || 'white'];
       const rf = o.paintingIndex !== undefined ? 0.4 : (o.roughFactor !== undefined ? o.roughFactor : 1);
       // MATTE eligibility: the set's guaranteed-minimum roughness (tracked on

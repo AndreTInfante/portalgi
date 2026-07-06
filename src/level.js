@@ -752,7 +752,7 @@ export function buildLevel() {
       const ceilIds = solid.filter(id => !cells[id].sky);
       if (ceilIds.length) {
         emitSharedChart(ceilIds.map(id => ({
-          geo: getBuilder(cells[id], 'plasterPlain', { mapKey: 'plasterPlain' }),
+          geo: getBuilder(cells[id], 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8 }),
           pts: cells[id].fp.map(q => [q[0], cells[id].ceilY, q[1]]),
         })), [0, -1, 0], uvf);
       }
@@ -765,7 +765,7 @@ export function buildLevel() {
     const fb = getBuilder(cell, 'floor',
       { mapKey: cell.floor.key, roughFactor: cell.floor.roughFactor,
         specBoost: cell.floor.specBoost });
-    const cb = getBuilder(cell, 'plasterPlain', { mapKey: 'plasterPlain' });
+    const cb = getBuilder(cell, 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8 });
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
     const floorPts = cell.fp.map(p => [p[0], cell.floorY, p[1]]);
     if (!openPlan.has(cell.id)) {
@@ -787,9 +787,13 @@ export function buildLevel() {
     for (const edge of cell.edges) {
       if (edge.open) continue;
       // concrete walls use the wall-styled set (form-tie panels); the plain
-      // 'concrete' key stays on floors where panel seams would look wrong
+      // 'concrete' key stays on floors where panel seams would look wrong.
+      // specBoost: walls run zero-hop PCCM now (pccmSpec) - dielectric F0
+      // at plaster roughness reads as almost nothing, so the same
+      // clear-coat cheat the floors use juices the sheen (Andre 2026-07-06)
       const wb = getBuilder(cell, edge.mat, {
-        mapKey: edge.mat === 'concrete' ? 'concreteWall' : edge.mat });
+        mapKey: edge.mat === 'concrete' ? 'concreteWall' : edge.mat,
+        specBoost: 1.8 });
       const len = Math.hypot(edge.b[0] - edge.a[0], edge.b[1] - edge.a[1]);
       const h = cell.ceilY - cell.floorY;
       const u = [(edge.b[0] - edge.a[0]) / len, (edge.b[1] - edge.a[1]) / len];
@@ -835,7 +839,7 @@ export function buildLevel() {
     });
     // plasterPlain: the plaster set's baked-in baseboard stripe (v < 0.045)
     // must not paint across jamb reveals (the "footers in door frames" bug)
-    const jb = getBuilder(sa.cell, 'plasterPlain', { mapKey: 'plasterPlain' });
+    const jb = getBuilder(sa.cell, 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8 });
     const fb = getBuilder(sa.cell, 'floor');
     const mid = A[0].clone().add(A[2]).add(Bp[0]).add(Bp[2]).multiplyScalar(0.25);
     const quadToward = (builder, p0, p1, p2, p3) => {

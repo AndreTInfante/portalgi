@@ -380,13 +380,62 @@ export const PAINTINGS = [
   { file: 'grande_jatte.jpg',      aspect: 1.50, h: 1.20 },
 ];
 
+// brushstroke relief derived from the painting ITSELF: luminance as height,
+// Sobel gradients to tangent-space normals. Matches the art by construction
+// (paint edges become ridges) where the wall's plaster normals would read
+// as wall texture on canvas. Runs in a 2D canvas when the image lands; the
+// CanvasTexture starts flat so materials can bind it up front.
+function fillPaintingNormal(nt, img, strength = 2.2) {
+  const W = 384;
+  const H = Math.max(64, Math.round(W * img.height / img.width));
+  const c = nt.image;
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, W, H);
+  const src = ctx.getImageData(0, 0, W, H).data;
+  const lum = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    lum[i] = (src[i * 4] * 0.299 + src[i * 4 + 1] * 0.587 + src[i * 4 + 2] * 0.114) / 255;
+  }
+  const out = ctx.createImageData(W, H);
+  const L = (x, y) => lum[Math.min(H - 1, Math.max(0, y)) * W + Math.min(W - 1, Math.max(0, x))];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const gx = (L(x + 1, y - 1) + 2 * L(x + 1, y) + L(x + 1, y + 1)
+                - L(x - 1, y - 1) - 2 * L(x - 1, y) - L(x - 1, y + 1)) / 8;
+      const gy = (L(x - 1, y + 1) + 2 * L(x, y + 1) + L(x + 1, y + 1)
+                - L(x - 1, y - 1) - 2 * L(x, y - 1) - L(x + 1, y - 1)) / 8;
+      // v runs UP in uv space while image rows run down: +gy in image
+      // coords is the correct tangent-space +y slope
+      let nx = -gx * strength, ny = gy * strength, nz = 1;
+      const il = 1 / Math.hypot(nx, ny, nz);
+      const o = (y * W + x) * 4;
+      out.data[o] = (nx * il * 0.5 + 0.5) * 255;
+      out.data[o + 1] = (ny * il * 0.5 + 0.5) * 255;
+      out.data[o + 2] = (nz * il * 0.5 + 0.5) * 255;
+      out.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(out, 0, 0);
+  nt.needsUpdate = true;
+}
+
 export function loadPaintingTextures(manager) {
   const loader = new THREE.TextureLoader(manager);
   return PAINTINGS.map(p => {
-    const tex = loader.load('./assets/paintings/' + p.file);
+    const nc = document.createElement('canvas');
+    nc.width = nc.height = 1; // flat until the image decodes
+    const nctx = nc.getContext('2d');
+    nctx.fillStyle = 'rgb(128,128,255)'; // a BLANK canvas decodes to
+    nctx.fillRect(0, 0, 1, 1);           // garbage normals, not flat ones
+    const nrm = new THREE.CanvasTexture(nc);
+    nrm.wrapS = nrm.wrapT = THREE.ClampToEdgeWrapping;
+    const tex = loader.load('./assets/paintings/' + p.file,
+      t => fillPaintingNormal(nrm, t.image));
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.userData.nrmTex = nrm; // buildStaticMeshes binds it as the normal map
     return tex;
   });
 }

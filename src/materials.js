@@ -34,6 +34,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // per-pixel these halved the framerate with a held prop at the face.
   // ?pvd=0 restores per-pixel evaluation for A/B.
   const pvd = sysOpts.pvd !== false;
+  // matte/very-rough pixels sample zero-hop PCCM instead of flat
+  // irradiance-along-R (?mattespec=0 restores the old walls)
+  const matteSpec = sysOpts.matteSpec !== false;
   let propVert = null;
   const vertFor = m => (m === 4 && pvd)
     ? (propVert || (propVert = sceneVertProp(numCells, USE_HULL_UBO, fp16, occDynCap)))
@@ -47,7 +50,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   let debugCompiled = false;
   const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false) => {
     const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd));
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd, matteSpec));
   };
 
   let hullGroup = null;

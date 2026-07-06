@@ -166,6 +166,8 @@ async function boot() {
       hop1: params.get('hop1') !== '0', warp,
       // ?pvd=0: prop diffuse (probes/AO/shadows) back to per-pixel (A/B)
       pvd: params.get('pvd') !== '0',
+      // ?mattespec=0: walls back to flat irradiance-along-R (A/B)
+      matteSpec: params.get('mattespec') !== '0',
       // ?occdynprop=999 restores uncapped prop-program dyn casters (A/B)
       occDynProp: params.has('occdynprop') ? parseInt(params.get('occdynprop')) : 4 });
   const useLightmap = BAKE || params.get('lm') !== '0';
@@ -321,11 +323,15 @@ void main() {
         ], cellId, walnutAvg, walnutMat(cellId));
       } else {
         // pedestal: a single stretched vertical capsule (top ends at h so
-        // props resting on it start outside). Radius x1.1 (Andre 2026-07-04:
-        // the tight fit read too thin in glossy reflections)
-        const r = cc.rx * 1.1;
+        // props resting on it start outside). Radius x1.2 (Andre 2026-07-04:
+        // x1.1, tight fit read too thin in reflections; +10% 2026-07-06).
+        // Bottom sphere center sunk BELOW the floor: the hemispherical cap
+        // used to taper right at ground level (~0.44r wide at y=0), leaving
+        // the contact shadow/AO detached from the base (peter panning) -
+        // clipped in, the full-width cross-section lines up with the base.
+        const r = cc.rx * 1.2;
         occluders.addPiece([
-          [[cc.x, r * 0.9, cc.z], [cc.x, cc.h - r, cc.z], r],
+          [[cc.x, -0.08, cc.z], [cc.x, cc.h - r, cc.z], r],
         ], cellId, walnutAvg, walnutMat(cellId));
       }
     }

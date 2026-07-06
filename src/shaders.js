@@ -642,6 +642,38 @@ MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
 }
 `;
 
+// ---------------------------------------------------------------- zero-hop PCCM
+// Matte surfaces (walls) used to tap cosine-convolved irradiance along R:
+// maximally blurred AND direction-only (no parallax) - they read flat
+// (Andre). Plain parallax-corrected sampling of the local cell at the
+// GGX-prefiltered mip is barely more expensive (one hull exit + one
+// trilinear pair, no portal scan) and gives the broad sheen + light pools
+// that move correctly with the viewer. Walls can't resolve a clear image,
+// so skipping portals at max blur loses nothing visible.
+const PCCM_GLSL = /* glsl */`
+MP vec3 pccmSpec(int cell, vec3 pos, vec3 dir, float rough) {
+  vec4 h0 = hfetch(cell, 0);
+  int pc = int(h0.w);
+  for (int j = 0; j < 12; j++) {            // nudge start point inside the hull
+    if (j >= pc) break;
+    vec4 pl = hfetch(cell, ${PLANES_OFF} + j);
+    float d = dot(pl.xyz, pos) + pl.w;
+    if (d < 0.01) pos += pl.xyz * (0.01 - d);
+  }
+  float bestT = 1e8;
+  for (int j = 0; j < 12; j++) {
+    if (j >= pc) break;
+    vec4 pl = hfetch(cell, ${PLANES_OFF} + j);
+    float dn = dot(pl.xyz, dir);
+    if (dn < -1e-5) bestT = min(bestT, -(dot(pl.xyz, pos) + pl.w) / dn);
+  }
+  if (bestT > 1e7) bestT = 0.0;
+  vec3 hitP = pos + dir * bestT;
+  float effR = min(1.0, rough * (1.0 + uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5)));
+  return sampleSpec(cell, hitP - h0.xyz, roughToLod(effR));
+}
+`;
+
 // ---------------------------------------------------------------- warp fields
 // Everything beyond the first portal crossing collapses to a baked field tap
 // (warpfield.js): (t_beyond, terminal_id, certainty) per directed portal over
@@ -966,9 +998,12 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = true) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   const PVD = pvd && PROP; // prop diffuse arrives from the vertex shader
+  // matte + very-rough pixels: zero-hop PCCM instead of the flat
+  // irradiance-along-R tap (?mattespec=0 restores the old look)
+  const ROUGH_SPEC = matteSpec ? 'pccmSpec(uCell, P, R, rough)' : 'sampleIrr(uCell, R)';
   // warp fields replace the recursive walk in STATIC programs only: props/
   // glass/pane are near-mirror small-fill and keep the exact loop; debug
   // variants keep it too so the step heatmap stays a ground-truth view
@@ -1019,6 +1054,7 @@ ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
 ${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
+${(STATIC || PROP) && matteSpec ? PCCM_GLSL : ''}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}
@@ -1169,8 +1205,8 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
     // very rough surfaces (most wall/ceiling area): the traversal's max-lod
     // result is indistinguishable from one cosine-convolved irradiance tap
     // along R - skip the whole hull walk (Tier 1)
-    MP vec3 pre = ${matte ? 'sampleIrr(uCell, R)'
-      : `(rough > 0.65) ? sampleIrr(uCell, R)
+    MP vec3 pre = ${matte ? ROUGH_SPEC
+      : `(rough > 0.65) ? ${ROUGH_SPEC}
                               : ${WARP ? 'traceSpecW(uCell, P, R, rough, dynFade)'
                                 : HOP1 ? 'traceSpec1(uCell, P, R, rough, dynFade)'
                                        : `traceSpec(uCell, P, R, rough, 8, dynFade${dbg ? ', steps' : ''})`}`};

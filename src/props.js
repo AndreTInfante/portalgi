@@ -178,9 +178,27 @@ export class Props {
     this.collide(p);
     // held props respect the furniture/statue colliders too - the kinematic
     // body ignores cannon statics, and the gravity gun could shove props
-    // through benches; same circle pushout the player uses
+    // through benches
     const pos = p.mesh.position;
     for (const c of this.level.colliders) {
+      // statues carry their true convex-hull planes (physics.js): sphere-vs-
+      // convex pushout along the least-penetrated face. The old center
+      // cylinder blocked approach mid-statue and let held props clip clean
+      // through the extremities the cylinder never covered.
+      if (c.hullPlanes) {
+        let best = -1e9, bn = null;
+        for (const pl of c.hullPlanes) {
+          const dd = pl.x * pos.x + pl.y * pos.y + pl.z * pos.z + pl.d;
+          if (dd > best) { best = dd; bn = pl; }
+        }
+        const r = p.radius * 0.7;
+        if (bn && best < r) {
+          pos.x += bn.x * (r - best);
+          pos.y += bn.y * (r - best);
+          pos.z += bn.z * (r - best);
+        }
+        continue;
+      }
       if (c.h !== undefined && pos.y - p.rFloor > c.h) continue; // clear above it
       const dx = pos.x - c.x, dz = pos.z - c.z;
       const min = (c.rx !== undefined ? Math.max(c.rx, c.rz) : c.r) + p.radius * 0.7;

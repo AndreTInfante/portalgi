@@ -29,19 +29,25 @@ export function convexFromPoints(pts, budget = 28) {
   try {
     let hull = new ConvexHull().setFromPoints(pts);
     let grid = 0.04;
+    // cloud centroid: sparsification keeps each cell's FURTHEST point from
+    // it - keep-first dropped support points and shrank extremities (the
+    // whale's tail pulled in ~30cm at a 50-vert budget)
+    const ctr = new THREE.Vector3();
+    for (const p of pts) ctr.add(p);
+    ctr.divideScalar(pts.length);
     while (hullVertCount(hull) > budget && grid < 0.3) {
       grid *= 1.6;
-      const s2 = new Set();
-      const sparse = [];
+      const cells = new Map();
       for (const p of pts) {
         const k = ((Math.round(p.x / grid) + 512) << 20) |
                   ((Math.round(p.y / grid) + 512) << 10) |
                    (Math.round(p.z / grid) + 512);
-        if (s2.has(k)) continue;
-        s2.add(k);
-        sparse.push(p);
+        const prev = cells.get(k);
+        if (!prev || p.distanceToSquared(ctr) > prev.distanceToSquared(ctr)) {
+          cells.set(k, p);
+        }
       }
-      hull = new ConvexHull().setFromPoints(sparse);
+      hull = new ConvexHull().setFromPoints([...cells.values()]);
     }
     const idOf = new Map();
     const verts = [];
@@ -162,6 +168,18 @@ export class PhysicsWorld {
           const body = new CANNON.Body({ type: CANNON.Body.STATIC });
           body.addShape(hull.shape, hull.offset); // offset = world centroid
           this.world.addBody(body);
+          // world-space face planes for the HELD-prop carry pushout: held
+          // props are KINEMATIC (cannon ignores statics for them) and used
+          // the legacy center cylinder - blocked mid-statue, clipped clean
+          // through the whale's tail (Andre, via the collision viewer)
+          cc.hullPlanes = hull.shape.faces.map((f, i) => {
+            const n = hull.shape.faceNormals[i];
+            const v = hull.shape.vertices[f[0]];
+            return {
+              x: n.x, y: n.y, z: n.z,
+              d: -(n.x * (v.x + hull.offset.x) + n.y * (v.y + hull.offset.y) + n.z * (v.z + hull.offset.z)),
+            };
+          });
           continue;
         }
       }

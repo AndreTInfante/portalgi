@@ -85,8 +85,14 @@
   // surface console errors on the page (headless screenshots can't see devtools)
   const rawWarn = console.warn.bind(console);
   console.warn = (...a) => {
-    document.getElementById('err').textContent +=
-      'warn: ' + a.map(x => String(x && x.message || x)).join(' ').slice(0, 500) + '\n';
+    const msg = a.map(x => String(x && x.message || x)).join(' ');
+    // driver shader-compile WARNINGS (ANGLE/D3D X4000 "potentially
+    // uninitialized" false positives on compiler temps, X3595 gradients)
+    // stay in the devtools console but not on the demo overlay - programs
+    // that actually FAIL arrive via console.error and always show
+    if (!/Program Info Log:[^]*warning X\d/.test(msg)) {
+      document.getElementById('err').textContent += 'warn: ' + msg.slice(0, 500) + '\n';
+    }
     rawWarn(...a);
   };
   const rawErr = console.error.bind(console);

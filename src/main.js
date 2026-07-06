@@ -495,12 +495,12 @@ void main() {
   applyDynBudget();
   renderer.xr.addEventListener('sessionstart', applyDynBudget);
   renderer.xr.addEventListener('sessionend', applyDynBudget);
-  // eye-buffer resolution floor: 0.8 (Andre, to lock 90) = ~36% fewer eye
-  // pixels than native for near-invisible sharpness loss in VR; adaptive
-  // foveation reduces the periphery further on top of this base scale.
+  // eye-buffer scale 0.9: shipping at locked 72Hz (Andre 2026-07-06) instead
+  // of 90 - 90 needed ~70% res to hold the last hot view, too soft. At 72 the
+  // GPU has headroom for 0.9 (near-native). Foveation still trims periphery.
   // Applies at session START - re-enter VR after changing the GUI slider.
   renderer.xr.setFramebufferScaleFactor(
-    params.has('fbscale') ? parseFloat(params.get('fbscale')) : 0.8);
+    params.has('fbscale') ? parseFloat(params.get('fbscale')) : 0.9);
   window.__setFbScale = v => renderer.xr.setFramebufferScaleFactor(v);
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
@@ -853,9 +853,10 @@ void main() {
     };
   };
   // in-VR frame-rate cap toggle (A/X button on either controller)
-  // ship at 90 (Andre 2026-07-05: locked at 90 with dynamic resolution -
-  // show it off); A/X still toggles down to 72
-  const rateState = { target: 90, ready: true };
+  // ship at LOCKED 72Hz (Andre 2026-07-06: 90 needed ~70% res to hold the
+  // last hot view = an unacceptable sharpness hit; 72 is rock-solid at 0.9
+  // res). A/X still toggles up to 90 for anyone who wants to try it.
+  const rateState = { target: 72, ready: true };
   const rateCanvas = document.createElement('canvas');
   rateCanvas.width = 128; rateCanvas.height = 64;
   const rateTex = new THREE.CanvasTexture(rateCanvas);

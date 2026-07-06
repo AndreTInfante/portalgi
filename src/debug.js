@@ -150,7 +150,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   if (physWires) f2.add(physWires.group, 'visible').name('show collision shapes');
   if (culler) f2.add(culler, 'enabled').name('portal culling');
   if (typeof window !== 'undefined' && window.__setFbScale) {
-    f2.add({ fb: 0.8 }, 'fb', 0.6, 1.2, 0.05).name('eye buffer scale (re-enter VR)')
+    f2.add({ fb: 0.9 }, 'fb', 0.6, 1.2, 0.05).name('eye buffer scale (re-enter VR)')
       .onChange(v => window.__setFbScale(v));
   }
   if (onStaticImposters) f2.add({ si: true }, 'si').name('statues via proxies (rebakes)').onChange(onStaticImposters);

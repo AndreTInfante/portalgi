@@ -142,7 +142,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   f1.add(proxy, 'irrBlend', 0, 6, 0.05).name('irr blend (lm-off only)');
   const f2 = gui.addFolder('Display');
   f2.add(proxy, 'exposure', -5, 2, 0.1).name('exposure (EV)');
-  f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5 });
+  f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5, 'Specular only (8x)': 6 });
   f2.add(proxy, 'portals').name('show portals');
   if (physWires) f2.add(physWires.group, 'visible').name('show collision shapes');
   if (culler) f2.add(culler, 'enabled').name('portal culling');

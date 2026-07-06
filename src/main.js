@@ -192,6 +192,7 @@ async function boot() {
   if (params.has('rhops')) matsys.globals.uRoughHops.value = parseFloat(params.get('rhops'));
   if (params.has('occd')) matsys.globals.uOccDensity.value = parseFloat(params.get('occd'));
   if (params.has('occlod')) matsys.globals.uOccLod.value = parseFloat(params.get('occlod'));
+  if (params.has('distrough')) matsys.globals.uDistRough.value = parseFloat(params.get('distrough'));
   if (params.has('blend')) matsys.globals.uBlendOn.value = parseFloat(params.get('blend'));
   if (params.has('debug')) {
     matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
@@ -895,7 +896,7 @@ void main() {
     // big levers the technique is showing off), tuning lives one page down
     {
       const g = matsys.globals;
-      const viewNames = ['none', 'cell tint', 'heatmap', 'irradiance', 'white', 'lightmap'];
+      const viewNames = ['none', 'cell tint', 'heatmap', 'irradiance', 'white', 'lightmap', 'spec only'];
       const wrap = (v, n, d) => (v + d + n) % n;
       let savedSteps = 3;
       const mkToggle = (name, get, set) => ({
@@ -923,7 +924,7 @@ void main() {
         tuning: [
           { name: 'debug view', value: () => viewNames[g.uDebugMode.value],
             adjust: d => {
-              g.uDebugMode.value = wrap(g.uDebugMode.value, 6, d);
+              g.uDebugMode.value = wrap(g.uDebugMode.value, 7, d);
               matsys.setDebugCompiled(g.uDebugMode.value > 0); // rebuild hitch, expected
             } },
           mkToggle('lightmap', () => g.uUseLightmap.value > 0.5,

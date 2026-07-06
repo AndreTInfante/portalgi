@@ -672,8 +672,13 @@ MP vec3 pccmSpec(int cell, vec3 pos, vec3 dir, float rough) {
   }
   if (bestT > 1e7) bestT = 0.0;
   vec3 hitP = pos + dir * bestT;
-  float effR = min(1.0, rough * uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5));
-  return sampleSpec(cell, hitP - h0.xyz, roughToLod(effR));
+  // NO distance-roughness ratio here (unlike traceSpec*): at satin roughness
+  // the linear t/d cone model breaks down - walls reflect across the room
+  // (t ~ 2x capture distance) and pinned at the featureless 4px mip, while
+  // doorjambs reflecting content centimeters away (t ~ 0) sharpened to lod 0
+  // mirrors. Plain PCCM (mip from material roughness alone) keeps fixtures
+  // visible as broad parallax-correct blobs, which is the point of this path.
+  return sampleSpec(cell, hitP - h0.xyz, roughToLod(rough));
 }
 `;
 
@@ -1213,6 +1218,11 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
                               : ${WARP ? 'traceSpecW(uCell, P, R, rough, dynFade)'
                                 : HOP1 ? 'traceSpec1(uCell, P, R, rough, dynFade)'
                                        : `traceSpec(uCell, P, R, rough, 8, dynFade${dbg ? ', steps' : ''})`}`};
+    ${dbg ? /* glsl */`
+    if (uDebugMode == 6) { // SPECULAR ONLY, 8x: where does spec actually live
+      fragOut = vec4(pow(acesTonemap(pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost * uExposure * 8.0), vec3(1.0 / 2.2)), 1.0);
+      return;
+    }` : ''}
     color += pre * envBRDF(F0, rough, NoV) * ao * uSpecBoost;
   }
 `}

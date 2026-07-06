@@ -552,8 +552,24 @@ vec3 blendedIrr(int cell, vec3 P, vec3 N) {
 // Pixel-identical to the full walk at uMaxSteps=1 with uOccHops<=1 (the
 // configuration Andre judged in-headset); uMaxSteps=0 still = PCCM.
 // The occluder-hops and portal-hops GUI dials affect full-march programs only.
-const HOP1_GLSL = /* glsl */`
-MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) {
+// hop1Glsl(matte) emits the same straight-line walk for two callers:
+//   matte=false -> traceSpec1 (non-matte statics + props): distance-grown
+//     mip roughness + the local occluder segment. Byte-identical to the
+//     old HOP1_GLSL constant.
+//   matte=true  -> pccmSpec (matte walls/ceilings): mip from MATERIAL
+//     roughness alone (the t/d cone model collapses at satin roughness -
+//     it pinned walls at the featureless top mip and sharpened jambs to
+//     mirrors) and no occluder segment (satin blur hides prop blobs;
+//     keeps the biggest-fill programs light). The hop itself is what
+//     kills the virtual-portal seams on continuous walls/ceilings in
+//     open-plan rooms (L room, pillar hall): once walls sample
+//     structured mips, adjacent cells' parallax errors at the cut no
+//     longer agree - but rays that cross the cut FOLLOW it, so both
+//     sides of the boundary sample the same neighbor data, the exact
+//     mechanism that keeps the floors seamless. uMaxSteps=0 (the VR
+//     "portal rendering" toggle) still collapses it to zero-hop PCCM.
+const hop1Glsl = (matte) => /* glsl */`
+MP vec3 ${matte ? 'pccmSpec' : 'traceSpec1'}(int cell, vec3 pos, vec3 dir, float rough${matte ? '' : ', MP float dynFade'}) {
   vec4 h0 = hfetch(cell, 0);
   int pc = int(h0.w);
   for (int j = 0; j < 12; j++) {            // nudge start point inside the hull
@@ -575,19 +591,19 @@ MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   }
   if (bestPlane < 0) bestT = 0.0;
   vec3 hitP = pos + dir * bestT;
-  // t*rough/d angular-footprint growth (see traceSpec)
+${matte ? `  MP float lod = roughToLod(rough);      // material mip only, no t/d growth` : `  // t*rough/d angular-footprint growth (see traceSpec)
   float effR = min(1.0, rough * uDistRough * bestT / max(distance(hitP, h0.xyz), 0.5));
-  MP float lod = roughToLod(effR);
+  MP float lod = roughToLod(effR);`}
   MP vec3 acc = vec3(0.0);
   MP float w = 1.0;
-  if (uOccOn > 0.5 && uOccHops > 0.0) {     // local occluder segment (hop 0)
+${matte ? '' : `  if (uOccOn > 0.5 && uOccHops > 0.0) {     // local occluder segment (hop 0)
     MP vec3 ocol = vec3(0.0);
     MP float tr = occSegment(cell, pos, dir, bestT, rough, 0.0, dynFade, ocol);
     if (tr < 0.95) acc += uOccTint * ocol * sampleIrr(cell, -dir);
     w = tr;
     if (w < 0.005) return acc;
   }
-  int nextCell = -1;
+`}  int nextCell = -1;
   MP float blend = 0.0;
   if (uMaxSteps > 0 && bestPlane >= 0) {    // the one crossing
     vec4 h1 = hfetch(cell, 1);
@@ -608,7 +624,7 @@ MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
           if ((silMask & (1 << e)) != 0) blendD = min(blendD, d);
         }
         if (insideD > 0.0) {
-          float bw = uBlendBase + uBlendRough * effR * max(bestT, 0.3);
+          float bw = uBlendBase + uBlendRough * ${matte ? 'rough' : 'effR'} * max(bestT, 0.3);
           blend = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
           nextCell = int(ph.y);
           break;
@@ -638,21 +654,21 @@ MP vec3 traceSpec1(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   }
   if (t2 > 1e7) t2 = 0.0;
   vec3 hit2 = pos2 + dir * t2;
-  MP float lod2 = roughToLod(min(1.0,
+${matte ? '' : `  MP float lod2 = roughToLod(min(1.0,
     rough * uDistRough * (bestT + t2) / max(distance(hit2, g0.xyz), 0.5)));
-  acc += w * sampleSpec(nextCell, hit2 - g0.xyz, lod2);
+`}  acc += w * sampleSpec(nextCell, hit2 - g0.xyz, ${matte ? 'lod' : 'lod2'});
   return acc;
 }
 `;
+const HOP1_GLSL = hop1Glsl(false);
 
 // ---------------------------------------------------------------- zero-hop PCCM
-// Matte surfaces (walls) used to tap cosine-convolved irradiance along R:
-// maximally blurred AND direction-only (no parallax) - they read flat
-// (Andre). Plain parallax-corrected sampling of the local cell at the
-// GGX-prefiltered mip is barely more expensive (one hull exit + one
-// trilinear pair, no portal scan) and gives the broad sheen + light pools
-// that move correctly with the viewer. Walls can't resolve a clear image,
-// so skipping portals at max blur loses nothing visible.
+// LEGACY (?mattespec=2, kept for the perf A/B): the original zero-hop
+// matte path - one hull exit, no portal scan. Once walls sampled
+// structured mips it seamed at virtual-portal cuts on continuous
+// walls/ceilings (L room, pillar hall): adjacent cells' parallax errors
+// at the cut plane disagree, and with no hop nothing reconciles them.
+// The shipping matte path is hop1Glsl(true) above.
 const PCCM_GLSL = /* glsl */`
 MP vec3 pccmSpec(int cell, vec3 pos, vec3 dir, float rough) {
   vec4 h0 = hfetch(cell, 0);
@@ -1006,11 +1022,12 @@ void main() {
 // MP. On Adreno fp16 halves the register footprint of what it touches, and
 // occupancy is the measured structural ceiling; desktop GPUs ignore
 // mediump, so the A/B (?fp16=0) only means anything on-device.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = true) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = 1) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
   const PVD = pvd && PROP; // prop diffuse arrives from the vertex shader
-  // matte + very-rough pixels: zero-hop PCCM instead of the flat
-  // irradiance-along-R tap (?mattespec=0 restores the old look)
+  // matte + very-rough pixels: 1 = one-hop PCCM at material roughness
+  // (default; the hop kills virtual-portal seams on continuous walls),
+  // 2 = legacy zero-hop PCCM (perf A/B), 0 = flat irradiance-along-R
   const ROUGH_SPEC = matteSpec ? 'pccmSpec(uCell, P, R, rough)' : 'sampleIrr(uCell, R)';
   // warp fields replace the recursive walk in STATIC programs only: props/
   // glass/pane are near-mirror small-fill and keep the exact loop; debug
@@ -1062,7 +1079,7 @@ ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
 ${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
-${(STATIC || PROP) && matteSpec ? PCCM_GLSL : ''}
+${(STATIC || PROP) && matteSpec ? (matteSpec === 2 ? PCCM_GLSL : hop1Glsl(true)) : ''}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}

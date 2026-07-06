@@ -34,9 +34,10 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // per-pixel these halved the framerate with a held prop at the face.
   // ?pvd=0 restores per-pixel evaluation for A/B.
   const pvd = sysOpts.pvd !== false;
-  // matte/very-rough pixels sample zero-hop PCCM instead of flat
-  // irradiance-along-R (?mattespec=0 restores the old walls)
-  const matteSpec = sysOpts.matteSpec !== false;
+  // matte/very-rough pixels: 1 = one-hop PCCM at material roughness
+  // (default), 2 = legacy zero-hop (?mattespec=2, seams at open-plan
+  // cell cuts - perf A/B), 0 = flat irradiance-along-R (?mattespec=0)
+  const matteSpec = sysOpts.matteSpec === undefined ? 1 : +sysOpts.matteSpec;
   let propVert = null;
   const vertFor = m => (m === 4 && pvd)
     ? (propVert || (propVert = sceneVertProp(numCells, USE_HULL_UBO, fp16, occDynCap)))

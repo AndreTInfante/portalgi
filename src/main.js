@@ -166,8 +166,9 @@ async function boot() {
       hop1: params.get('hop1') !== '0', warp,
       // ?pvd=0: prop diffuse (probes/AO/shadows) back to per-pixel (A/B)
       pvd: params.get('pvd') !== '0',
-      // ?mattespec=0: walls back to flat irradiance-along-R (A/B)
-      matteSpec: params.get('mattespec') !== '0',
+      // ?mattespec: 1 = one-hop PCCM (default, seam-free at open-plan
+      // cuts), 2 = legacy zero-hop (perf A/B), 0 = flat irradiance
+      matteSpec: params.has('mattespec') ? (parseInt(params.get('mattespec')) || 0) : 1,
       // ?occdynprop=999 restores uncapped prop-program dyn casters (A/B)
       occDynProp: params.has('occdynprop') ? parseInt(params.get('occdynprop')) : 4 });
   const useLightmap = BAKE || params.get('lm') !== '0';

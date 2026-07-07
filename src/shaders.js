@@ -1004,8 +1004,16 @@ void main() {
 // fp16's 10-bit mantissa) never get MP. On Adreno fp16 halves the register
 // footprint of what it touches, and occupancy is the structural ceiling;
 // desktop GPUs ignore mediump. ?fp16=0 forces highp everywhere.
-export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = 1, hopSpec = false, noSpec = false) {
+export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = 1, hopSpec = false, noSpec = false, pccmOnly = false) {
   const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2;
+  // PROFILING variant (?bench): compile a fair single-step-IBL program. The
+  // reflective call site collapses to pccmSpec ALONE, so the compiler dead-
+  // strips traceSpec / traceSpec1 / occSegment - the recursive machinery no
+  // longer inflates register allocation or caps occupancy. This is the honest
+  // "optimized PCCM renderer" baseline: setting uMaxSteps=0 on the full-march
+  // program would run the loop zero times but keep its whole register/occupancy
+  // footprint, making PCCM read as expensive as the portal path.
+  const PCCM_ONLY = pccmOnly && !noSpec;
   const PVD = pvd && PROP; // prop diffuse arrives from the vertex shader
   // matte + very-rough pixels: ?mattespec 1 = TIERED one-hop PCCM at
   // material roughness (default: only materials tagged hopSpec compile
@@ -1019,7 +1027,7 @@ export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte 
   // compiles out. An irradiance-tap demotion still seams: the tap is
   // direction-only but PER-CELL, and adjacent cells' irradiance tiles differ
   // at a cut. No view-dependent term = no seam.
-  const MATTE_HOP = matte && !noSpec && (matteSpec === 3 || (matteSpec === 1 && hopSpec));
+  const MATTE_HOP = matte && !noSpec && !PCCM_ONLY && (matteSpec === 3 || (matteSpec === 1 && hopSpec));
   const ROUGH_SPEC = matteSpec
     ? (MATTE_HOP ? 'pccmSpec(uCell, P, Ng, R, rough)'
       : matte ? 'pccmSpecMatte(uCell, P, Ng, R, rough)'
@@ -1028,9 +1036,9 @@ export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte 
   // warp fields replace the recursive walk in STATIC programs only: props/
   // glass is near-mirror small-fill and keeps the exact loop; debug
   // variants keep it too so the step heatmap stays a ground-truth view
-  const WARP = !!warp && STATIC && !matte && !dbg;
+  const WARP = !!warp && STATIC && !matte && !dbg && !PCCM_ONLY;
   // one exact unrolled hop (floors + non-sharp props); debug keeps the loop
-  const HOP1 = hop1 && (STATIC || PROP) && !matte && !dbg && !WARP;
+  const HOP1 = hop1 && (STATIC || PROP) && !matte && !dbg && !WARP && !PCCM_ONLY;
   return /* glsl */`
 precision highp float;
 #define MP ${halfp ? 'mediump' : 'highp'}
@@ -1077,7 +1085,7 @@ ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
 ${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
-${(STATIC || PROP) && matteSpec && !noSpec ? (MATTE_HOP ? hop1Glsl(true) : (matte ? PCCM_MATTE_GLSL : PCCM_GLSL)) : ''}
+${((STATIC || PROP) && matteSpec && !noSpec) || PCCM_ONLY ? (MATTE_HOP ? hop1Glsl(true) : (matte ? PCCM_MATTE_GLSL : PCCM_GLSL)) : ''}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}
@@ -1127,16 +1135,19 @@ ${useUbo ? /* glsl */`
   MP float dynFade = 1.0 - smoothstep(uOccRange - 2.0, uOccRange, distance(P, cameraPosition));
 ` : 'MP float dynFade = 1.0;'}
   MP vec3 color;
-${GLASS ? /* glsl */`
+${GLASS ? (noSpec ? /* glsl */`
+  color = uTint * 0.05; // ?bench 'off' floor: glass reflection/refraction compiled out (V/NoV absent under noSpec)
+` : /* glsl */`
   // glass: chrome sampled the opposite way. The fresnel reflection is a
   // faint overlay over the dominant fake refraction: 1 hop is plenty for it
   vec3 R = reflect(-V, N);
   MP float F = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
-  MP vec3 refl = traceSpec(uCell, P, R, uRough, 1, dynFade${dbg ? ', steps' : ''});
+${PCCM_ONLY ? /* glsl */`  MP vec3 refl = pccmSpec(uCell, P, R, uRough);
+  MP vec3 thru = pccmSpec(uCell, P, -R, uRough + 0.03) * vec3(0.90, 0.97, 0.93);` : /* glsl */`  MP vec3 refl = traceSpec(uCell, P, R, uRough, 1, dynFade${dbg ? ', steps' : ''});
   ${dbg ? 'float s2;' : ''}
-  MP vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, dynFade${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
+  MP vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, dynFade${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);`}
   color = mix(thru, refl, F);
-` : /* glsl */`
+`) : /* glsl */`
   MP vec3 albedo = texture(uMap, vUv).rgb * uTint;
   ${dbg ? 'if (uDebugMode == 4) albedo = vec3(0.75);' : ''}
   MP vec3 orm = texture(uOrmMap, vUv).rgb;
@@ -1213,6 +1224,7 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
     // result is indistinguishable from one cosine-convolved irradiance tap
     // along R - skip the whole hull walk
     MP vec3 pre = ${matte ? ROUGH_SPEC
+      : PCCM_ONLY ? 'pccmSpec(uCell, P, R, rough)'
       : `(rough > 0.65) ? ${ROUGH_SPEC}
                               : ${WARP ? 'traceSpecW(uCell, P, R, rough, dynFade)'
                                 : HOP1 ? 'traceSpec1(uCell, P, R, rough, dynFade)'

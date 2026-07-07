@@ -58,6 +58,7 @@ export class PerfHarness {
     this.burn = 0;
     this.gpuMs = 0;               // rolling real GPU frame time (0 = no timer ext)
     this._gpu = null;             // { ext, gl, active, pending: [] }
+    this._raw = null;             // ?bench: raw per-frame ms array while collecting
     this.step = 20;               // sweep increment (burn units)
     this.maxLevel = 600;
     this.threshold = 5;           // % dropped frames = tipped over
@@ -161,7 +162,15 @@ export class PerfHarness {
     g.gl.endQuery(g.ext.TIME_ELAPSED_EXT);
     g.pending.push(g.active);
     g.active = null;
-    // harvest oldest finished query (results land a few frames later)
+    this.gpuHarvest();
+  }
+
+  // harvest oldest finished queries (results land a few frames later). Split
+  // from gpuEnd so the ?bench profiler can drain in-flight queries between
+  // poses without submitting new ones.
+  gpuHarvest() {
+    const g = this._gpu;
+    if (!g) return;
     while (g.pending.length) {
       const q = g.pending[0];
       if (!g.gl.getQueryParameter(q, g.gl.QUERY_RESULT_AVAILABLE)) break;
@@ -169,11 +178,18 @@ export class PerfHarness {
       if (!disjoint) {
         const ms = g.gl.getQueryParameter(q, g.gl.QUERY_RESULT) / 1e6;
         this.gpuMs = this.gpuMs ? this.gpuMs * 0.9 + ms * 0.1 : ms;
+        if (this._raw) this._raw.push(ms);
       }
       g.gl.deleteQuery(q);
       g.pending.shift();
     }
   }
+
+  // ?bench raw-sample API: median-of-N per pose, no EMA smoothing
+  hasGpuTimer() { return !!this._gpu; }
+  gpuPending() { return this._gpu ? this._gpu.pending.length : 0; }
+  collectStart() { this._raw = []; }
+  collectStop() { const r = this._raw || []; this._raw = null; return r; }
 
   medianMs() {
     if (this.deltas.length < 20) return 0;

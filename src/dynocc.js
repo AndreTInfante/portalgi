@@ -26,6 +26,8 @@ import * as THREE from 'three';
 
 const MAX_ENT = 16;   // entries per splat pass (statics run multiple passes)
 const MAX_CAPS = 64;  // vec4 pairs across the pass's entries
+const MAX_MOVED = 2 * MAX_ENT; // dirty-pass footprint spheres: each moved entry
+                               // contributes its OLD and NEW bound (up to 2/ent)
 
 const GBUF_VERT = /* glsl */`
 attribute vec2 lmuv;
@@ -126,13 +128,32 @@ uniform float uAO, uAOClamp, uShadow;
 uniform float uPenSoft; // penumbra width floor (m) ~ 1.5 layer texels: the
                         // quarter-res grid cannot represent a harder edge.
                         // Band-limit the SIGNAL: sub-texel shadows dim out.
+uniform int uNMoved;               // <0 = full recompute every texel; >=0 = a
+uniform vec4 uMoved[${MAX_MOVED}]; // DIRTY pass - (xyz, r^2) footprints of props
+                                   // that moved this frame; texels inside none
+                                   // of them keep last frame's value (discard).
+                                   // The atlas is packed by chart size, not
+                                   // space, so a world-space scissor is
+                                   // impossible - the dirty test is per texel.
 ${AO_BODY}
 void main() {
   ivec2 tx = ivec2(gl_FragCoord.xy);
   float base = texelFetch(uBase, tx, 0).r;
   vec4 pw = texelFetch(uPosG, tx, 0);
-  if (pw.a < 0.5) { oCol = vec4(base, base, base, 1.0); return; }
+  if (pw.a < 0.5) {
+    if (uNMoved >= 0) discard;      // dirty pass: preserve last frame's gutter
+    oCol = vec4(base, base, base, 1.0); return;
+  }
   vec3 P = pw.xyz;
+  if (uNMoved >= 0) {               // dirty pass: skip texels no mover touched
+    bool hit = false;
+    for (int mi = 0; mi < ${MAX_MOVED}; mi++) {
+      if (mi >= uNMoved) break;
+      vec3 md = uMoved[mi].xyz - P;
+      if (dot(md, md) < uMoved[mi].w) { hit = true; break; }
+    }
+    if (!hit) discard;             // unchanged since last frame - keep spareRT
+  }
   vec3 N = texelFetch(uNrmG, tx, 0).xyz;
   float aoc = 1.0;
   float shad = 1.0;
@@ -194,6 +215,11 @@ precision highp float;
 layout(location = 0) out vec4 oCol;
 uniform sampler2D uSrc;
 uniform sampler2D uPosG; // coverage mask
+// stays FULL even on a dirty frame: it is a bandwidth-bound copy/average (2
+// fetches + a write per covered texel), and a per-texel moved-set gate measured
+// as costing more ALU than the fetch+write it would skip. The dirty SPLAT above
+// is where the win is; the dilate reads the (mostly preserved) spareRT and
+// rewrites the whole layer so gutters stay correct.
 void main() {
   ivec2 tx = ivec2(gl_FragCoord.xy);
   if (texelFetch(uPosG, tx, 0).a > 0.5) {
@@ -278,6 +304,8 @@ export class DynOccLayer {
       uCapA: { value: Array.from({ length: MAX_CAPS }, () => new THREE.Vector4()) },
       uCapB: { value: Array.from({ length: MAX_CAPS }, () => new THREE.Vector4()) },
       uAO: { value: 0.8 }, uAOClamp: { value: 0.03 }, uShadow: { value: 0.85 },
+      uNMoved: { value: -1 }, // dirty pass (DYN_FRAG only; base/dilate ignore it)
+      uMoved: { value: Array.from({ length: MAX_MOVED }, () => new THREE.Vector4()) },
     });
     const mkMat = frag => new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -301,10 +329,23 @@ export class DynOccLayer {
     this.fsMesh.frustumCulled = false;
     this.fsScene = new THREE.Scene();
     this.fsScene.add(this.fsMesh);
-    // exact copy of last frame's dyn uniforms + dials: the splat only re-runs
-    // when a prop actually moved (sleeping physics = zero layer cost)
-    this._sig = new Float32Array(4 + MAX_ENT * 11 + MAX_CAPS * 7);
-    this._sigValid = false;
+    // last frame's packed state, for the per-entry move diff. A prop that
+    // didn't move reads byte-identical here and is skipped; a scene fully at
+    // rest matches on every entry and costs zero GPU (physics sleep = layer
+    // sleep). Bounds/dirs drive the moved-footprint set; capsules catch
+    // in-place rotation (bound barely moves, endpoints do); meta catches a
+    // cap-layout shift (-> full pass).
+    this._lastB = new Float32Array(MAX_ENT * 4);   // uEntB bound spheres
+    this._lastD = new Float32Array(MAX_ENT * 4);   // uEntD shadow dir + span
+    this._lastM = new Float32Array(MAX_ENT * 2);   // uEntM firstCap, capCount
+    this._lastCA = new Float32Array(MAX_CAPS * 4); // uCapA (a, r)
+    this._lastCB = new Float32Array(MAX_CAPS * 3); // uCapB (b)
+    this._moved = new Float32Array(MAX_MOVED * 4); // scratch: (xyz, r^2)
+    this._lastNEnt = -1;
+    this._lastDials = null;
+    this._sigValid = false;   // false -> next update is a full pass
+    this._forceFull = false;  // set after a base rebuild
+    this.dirtyEnabled = true; // A/B lever: false -> always a full pass
   }
 
   get texture() { return this.layerRT.texture; }
@@ -394,7 +435,7 @@ export class DynOccLayer {
       this.dilateMat.uniforms.uSrc.value = this.spareRT.texture;
       this._run(this.baseRT, this.dilateMat);
     });
-    this._sigValid = false; // dyn layer must rebuild over the new baseline
+    this._sigValid = false; this._forceFull = true; // full rebuild over the new baseline
     // seed the LAYER with the fresh baseline immediately: during ?bake=1 the
     // frame loop (state.baking) never runs update() before the cubemap
     // captures, and an unrendered layerRT reads all-zero - every static
@@ -405,42 +446,112 @@ export class DynOccLayer {
   // per frame with the DYNAMIC entries only (props): splat over the baseline,
   // dilate into the gutters. Entries past the uniform capacity are dropped
   // (16 entries / 64 capsules >> the prop count on every platform).
+  //
+  // Two render paths, chosen by a per-entry diff against last frame:
+  //   nothing changed        -> return (at-rest scene = zero GPU)
+  //   a few props moved       -> DIRTY pass: the splat recomputes only texels
+  //                             inside a moved prop's OLD or NEW footprint and
+  //                             discards the rest (spareRT persists, autoClear
+  //                             off); the whole level's untouched charts are
+  //                             skipped. The cheap dilate still runs full so
+  //                             gutters stay correct.
+  //   dials / count / layout  -> FULL pass (every texel), same as before.
   update(dynEntries, dials) {
     this._setDials(this.dynMat, dials);
     const end = this._fillEntries(this.dynMat, dynEntries, 0);
     if (end < dynEntries.length) {
       console.warn(`dynocc: ${dynEntries.length - end} dyn entries past capacity, dropped`);
     }
-    // change detection: exact compare of everything the splat reads, so a
-    // fully at-rest scene costs zero GPU (physics sleep = layer sleep)
-    const u = this.dynMat.uniforms, sig = this._sig;
+    const u = this.dynMat.uniforms;
     const ne = u.uNEnt.value;
-    let p = 0, same = this._sigValid;
-    const test = v => {
-      if (sig[p] !== v) { sig[p] = v; same = false; }
-      p++;
+    const B = u.uEntB.value, D = u.uEntD.value, M = u.uEntM.value;
+    const CA = u.uCapA.value, CB = u.uCapB.value;
+    const lB = this._lastB, lD = this._lastD, lM = this._lastM, lCA = this._lastCA, lCB = this._lastCB;
+
+    const dialsChanged = !this._lastDials ||
+      this._lastDials.ao !== dials.ao || this._lastDials.aoClamp !== dials.aoClamp ||
+      this._lastDials.shadow !== dials.shadow || this._lastDials.penSoft !== (dials.penSoft || 0);
+    // a full pass is forced by anything that can change EVERY texel or that
+    // breaks the slot<->caster correspondence the per-entry diff relies on
+    let full = !this.dirtyEnabled || !this._sigValid || this._forceFull ||
+      dialsChanged || ne !== this._lastNEnt;
+    if (!full) {
+      for (let e = 0; e < ne; e++) { // cap-layout shift -> slots no longer align
+        if (M[e].x !== lM[e * 2] || M[e].y !== lM[e * 2 + 1]) { full = true; break; }
+      }
+    }
+
+    // moved-footprint set (old + new bound of every entry whose packed data
+    // changed). Capsules are diffed too so an in-place rotation is caught.
+    let nMoved = 0, changed = false;
+    const moved = this._moved;
+    const pushSphere = (cx, cy, cz, br) => {
+      if (nMoved >= MAX_MOVED) { full = true; return; }
+      const r = br + 3.2; // AO reach + 3m shadow span (matches DYN_FRAG's reject)
+      const o = nMoved++ * 4;
+      moved[o] = cx; moved[o + 1] = cy; moved[o + 2] = cz; moved[o + 3] = r * r;
     };
-    test(ne); test(dials.ao); test(dials.aoClamp); test(dials.shadow);
-    test(dials.penSoft || 0);
-    let caps = 0;
+    if (!full) {
+      for (let e = 0; e < ne && !full; e++) {
+        const b = B[e], d = D[e], lb = e * 4;
+        let mv = b.x !== lB[lb] || b.y !== lB[lb + 1] || b.z !== lB[lb + 2] || b.w !== lB[lb + 3] ||
+                 d.x !== lD[lb] || d.y !== lD[lb + 1] || d.z !== lD[lb + 2] || d.w !== lD[lb + 3];
+        const first = M[e].x, cnt = M[e].y;
+        for (let c = first; c < first + cnt && !mv; c++) {
+          const A = CA[c], bc = CB[c], lc = c * 4, lc3 = c * 3;
+          mv = A.x !== lCA[lc] || A.y !== lCA[lc + 1] || A.z !== lCA[lc + 2] || A.w !== lCA[lc + 3] ||
+               bc.x !== lCB[lc3] || bc.y !== lCB[lc3 + 1] || bc.z !== lCB[lc3 + 2];
+        }
+        if (mv) {
+          changed = true;
+          pushSphere(lB[lb], lB[lb + 1], lB[lb + 2], lB[lb + 3]); // old footprint
+          pushSphere(b.x, b.y, b.z, b.w);                         // new footprint
+        }
+      }
+    }
+    if (!full && !changed) return; // nothing moved -> zero GPU
+    // when most props moved, the dirty test (nMoved = 2 footprint spheres per
+    // moved entry, checked at EVERY texel) costs more than a full pass's ne
+    // entry rejects, and the footprints cover most of the layer anyway - so a
+    // full pass is both cheaper and simpler. Guards against a dirty regression
+    // in the everything-in-the-room-moving case.
+    if (!full && nMoved >= ne) full = true;
+
+    // snapshot this frame's packed state for next frame's diff
     for (let e = 0; e < ne; e++) {
-      const B = u.uEntB.value[e], M = u.uEntM.value[e], D = u.uEntD.value[e];
-      test(B.x); test(B.y); test(B.z); test(B.w);
-      test(M.x); test(M.y); test(M.z);
-      test(D.x); test(D.y); test(D.z); test(D.w);
-      caps = Math.max(caps, M.x + M.y);
+      const b = B[e], d = D[e], lb = e * 4;
+      lB[lb] = b.x; lB[lb + 1] = b.y; lB[lb + 2] = b.z; lB[lb + 3] = b.w;
+      lD[lb] = d.x; lD[lb + 1] = d.y; lD[lb + 2] = d.z; lD[lb + 3] = d.w;
+      lM[e * 2] = M[e].x; lM[e * 2 + 1] = M[e].y;
+      const first = M[e].x, cnt = M[e].y;
+      for (let c = first; c < first + cnt; c++) {
+        const A = CA[c], bc = CB[c], lc = c * 4, lc3 = c * 3;
+        lCA[lc] = A.x; lCA[lc + 1] = A.y; lCA[lc + 2] = A.z; lCA[lc + 3] = A.w;
+        lCB[lc3] = bc.x; lCB[lc3 + 1] = bc.y; lCB[lc3 + 2] = bc.z;
+      }
     }
-    for (let c = 0; c < caps; c++) {
-      const A = u.uCapA.value[c], Bc = u.uCapB.value[c];
-      test(A.x); test(A.y); test(A.z); test(A.w);
-      test(Bc.x); test(Bc.y); test(Bc.z);
-    }
-    if (same) return;
+    this._lastNEnt = ne;
+    this._lastDials = { ao: dials.ao, aoClamp: dials.aoClamp, shadow: dials.shadow, penSoft: dials.penSoft || 0 };
+    this._forceFull = false;
     this._sigValid = true;
+
+    this.dilateMat.uniforms.uSrc.value = this.spareRT.texture;
     this._noXR(() => {
-      this._run(this.spareRT, this.dynMat);
-      this.dilateMat.uniforms.uSrc.value = this.spareRT.texture;
-      this._run(this.layerRT, this.dilateMat);
+      if (full) {
+        u.uNMoved.value = -1;                     // splat recomputes every texel
+        this._run(this.spareRT, this.dynMat);
+      } else {
+        for (let i = 0; i < nMoved; i++) {
+          const o = i * 4;
+          u.uMoved.value[i].set(moved[o], moved[o + 1], moved[o + 2], moved[o + 3]);
+        }
+        u.uNMoved.value = nMoved;
+        const oldAC = this.renderer.autoClear;
+        this.renderer.autoClear = false;          // preserve untouched spareRT
+        this._run(this.spareRT, this.dynMat);     // texels outside moved footprints
+        this.renderer.autoClear = oldAC;
+      }
+      this._run(this.layerRT, this.dilateMat);    // full: cheap copy, gutters right
     });
   }
 }

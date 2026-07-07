@@ -31,6 +31,7 @@ import { PhysicsWorld } from './physics.js';
 const params = new URLSearchParams(location.search);
 const SHOT = params.get('shot') ? parseInt(params.get('shot')) : 0;
 const BAKE = params.has('bake');
+const BENCH = params.has('bench'); // GPU-timing profiler (docs/profiling.md)
 // the offline bake PUTs its artifacts back to serve.mjs - it can only work
 // from the local dev server. Fail FAST (before minutes of path tracing)
 // instead of dying on the save with an opaque 'failed to fetch'.
@@ -412,6 +413,7 @@ void main() {
   let dynOcc = null;
   if (occluders && matsys.texOcc) {
     dynOcc = new DynOccLayer(renderer, level, staticGroup, dynDiv);
+    dynOcc.dirtyEnabled = params.get('dyndirty') !== '0'; // A/B: ?dyndirty=0 = always full
     dynOcc.bakeBase(occluders.statics, occDials());
     matsys.globals.uDynOcc.value = dynOcc.texture;
   }
@@ -731,6 +733,37 @@ void main() {
     return;
   }
 
+  // dirty-layer correctness invariant (?dyncheck): drive prop motion through
+  // the DIRTY path, then force a from-scratch FULL regen at the SAME positions
+  // and compare the two layer textures. They must be byte-identical - any stale
+  // texel the incremental path left behind shows up as a nonzero max diff.
+  if (params.has('dyncheck') && dynOcc) {
+    const N = +(params.get('warm') || 40);
+    for (let i = 0; i < N; i++) {
+      for (let k = 0; k < props.list.length; k++) {   // guarantee motion in several cells
+        const m = props.list[k].mesh;
+        m.position.x += 0.012 * Math.sin(i * 0.7 + k);
+        m.position.z += 0.012 * Math.cos(i * 0.5 + k * 1.3);
+        m.updateMatrixWorld(true);
+      }
+      if (occluders) occluders.update();
+      updateDynOcc(0.016);                              // incremental (dirty) splat
+    }
+    const w = dynOcc.w, h = dynOcc.h;
+    const a = new Uint8Array(w * h * 4), b = new Uint8Array(w * h * 4);
+    renderer.readRenderTargetPixels(dynOcc.layerRT, 0, 0, w, h, a); // dirty result
+    dynOcc.dirtyEnabled = false; dynOcc._forceFull = true;
+    updateDynOcc(0.016);                                // full regen, identical positions
+    renderer.readRenderTargetPixels(dynOcc.layerRT, 0, 0, w, h, b);
+    let maxd = 0, sumd = 0, nd = 0;
+    for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); if (d > maxd) maxd = d; sumd += d; if (d) nd++; }
+    const res = { w, h, steps: N, maxDiff: maxd, meanDiff: +(sumd / a.length).toFixed(4), nonzero: nd, total: a.length };
+    errEl.textContent += `DYNCHECK ${JSON.stringify(res)}\n`;
+    document.title = `DYNCHECK max${maxd}`;
+    fetch('./baked/dyncheck.json', { method: 'PUT', body: JSON.stringify(res) }).catch(() => {});
+    return;
+  }
+
   if (SHOT) {
     const pose = SHOT_POSES[SHOT] || SHOT_POSES[1];
     camera.position.set(...pose.pos);
@@ -759,6 +792,267 @@ void main() {
       renderer.render(scene, camera);
       requestAnimationFrame(shotLoop);
     })();
+    return;
+  }
+
+  // -------------------------------------------------------------- ?bench: GPU profiler
+  // Measures per-feature GPU cost by rendering ONE seeded view per cell (+ a
+  // curated worst-case set) under a rung ladder that differs by ONE feature at
+  // a time (see docs/profiling.md). PC path uses EXT_disjoint_timer_query for
+  // real per-frame GPU ms (median-of-N); Quest flat-browser has no timer so it
+  // holds a fixed dwell per rung and emits a console marker that the ADB
+  // ovrgpuprofiler driver aligns render-stage samples to. Pose-major /
+  // rung-inner order keeps a pose's whole rung ladder within a few seconds, so
+  // per-pose deltas are thermally clean even as the headset warms over the run.
+  if (BENCH) {
+    overlay.classList.add('hidden');
+    const g = matsys.globals;
+    const usingTimer = perf.hasGpuTimer();
+    const B = {
+      seed:  +(params.get('benchseed')  || 1234),
+      warm:  +(params.get('benchwarm')  || 10),   // per-pose per-rung steady-state frames
+      dwell: +(params.get('benchdwell') || 2000), // flat-browser fallback only
+      set:   params.get('benchset') || 'both',    // cells | worst | both
+      out:   params.get('benchout') || (usingTimer ? 'pc' : 'quest'),
+    };
+    const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+    const median = a => { const s = [...a].sort((x, y) => x - y); return s.length ? s[s.length >> 1] : 0; };
+    // deterministic PRNG so PC and Quest sample byte-identical poses
+    const mulberry32 = a => () => {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+    // one seeded random view per occupiable cell: a point well inside the
+    // convex footprint, eye height, random yaw + slight pitch. Reproducible.
+    const cellPoses = () => level.cells.filter(c => !c.hollow).map(cell => {
+      const rnd = mulberry32(B.seed * 131 + cell.id * 977 + 7);
+      const cx = cell.capture.x, cz = cell.capture.z;
+      const v = cell.fp[Math.floor(rnd() * cell.fp.length)];
+      const f = 0.2 + rnd() * 0.4;                 // 0.2..0.6 toward a vertex (stays inside a convex cell)
+      const x = cx + (v[0] - cx) * f, z = cz + (v[1] - cz) * f;
+      const y = Math.min(cell.floorY + 1.6, cell.ceilY - 0.3);
+      const yaw = rnd() * Math.PI * 2, pit = (rnd() - 0.5) * 0.35, cp = Math.cos(pit);
+      return { key: `cell${cell.id}-${cell.name}`, group: 'cell', cell: cell.id, name: cell.name,
+        pos: [x, y, z], look: [x + Math.sin(yaw) * cp, y + Math.sin(pit), z + Math.cos(yaw) * cp] };
+    });
+    // curated worst-case poses = the frame-budget ceiling for a VR write-up
+    const worstPoses = () => [
+      [1, 'gallery-props'], [4, 'pillarhall-cuts'], [5, 'glass-at-face'],
+      [6, 'L-room-cut'], [9, 'exhibit-hall'], [3, 'rotunda-marble'],
+    ].filter(([n]) => SHOT_POSES[n]).map(([n, name]) => ({
+      key: `worst-${name}`, group: 'worst', cell: -1, name,
+      pos: SHOT_POSES[n].pos.slice(), look: SHOT_POSES[n].look.slice() }));
+    let poses = [];
+    if (B.set !== 'worst') poses = poses.concat(cellPoses());
+    if (B.set !== 'cells') poses = poses.concat(worstPoses());
+
+    // rung ladder: each rung adds exactly one feature vs the previous.
+    // program = benchSetRung target (COMPILED difference); steps/occ/shadow are
+    // runtime uniforms. off/pccm/portal isolate reflections at compile time;
+    // ao/full ride the shipped 'portal' program (occSegment stays compiled in,
+    // so occupancy is constant and the ao/shadow deltas are pure work).
+    // uOccON is NOT one feature: flipping it on switches THREE separate
+    // mechanisms at once, which is why the historical single "ao" rung read a
+    // surprising ~1ms while "shadows" read ~0 (the shadow rung inherits the
+    // layer regen the ao rung already paid for). Split them so each delta
+    // attributes to the mechanism that actually costs:
+    //   ao-tap   : uOccOn on, occSegment OFF (occHops=0), regen SKIPPED
+    //              -> the per-pixel uDynOcc tap on static fill + prop-vertex AO
+    //   ao-regen : + the dyn-occ layer REGEN pass. NOTE: benchjitter forces a
+    //              regen every frame here; a resting scene pays ~0 for this via
+    //              dynocc's exact-change early-out, so this delta OVERSTATES the
+    //              real-world cost - read it as the worst case, props in motion.
+    //   ao       : + per-hop reflection-ray occlusion (occSegment) over the
+    //              glossy/glass fill - the actual contents of the old "ao" delta
+    const occHopsDefault = g.uOccHops.value;
+    const RUNGS = [
+      { name: 'off',      program: 'off',    steps: 3, occ: 0, shadow: 0 },                          // no reflections at all
+      { name: 'pccm',     program: 'pccm',   steps: 0, occ: 0, shadow: 0 },                          // lean single-step IBL
+      { name: 'portal',   program: 'portal', steps: 3, occ: 0, shadow: 0 },                          // + portal traversal
+      { name: 'ao-tap',   program: 'portal', steps: 3, occ: 1, shadow: 0, occHops: 0, noRegen: 1 }, // + contact-AO tap only
+      { name: 'ao-regen', program: 'portal', steps: 3, occ: 1, shadow: 0, occHops: 0 },             // + dyn-occ layer regen
+      { name: 'ao',       program: 'portal', steps: 3, occ: 1, shadow: 0 },                          // + reflection-ray occlusion
+      { name: 'full',     program: 'portal', steps: 3, occ: 1, shadow: 0.85 },                       // + dynamic soft shadows
+    ];
+    let curProgram = null, benchNoRegen = false;
+    const applyRung = r => {
+      if (r.program !== curProgram) { matsys.benchSetRung(r.program); curProgram = r.program; }
+      g.uMaxSteps.value = r.steps; g.uOccOn.value = r.occ; g.uOccShadow.value = r.shadow;
+      // occHops=0 disables occSegment (float(i) < uOccHops is never true) while
+      // leaving uOccOn on, so the tap/regen stay live and only reflection
+      // occlusion drops out. Unset -> the shipped default.
+      g.uOccHops.value = r.occHops !== undefined ? r.occHops : occHopsDefault;
+      benchNoRegen = !!r.noRegen;
+    };
+    // Props are not stepped by physics here (that would drift chaotically and
+    // swamp the ~0.1ms reflection deltas). Instead a small DETERMINISTIC wobble
+    // keeps the dynamic occluder entries changing every frame, so the dyn AO/
+    // shadow layer actually regenerates (dynocc's exact-change early-out makes a
+    // truly at-rest scene cost ZERO GPU - which no-ops the very cost we measure).
+    // ?benchjitter=0 restores frozen props. The wobble is identical across a
+    // pose's rung bursts, so reflection deltas stay clean; it moves the few prop
+    // pixels ~1.5cm, negligible vs the fill it exercises.
+    //   Only props in the PLAYER'S cell wobble - a realistic "someone is in the
+    // room" scenario. Props elsewhere are held at their base (an at-rest scene
+    // regenerates nothing for them), so the regen delta reflects a handful of
+    // nearby movers, not an artificial whole-level thrash. Empty cells therefore
+    // pay ~0 regen, exactly as they would in play.
+    const JITTER = +(params.get('benchjitter') || 0.015);
+    let propBase = null, jitterFrame = 0;
+    const captureBase = () => { propBase = props.list.map(p => p.mesh.position.clone()); };
+    const jitterProps = () => {
+      if (!(JITTER > 0) || !propBase) return;
+      jitterFrame++;
+      for (let k = 0; k < props.list.length; k++) {
+        const b = propBase[k], p = props.list[k], m = p.mesh;
+        if (p.cell === player.cell) {
+          m.position.set(b.x + JITTER * Math.sin(jitterFrame * 0.9 + k), b.y, b.z + JITTER * Math.cos(jitterFrame * 0.7 + k * 1.3));
+        } else {
+          m.position.copy(b); // reset any wobble left over from a prior pose
+        }
+        m.updateMatrixWorld(true);
+      }
+    };
+    const renderPose = p => {
+      camera.position.set(...p.pos); camera.lookAt(...p.look);
+      camera.updateMatrixWorld(true); // culler.compute reads the camera frustum
+      player.pos.set(...p.pos);
+      player.cell = findCell(level.cells, player.pos, Number.isInteger(player.cell) ? player.cell : 0);
+      jitterProps();
+      updateWallLod(camera.position);
+      if (culler.enabled) culler.compute(camera, player.pos);
+      culler.apply(staticGroup, props, false);
+      if (occluders) occluders.update(null, player.pos, g.uOccBudget.value);
+      // splat the dyn layer ONLY when AO/shadows are on, so its per-frame cost
+      // attributes to the ao/full rungs (the total feature cost, incl. layer
+      // regen). benchNoRegen (the ao-tap rung) holds it off to isolate the
+      // pure per-pixel tap cost from the regen pass.
+      if (g.uOccOn.value > 0.5 && !benchNoRegen) updateDynOcc(0.016);
+      renderer.setRenderTarget(null);
+      renderer.render(scene, camera);
+    };
+
+    // Render at a fixed high resolution: on PC so per-pixel reflection FILL
+    // rises above timer/DVFS noise; on the flat Quest browser so the WebGL
+    // canvas renders at ~eye-buffer resolution (the panel is only 1280x670)
+    // and ovrgpuprofiler sees a representative full-res surface. Default 2560
+    // x1440 on PC; pass ?benchw/&benchh (e.g. 2064x2208) on Quest.
+    if (usingTimer || params.has('benchw')) {
+      const bw = +(params.get('benchw') || 2560), bh = +(params.get('benchh') || 1440);
+      renderer.setPixelRatio(1); renderer.setSize(bw, bh, false);
+      camera.aspect = bw / bh; camera.updateProjectionMatrix();
+    }
+    const K = +(params.get('benchframes') || 8);                       // measured frames per burst
+    const CYCLES = +(params.get('benchrounds') || (usingTimer ? 6 : 3));
+    const SETTLE = 3;                                                  // frames discarded after a rung swap
+
+    // median GPU ms over K frames at the already-applied+settled rung
+    async function burstPC(p) {
+      let guard = 0;
+      while (perf.gpuPending() > 0 && guard++ < 240) { renderPose(p); perf.gpuHarvest(); await nextFrame(); }
+      jitterFrame = 0; // the K measured frames wobble props through the SAME 1..K
+      // sequence for every rung, so props are byte-identical per frame-index across
+      // rungs (clean reflection delta) yet still move each frame (dyn layer regenerates)
+      perf.collectStart();
+      for (let i = 0; i < K; i++) { perf.gpuBegin(); renderPose(p); perf.gpuEnd(); await nextFrame(); }
+      guard = 0;
+      while (perf.gpuPending() > 0 && guard++ < 240) { renderPose(p); perf.gpuHarvest(); await nextFrame(); }
+      return median(perf.collectStop());
+    }
+
+    // settle physics once then freeze (shared by both run modes)
+    async function settleFreeze() {
+      applyRung(RUNGS[RUNGS.length - 1]);
+      for (let i = 0; i < 120; i++) { props.update(0.016, player); if (occluders) occluders.update(null, player.pos, g.uOccBudget.value); updateDynOcc(0.016); await nextFrame(); }
+      captureBase();
+    }
+
+    // DRIVER-PACED (Quest, ?benchremote): the flat browser renders at eye
+    // resolution and scripts/bench-quest.mjs controls (pose,rung) + runs
+    // ovrgpuprofiler. We render the commanded pose+rung steadily and echo state.
+    async function runPaced() {
+      errEl.textContent += `BENCH paced: ${poses.length} poses, res=${renderer.domElement.width}x${renderer.domElement.height}\n`;
+      for (const r of RUNGS) { applyRung(r); for (let i = 0; i < 10; i++) { renderPose(poses[0]); await nextFrame(); } } // compile all
+      await settleFreeze();
+      try {
+        await fetch('./baked/bench-manifest.json', { method: 'PUT', body: JSON.stringify({
+          renderW: renderer.domElement.width, renderH: renderer.domElement.height, rungs: RUNGS,
+          poses: poses.map(p => ({ key: p.key, group: p.group, cell: p.cell, name: p.name })) }) });
+      } catch (e) { errEl.textContent += 'manifest PUT failed (reverse up?)\n'; }
+      let lastSeq = -1, cur = poses[0];
+      document.title = 'BENCH_PACED_READY';
+      while (true) {
+        let cmd = null;
+        try { cmd = await (await fetch('./baked/bench-cmd.json', { cache: 'no-store' })).json(); } catch (e) { /* none yet */ }
+        if (cmd && cmd.seq !== lastSeq) {
+          lastSeq = cmd.seq;
+          if (cmd.done) { document.title = 'BENCH_DONE'; break; }
+          cur = poses[cmd.poseIdx] || poses[0];
+          const rung = RUNGS.find(r => r.name === cmd.rung) || RUNGS[2];
+          applyRung(rung);
+          document.title = `BENCH ${cur.key}/${rung.name}`;
+          try {
+            await fetch('./baked/bench-state.json', { method: 'PUT', body: JSON.stringify({
+              seq: cmd.seq, key: cur.key, cell: cur.cell, name: cur.name, group: cur.group,
+              rung: rung.name, program: rung.program, t: performance.now() }) });
+          } catch (e) { /* reverse down */ }
+        }
+        renderPose(cur);
+        await nextFrame();
+      }
+    }
+
+    async function run() {
+      errEl.textContent += `BENCH: ${poses.length} poses x ${RUNGS.length} rungs x ${CYCLES} cycles, timer=${usingTimer}, ` +
+        `res=${usingTimer ? renderer.domElement.width + 'x' + renderer.domElement.height : 'native'}, seed=${B.seed}\n`;
+      for (const r of RUNGS) { applyRung(r); for (let i = 0; i < 10; i++) { renderPose(poses[0]); await nextFrame(); } } // compile every program
+      // settle physics ONCE, then freeze: props come to rest so every pose's
+      // rung bursts render a byte-identical scene (renderPose no longer steps them)
+      applyRung(RUNGS[RUNGS.length - 1]);
+      for (let i = 0; i < 120; i++) { props.update(0.016, player); if (occluders) occluders.update(null, player.pos, g.uOccBudget.value); updateDynOcc(0.016); await nextFrame(); }
+      captureBase();
+      const results = [];
+      const t0 = performance.now();
+      for (const p of poses) {
+        for (const r of RUNGS) { applyRung(r); for (let i = 0; i < B.warm; i++) { renderPose(p); await nextFrame(); } } // per-pose steady state
+        // rungs cycled TIGHTLY: a pose's whole ladder spans ~1s, so DVFS/OS
+        // jitter is common-mode and cancels in the paired per-pose delta
+        for (let cycle = 0; cycle < CYCLES; cycle++) {
+          for (const r of RUNGS) {
+            applyRung(r);
+            document.title = `BENCH ${p.key}/${r.name} c${cycle}`;
+            if (usingTimer) {
+              for (let i = 0; i < SETTLE; i++) { renderPose(p); await nextFrame(); }
+              const ms = await burstPC(p);
+              results.push({ round: cycle, key: p.key, group: p.group, cell: p.cell, name: p.name, rung: r.name, ms, n: K });
+            } else {
+              // flat-browser fallback (small/muddy panel; the real Quest path is ?benchremote in-VR)
+              const t = performance.now(); let n = 0;
+              while (performance.now() - t < B.dwell) { renderPose(p); n++; await nextFrame(); }
+              results.push({ round: cycle, key: p.key, group: p.group, cell: p.cell, name: p.name, rung: r.name, ms: null, n });
+            }
+          }
+        }
+        errEl.textContent += `${p.key} done (${((performance.now() - t0) / 1000).toFixed(0)}s)\n`;
+      }
+      const payload = {
+        meta: { platform: usingTimer ? 'pc-timerquery' : 'quest-dwell', seed: B.seed, cycles: CYCLES, framesPerBurst: K,
+          renderW: renderer.domElement.width, renderH: renderer.domElement.height, dwellMs: B.dwell,
+          ua: navigator.userAgent, wallMs: performance.now() - t0, rungs: RUNGS,
+          poses: poses.map(p => ({ key: p.key, group: p.group, cell: p.cell, name: p.name, pos: p.pos, look: p.look })) },
+        results,
+      };
+      window.__benchResults = payload;
+      document.title = 'BENCH_DONE';
+      errEl.textContent += `BENCH done in ${((performance.now() - t0) / 1000).toFixed(0)}s\n`;
+      try {
+        await fetch(`./baked/bench-${B.out}.json`, { method: 'PUT', body: JSON.stringify(payload) });
+        errEl.textContent += `uploaded baked/bench-${B.out}.json\n`;
+      } catch (e) { errEl.textContent += `upload failed: ${e.message}\n`; }
+    }
+    if (params.has('benchremote')) runPaced(); else run();
     return;
   }
 
@@ -1224,6 +1518,8 @@ void main() {
     }
   };
   let last = performance.now(), fpsAvg = 0;
+  let benchJitterHook = null; // ?benchremote installs a per-frame prop wobble so
+  // the dyn AO/shadow layer keeps regenerating in VR (see the ?benchremote block)
   // scripted gag: the hall-A ceiling fan drops 1.5s after you walk in.
   // its dynamic body spawns asleep at the ceiling (gravity frozen while
   // sleeping - that is what holds it up); one wakeUp() and it falls and
@@ -1308,10 +1604,13 @@ void main() {
         }
         active = occOrder;
       }
+      if (benchJitterHook) benchJitterHook(); // wobble props BEFORE packing so the layer regenerates
       // closest-first dyn packing; the capsule budget truncates at pack time
       occluders.update(active, inXR ? headPos : player.pos,
         matsys.globals.uOccBudget.value);
-      updateDynOcc(dt); // after occluders.update: it reads the fresh e.world
+      // normal gameplay: splat every frame. ?benchremote: splat only when AO/
+      // shadows are on, so the layer-regen cost attributes to the ao/full rungs.
+      if (!benchJitterHook || matsys.globals.uOccOn.value > 0.5) updateDynOcc(dt);
     }
     if (physWires.group.visible) physWires.update(); // sync dynamic bodies
     if (!inXR) {
@@ -1332,6 +1631,57 @@ void main() {
     const ph = perf.hudText();
     fpsEl.textContent = `${fpsAvg.toFixed(0)} fps * cells ${culler.enabled ? culler.visible.size : 'all'} * ${level.cells[player.cell].name}${usedBaked ? ' * baked' : ''}${ph ? ' * ' + ph : ''}`;
   });
+
+  // ?benchremote: PC-driven rung control for PRECISE in-VR profiling. The flat
+  // browser panel is too small/muddy to profile; the real numbers live in the
+  // WebXR eye buffer. scripts/bench-quest.mjs writes baked/bench-cmd.json
+  // {seq,rung}; we apply it live (in VR) and echo baked/bench-state.json so the
+  // driver knows when to run ovrgpuprofiler. Rungs = the ?bench ladder.
+  if (params.has('benchremote')) {
+    const gg = matsys.globals;
+    const RR = {
+      off:    { program: 'off',    steps: 3, occ: 0, shadow: 0 },
+      pccm:   { program: 'pccm',   steps: 0, occ: 0, shadow: 0 },
+      portal: { program: 'portal', steps: 3, occ: 0, shadow: 0 },
+      ao:     { program: 'portal', steps: 3, occ: 1, shadow: 0 },
+      full:   { program: 'portal', steps: 3, occ: 1, shadow: 0.85 },
+    };
+    let curProg = 'portal', lastSeq = -1;
+    // per-frame prop wobble (installed into the render loop): keeps the dynamic
+    // AO/shadow layer regenerating so its cost is measured in VR, not no-op'd by
+    // dynocc's at-rest early-out. ?benchjitter=0 disables. Base captured lazily
+    // (props are settled by the time VR is entered).
+    const JIT = +(params.get('benchjitter') || 0.015);
+    let jbase = null, jframe = 0;
+    if (JIT > 0) benchJitterHook = () => {
+      if (!jbase) return; // not armed until the first driver command (props settled, VR entered)
+      jframe++;
+      for (let k = 0; k < props.list.length; k++) {
+        const b = jbase[k], m = props.list[k].mesh;
+        m.position.set(b.x + JIT * Math.sin(jframe * 0.9 + k), b.y, b.z + JIT * Math.cos(jframe * 0.7 + k * 1.3));
+        m.updateMatrixWorld(true);
+      }
+    };
+    errEl.textContent += 'benchremote: waiting for baked/bench-cmd.json from bench-quest.mjs\n';
+    setInterval(async () => {
+      let cmd;
+      try { cmd = await (await fetch('./baked/bench-cmd.json', { cache: 'no-store' })).json(); }
+      catch (e) { return; } // no command file yet
+      if (!cmd || cmd.seq === lastSeq) return;
+      if (JIT > 0 && !jbase) jbase = props.list.map(p => p.mesh.position.clone()); // capture rest pose now (settled, in VR)
+      lastSeq = cmd.seq;
+      const r = RR[cmd.rung];
+      if (r) {
+        if (r.program !== curProg) { matsys.benchSetRung(r.program); curProg = r.program; }
+        gg.uMaxSteps.value = r.steps; gg.uOccOn.value = r.occ; gg.uOccShadow.value = r.shadow;
+      }
+      try {
+        await fetch('./baked/bench-state.json', { method: 'PUT',
+          body: JSON.stringify({ seq: cmd.seq, rung: cmd.rung, program: curProg, cell: player.cell,
+            xr: renderer.xr.isPresenting, t: performance.now() }) });
+      } catch (e) { /* reverse not up yet */ }
+    }, 150);
+  }
 
   addEventListener('resize', () => {
     if (renderer.xr.isPresenting) return; // entering VR fires a resize; XR owns the size

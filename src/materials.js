@@ -54,9 +54,9 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // debug variants compile in the traversal step accumulator + debug views;
   // shipping programs carry none of that register pressure
   let debugCompiled = false;
-  const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false, hopSpec = false, noSpec = false) => {
-    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '') + (hopSpec ? 'H' : '') + (noSpec ? 'I' : '');
-    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd, matteSpec, hopSpec, noSpec));
+  const fragFor = (m, dbg = debugCompiled, matte = false, hop1 = false, hopSpec = false, noSpec = false, pccmOnly = false) => {
+    const k = m + (dbg ? 'd' : '') + (matte ? 'm' : '') + (fp16 ? 'h' : '') + (texOcc ? 't' : '') + (warp ? 'w' : '') + (hop1 ? '1' : '') + (hopSpec ? 'H' : '') + (noSpec ? 'I' : '') + (pccmOnly ? 'P' : '');
+    return fragByMode[k] || (fragByMode[k] = sceneFrag(numCells, USE_HULL_UBO, m, dbg, matte, fp16, texOcc, warp, hop1, occDynCap, pvd, matteSpec, hopSpec, noSpec, pccmOnly));
   };
 
   let hullGroup = null;
@@ -244,6 +244,27 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     }
   }
 
+  // PROFILING (?bench): swap every scene material to the program that isolates
+  // one measurement rung, so per-feature deltas reflect COMPILED differences
+  // (register/occupancy), not multiply/branch-by-zero that leaves the cost in.
+  //   'off'    - specular chain compiled out everywhere (no reflections at all)
+  //   'pccm'   - lean single-step IBL (pccmOnly: no traversal loop / occSegment)
+  //   'portal' - the shipped tiered programs (matte walls, 1-hop floors, march)
+  // AO / shadows are runtime uniforms (uOccOn / uOccShadow) on top of 'portal':
+  // occSegment stays compiled into portal/ao/full alike, so occupancy is held
+  // constant across those three and the ao/shadow deltas are pure work.
+  let benchRung = 'portal';
+  function benchSetRung(rung) {
+    benchRung = rung;
+    for (const m of allMaterials) {
+      const u = m.userData;
+      const noSpec = rung === 'off' ? true : u.noSpec;
+      const pccmOnly = rung === 'pccm' && !u.noSpec;
+      m.fragmentShader = fragFor(u.mode, debugCompiled, u.matte, u.hop1, u.hopSpec, noSpec, pccmOnly);
+      m.needsUpdate = true;
+    }
+  }
+
   function setMaterialCell(mat, cellId) {
     const cur = mat.uniforms.uCell.value;
     if (cur === cellId) return;
@@ -271,7 +292,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     }
   }
   const sys = { globals, makeMaterial, setMaterialCell, setDebugCompiled,
-    setSpecular, specularOn: true, allMaterials, occ, texOcc };
+    setSpecular, specularOn: true, allMaterials, occ, texOcc, benchSetRung };
   return sys;
 }
 

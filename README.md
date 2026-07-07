@@ -1,6 +1,6 @@
 # PortalIBL POC
 
-Proof of concept for PortalIBL - **portal-linked convex-hull environment map based specular lighting technique** — a middle ground between parallax-corrected cubemaps and ray marching, aimed at mobile VR.
+Proof of concept for PortalIBL - **portal-linked convex-hull environment map based specular lighting technique** - a middle ground between parallax-corrected cubemaps and ray marching, aimed at mobile VR.
 
 The level is decomposed into convex cells (hulls). Each cell owns a baked HDR
 octahedral environment map (specular mip column + irradiance tile) in one flat

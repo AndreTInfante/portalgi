@@ -10,6 +10,7 @@ const port = parseInt(process.argv[2]) || 8123;
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.css': 'text/css',
+  '.md': 'text/markdown; charset=utf-8',
 };
 
 createServer(async (req, res) => {

@@ -27,7 +27,7 @@ jobs:
       - name: Stage site (skip .git, server, docs)
         run: |
           mkdir _site
-          cp -r index.html src libs assets baked _site/
+          cp -r index.html writeup.html PortalIBL-writeup.md src libs assets baked _site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

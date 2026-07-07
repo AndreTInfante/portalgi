@@ -67,6 +67,7 @@ const SHOT_POSES = {
   22: { pos: [14.75, 1.6, 2.89], look: [11.3, 1.2, 0] },      // theta=50 (hallE, crossed boundary)
   23: { pos: [14, 1.6, 3.5], look: [11.3, 1.2, 0] },          // fixed cam; pane just N of the hallN/E boundary
   24: { pos: [14, 1.6, 3.5], look: [11.3, 1.2, 0] },          // SAME cam; pane just S of it (cell flipped)
+  25: { pos: [0, 1.6, 1.2], look: [0, 1.35, 7] },             // gallery pane looking through the corridor door (-V crosses portal)
 };
 
 const overlay = document.getElementById('overlay');
@@ -336,6 +337,7 @@ void main() {
     if (isTouchDevice()) new TouchControls(player, props, camera, renderer.domElement);
   }
   const wires = buildPortalWires(scene, level);
+  if (typeof location !== 'undefined' && location.search.includes('showportals')) wires.visible = true; // TEMP debug
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
   // everything with capsule proxies (statues AND furniture) is OUT of the
   // cubemap captures by default: one representation per object (capsules in
@@ -744,6 +746,7 @@ void main() {
     if (SHOT === 7 || SHOT === 12 || SHOT >= 20) { // pose the debug pane as if held up in front of the camera
       const pane = props.list.find(p => p.debugPane);
       if (SHOT === 7) pane.mesh.position.set(1.2, 1.35, -1.2);
+      else if (SHOT === 25) pane.mesh.position.set(0, 1.4, 3.2);
       else if (SHOT === 20) pane.mesh.position.set(11.73, 1.4, 2.46);
       else if (SHOT === 21) pane.mesh.position.set(12.55, 1.4, 2.17);
       else if (SHOT === 22) pane.mesh.position.set(13.22, 1.4, 1.61);

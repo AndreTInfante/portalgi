@@ -20,9 +20,6 @@ const PROP_DEFS = [
   // (chrome + glass cubes cut 2026-07-04: read poorly, and fewer dyn props
   // keeps the blob budget balanced - their pedestals now hold the small
   // horse and elephant moved over from hall A)
-  // debug pane: near-clear glass, billboards to the camera while held -
-  // hold it over scene geometry to see the hull approximation error directly.
-  { shape: 'pane', mode: 3, x: 0.45, z: -2.8, y: 0.965, debugPane: true },
 ];
 
 export class Props {
@@ -42,9 +39,8 @@ export class Props {
       if (t - (p.impactT || 0) > 120) { p.impactT = t; this.onImpact(p.mesh.position, speed, p); }
     };
     this.list = PROP_DEFS.map(def => {
-      const r = def.shape === 'sphere' ? 0.22 : def.shape === 'pane' ? 0.3 : 0.18;
+      const r = def.shape === 'sphere' ? 0.22 : 0.18;
       const geo = def.shape === 'sphere' ? new THREE.SphereGeometry(0.22, 48, 32)
-        : def.shape === 'pane' ? new THREE.BoxGeometry(0.65, 0.9, 0.02)
         : new THREE.BoxGeometry(0.36, 0.36, 0.36);
       const mat = matsys.makeMaterial(0, {
         mode: def.mode,
@@ -61,10 +57,8 @@ export class Props {
         mesh, mats: [mat], radius: r, rFloor: r,
         vel: new THREE.Vector3(),
         round: def.shape === 'sphere',
-        boxHalf: def.shape === 'cube' ? [0.18, 0.18, 0.18]
-          : def.shape === 'pane' ? [0.325, 0.45, 0.03] : null,
+        boxHalf: def.shape === 'cube' ? [0.18, 0.18, 0.18] : null,
         cell: 0,
-        debugPane: !!def.debugPane,
       };
       if (physics) p.body = physics.addProp(p, this.impactCb);
       return p;
@@ -77,7 +71,6 @@ export class Props {
         vel: new THREE.Vector3(),
         round: false, boxHalf: null,
         cell: mp.cell,
-        debugPane: false,
         slug: mp.slug, // authored occluder proxy key (proxies.js)
       };
       if (physics) p.body = physics.addProp(p, this.impactCb);
@@ -164,7 +157,7 @@ export class Props {
         const k = 1 - Math.pow(1 - h.beamT, 3);
         target.lerpVectors(h.beamFrom, target, k);
         if (h.beamT >= 1) h.offQuat.copy(carrier.quat).invert().multiply(p.mesh.quaternion);
-      } else if (!p.debugPane) {
+      } else {
         p.mesh.quaternion.copy(carrier.quat).multiply(h.offQuat);
       }
       p.vel.copy(target).sub(p.mesh.position).divideScalar(Math.max(step, 1e-4));
@@ -213,7 +206,6 @@ export class Props {
         pos.z += dz / dist * (min - dist);
       }
     }
-    if (p.debugPane) p.mesh.lookAt(carrier.eye || carrier.pos);
   }
 
   collide(p) {

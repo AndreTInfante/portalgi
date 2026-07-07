@@ -47,12 +47,10 @@ const SHOT_POSES = {
   4: { pos: [7.2, 1.7, 3.4], look: [11.3, 0.9, 0] },       // pillar hall: cuts on glossy floor
   5: { pos: [2.5, 1.5, 3.0], look: [2.5, 1.22, 1.4] },     // glass sphere closeup
   6: { pos: [9.6, 1.7, -7.4], look: [14.5, 0.1, -13.8] },  // L-room: floor across the virtual portal
-  7: { pos: [1.2, 1.5, 0.8], look: [1.2, 1.35, -1.2] },    // debug pane held up mid-room
   8: { pos: [13.3, 1.6, -18.7], look: [16.4, 0.6, -23.0] },// darkroom: colored corner lamp
   9: { pos: [0, 1.7, 19.2], look: [-0.9, 1.2, 23.5] },     // exhibit hall A: PBR models
   10: { pos: [4.4, 1.7, 22.5], look: [7.5, 1.2, 22.5] },   // cornell box
   11: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.1, 22.5] }, // exhibit hall B
-  12: { pos: [0, 1.5, 10.6], look: [0, 1.4, 12.4] },       // debug pane held up in the rotunda
   // seam-artifact investigation close-ups (cell-boundary seams)
   13: { pos: [10.6, 1.5, -9.4], look: [12.3, 1.2, -11.6] }, // L-bend convex corner
   14: { pos: [14.3, 1.7, -8.8], look: [14.3, 0.0, -12.6] }, // L1/L2 floor seam (virtual portal)
@@ -62,12 +60,6 @@ const SHOT_POSES = {
   17: { pos: [17.4, 1.6, -1.8], look: [21.5, 2.6, 1.6] },   // inside the courtyard (sky + sun)
   18: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.0, 22.5] },  // hall B spot-lit exhibits
   19: { pos: [13.6, 1.6, -12.6], look: [14.8, 1.25, -17.6] }, // L2 -> darkroom door (brown-stripe repro)
-  20: { pos: [12.08, 1.6, 4.43], look: [11.3, 1.2, 0] },      // pillar-hall pane orbit: theta=10 (hallN)
-  21: { pos: [13.55, 1.6, 3.90], look: [11.3, 1.2, 0] },      // theta=30 (hallN, near boundary)
-  22: { pos: [14.75, 1.6, 2.89], look: [11.3, 1.2, 0] },      // theta=50 (hallE, crossed boundary)
-  23: { pos: [14, 1.6, 3.5], look: [11.3, 1.2, 0] },          // fixed cam; pane just N of the hallN/E boundary
-  24: { pos: [14, 1.6, 3.5], look: [11.3, 1.2, 0] },          // SAME cam; pane just S of it (cell flipped)
-  25: { pos: [0, 1.6, 1.2], look: [0, 1.35, 7] },             // gallery pane looking through the corridor door (-V crosses portal)
 };
 
 const overlay = document.getElementById('overlay');
@@ -743,23 +735,7 @@ void main() {
     const pose = SHOT_POSES[SHOT] || SHOT_POSES[1];
     camera.position.set(...pose.pos);
     camera.lookAt(...pose.look);
-    if (SHOT === 7 || SHOT === 12 || SHOT >= 20) { // pose the debug pane as if held up in front of the camera
-      const pane = props.list.find(p => p.debugPane);
-      if (SHOT === 7) pane.mesh.position.set(1.2, 1.35, -1.2);
-      else if (SHOT === 25) pane.mesh.position.set(0, 1.4, 3.2);
-      else if (SHOT === 20) pane.mesh.position.set(11.73, 1.4, 2.46);
-      else if (SHOT === 21) pane.mesh.position.set(12.55, 1.4, 2.17);
-      else if (SHOT === 22) pane.mesh.position.set(13.22, 1.4, 1.61);
-      else if (SHOT === 23) pane.mesh.position.set(12.3, 1.4, 1.15);
-      else if (SHOT === 24) pane.mesh.position.set(12.3, 1.4, 0.85);
-      else pane.mesh.position.set(0, 1.4, 12.4);
-      pane.mesh.lookAt(camera.position);
-    }
     props.update(0.016, player);
-    if (params.has('panecell')) { // force the pane's start cell to isolate the per-cell cubemap pop
-      const pn = props.list.find(p => p.debugPane);
-      pn.mats.forEach(m => { m.uniforms.uCell.value = parseInt(params.get('panecell')); });
-    }
     updateWallLod(camera.position); // shots reflect the same wall LOD as the loop
     if (occluders) occluders.update();
     updateDynOcc();

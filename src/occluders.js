@@ -155,7 +155,6 @@ export class OccluderSystem {
     this.sv = new THREE.Vector3();
     this._nextGroup = 1;
     for (const p of props.list) {
-      if (p.debugPane) continue; // clear glass occludes nothing
       // authored prop-local proxies beat the auto-fit (proxies.js)
       const authored = p.slug && OCCLUDER_PROXIES.props[p.slug];
       const spheres = authored ? capsFromData(authored.capsules) : fitCapsules(p.mesh);

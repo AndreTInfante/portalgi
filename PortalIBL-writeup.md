@@ -154,7 +154,7 @@ PortalIBL has a number of limitations, most of them in common with PCCM.
 
 
 - Objects that are included in the bake get flattened against the walls, whether or not that makes sense. We mitigate this issue with the proxies discussed below.  
-- If the proxy geometry doesn’t align perfectly, you also get misaligned reflections. You can see this issue in the demo where the planes for doors are in the center of the wall (to match the portal on the other side), which causes walls with doors to be slightly misaligned, cutting off the reflection of the wall footer and generally reflecting at a slightly incorrect depth - though you could patch this by interpolating the portal location and wall plane to always be on the same side of the wall as the camera.
+- If the hull geometry doesn’t align perfectly, you also get misaligned reflections. You can see this issue in the demo where the planes for doors are in the center of the wall (to match the portal on the other side), which causes walls with doors to be slightly misaligned, cutting off the reflection of the wall footer and generally reflecting at a slightly incorrect depth - though you could patch this by interpolating the portal location and wall plane to always be on the same side of the wall as the camera.
 - This is purely a baked technique, and has no mechanism to represent large scale environment or lighting changes.
 - If you cap the recursion depth (which you pretty much have to for performance on mobile), you still get PCCM-style artifacts on the last portal. They’re just less egregious because they mostly occur for reflections of doors through doors, and are (as a result) more distant (i.e. smaller and blurrier).
 

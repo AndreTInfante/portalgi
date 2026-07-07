@@ -286,16 +286,16 @@ const CELL_DEFS = [
   { name: 'rotunda', fp: decagon(ROT_C[0], ROT_C[1], ROT_R), h: 5.0,
     floor: { key: 'marble', roughFactor: 0.25, specBoost: 4.5 } },
   { name: 'hallN', fp: [[HX0, HZ1], [HX1, HZ1], [PX1, PZ1], [PX0, PZ1]], h: 3.6,
-    edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
+    edges: [{}, { open: true }, { mat: 'concrete', specBoost: 0.8 }, { open: true }],
     floor: { key: 'concrete', roughFactor: 0.45 } },
   { name: 'hallE', fp: [[HX1, HZ1], [HX1, HZ0], [PX1, PZ0], [PX1, PZ1]], h: 3.6,
-    edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
+    edges: [{}, { open: true }, { mat: 'concrete', specBoost: 0.8 }, { open: true }],
     floor: { key: 'concrete', roughFactor: 0.45 } },
   { name: 'hallS', fp: [[HX1, HZ0], [HX0, HZ0], [PX0, PZ0], [PX1, PZ0]], h: 3.6,
-    edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
+    edges: [{}, { open: true }, { mat: 'concrete', specBoost: 0.8 }, { open: true }],
     floor: { key: 'concrete', roughFactor: 0.45 } },
   { name: 'hallW', fp: [[HX0, HZ0], [HX0, HZ1], [PX0, PZ1], [PX0, PZ0]], h: 3.6,
-    edges: [{}, { open: true }, { mat: 'concrete' }, { open: true }],
+    edges: [{}, { open: true }, { mat: 'concrete', specBoost: 0.8 }, { open: true }],
     floor: { key: 'concrete', roughFactor: 0.45 } },
   { name: 'L1', fp: [[6.3, -11.6], [12.3, -11.6], [16.3, -11.6], [16.3, -5.3], [6.3, -5.3]], h: 3.6,
     edges: [{}, { open: true }, {}, {}, {}],
@@ -490,7 +490,11 @@ export function buildLevel() {
       if (toC < 0) { nx = -nx; nz = -nz; }
       const n = new THREE.Vector3(nx, 0, nz);
       const planeIndex = addPlane(n, -(nx * a[0] + nz * a[1]));
-      return { a, b, n, planeIndex, open: !!meta.open, mat: meta.mat || 'plaster', holes: [] };
+      // meta.specBoost lets a single edge override the wall clear-coat cheat
+      // (default 1.8) - the concrete pillar faces dial theirs down so they read
+      // as matte concrete, not clear-coated.
+      return { a, b, n, planeIndex, open: !!meta.open, mat: meta.mat || 'plaster',
+        specBoost: meta.specBoost, holes: [] };
     });
     // irradiance probe grid: uniform in the hull bbox (probes near walls get
     // clamped inward at bake time; interpolation coords stay bbox-uniform)
@@ -807,7 +811,8 @@ export function buildLevel() {
       // rooms); single-cell rooms keep the cheap zero-hop matte program.
       const wb = getBuilder(cell, edge.mat, {
         mapKey: edge.mat === 'concrete' ? 'concreteWall' : edge.mat,
-        specBoost: 1.8, matte: true, hopSpec: openPlan.has(cell.id), wall: true });
+        specBoost: edge.specBoost !== undefined ? edge.specBoost : 1.8,
+        matte: true, hopSpec: openPlan.has(cell.id), wall: true });
       const len = Math.hypot(edge.b[0] - edge.a[0], edge.b[1] - edge.a[1]);
       const h = cell.ceilY - cell.floorY;
       const u = [(edge.b[0] - edge.a[0]) / len, (edge.b[1] - edge.a[1]) / len];

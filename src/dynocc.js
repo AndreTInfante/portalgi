@@ -272,6 +272,12 @@ export class DynOccLayer {
           uGroup: { value: (m.material.uniforms && m.material.uniforms.uOccSelf)
             ? Math.max(0, m.material.uniforms.uOccSelf.value) : 0 },
         },
+        // DoubleSide matches the lightmap G-buffer (lightmap.js): a chart whose
+        // uv2 winds backward (e.g. the door-threshold floor strips, built by
+        // quad() vs the floors' polygon()) would otherwise be culled out of the
+        // dynamic-occlusion layer and receive no prop shadows, while its baked
+        // AO - rasterized double-sided - looks correct.
+        side: THREE.DoubleSide,
         depthTest: false, depthWrite: false,
       });
       const gm = new THREE.Mesh(m.geometry, mat);

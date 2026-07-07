@@ -117,12 +117,17 @@ export const MODEL_DEFS = [
   { slug: 'carved_wooden_elephant', size: 0.62, cell: 0, x: 2.5, z: -1.4, ped: true },
   { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -2.4, z: 24.7, ped: true },
   { slug: 'bronze_whale_statue', size: 1.15, cell: 11, x: 6.6, z: 22.5 },
-  { slug: 'ceiling_fan', size: 1.0, cell: 10, x: 1.8, z: 24, hangCeil: 4.0 },
+  // specBoost consumes the fan's KHR_materials_specular map, which our shader
+  // has no per-texel channel for: it's a near-uniform ~0.5 spec-intensity mask
+  // (mean 0.50, stddev 0.02), so the scalar is faithful. Without it the fan's
+  // dielectric parts render at full F0=0.04 and read too glossy.
+  { slug: 'ceiling_fan', size: 1.0, cell: 10, x: 1.8, z: 24, hangCeil: 4.0, specBoost: 0.5 },
   { slug: 'CoffeeCart_01', size: 1.4, cell: 10, x: -2.4, z: 25.6, rotY: Math.PI },
-  // chairs face the room center
-  { slug: 'BarberShopChair_01', size: 1.15, cell: 12, x: -9.3, z: 24.2, rotY: Math.PI * 0.75 },
-  { slug: 'mid_century_lounge_chair', size: 0.95, cell: 12, x: -4.8, z: 22.5, rotY: -Math.PI / 2 },
-  { slug: 'modern_arm_chair_01', size: 0.95, cell: 12, x: -9.3, z: 20.8, rotY: Math.PI / 4 },
+  // chairs face the room center; specBoost 0.8 trims 20% off their reflections
+  // (the ARM roughness reads glossier than upholstery/wood should on-device)
+  { slug: 'BarberShopChair_01', size: 1.15, cell: 12, x: -9.3, z: 24.2, rotY: Math.PI * 0.75, specBoost: 0.8 },
+  { slug: 'mid_century_lounge_chair', size: 0.95, cell: 12, x: -4.8, z: 22.5, rotY: -Math.PI / 2, specBoost: 0.8 },
+  { slug: 'modern_arm_chair_01', size: 0.95, cell: 12, x: -9.3, z: 20.8, rotY: Math.PI / 4, specBoost: 0.8 },
   { slug: 'ClassicConsole_01', size: 1.35, cell: 12, x: -7.1, z: 24.55 },
 ];
 
@@ -157,6 +162,7 @@ export async function loadModelProps(matsys, manager) {
           mode: 4,
           map: src.map, nrm: src.normalMap, orm: src.roughnessMap || src.metalnessMap,
           roughFactor: 1, metalFactor: 1,
+          specBoost: def.specBoost, // per-prop spec trim (fan KHR map / chair fudge); undefined -> 1
         });
         o.material = mat;
         mats.push(mat);

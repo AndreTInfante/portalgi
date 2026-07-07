@@ -107,7 +107,6 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
         return t;
       })(),
     },
-    uUseLightmap: { value: 0.0 },
     uMaxSteps: { value: 3 },
     uRoughHops: { value: 1.0 },
     uBlendOn: { value: 1.0 },
@@ -123,7 +122,6 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     uDistRough: { value: 1.0 },  // dimensionless: 1 = physical t*rough/d
                                  // angular-footprint growth (was 0.12/m,
                                  // which froze d at ~8m - see traceSpec)
-    uIrrBlend: { value: 3.0 },
     uBake: { value: 0.0 },
     uExposure: { value: 0.3 },
     uDebugMode: { value: 0 },
@@ -233,35 +231,16 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     mat.userData.hopSpec = hopSpec;
     mat.userData.noSpec = noSpec;
     mat.userData.spec0 = mat.uniforms.uSpecBoost.value; // setSpecular restore
-    // statics boot with the pre-lightmap fallback compiled in; setUseLightmap
-    // strips it (and its register pressure) once the lightmap exists
-    if (mode === 0 && !lightmapOn) mat.defines = { LM_FALLBACK: '' };
     allMaterials.push(mat);
     return mat;
-  }
-
-  // couples the lightmap uniform with the statics' LM_FALLBACK define: the
-  // fallback path (analytic lights + blendedIrr) only exists in the compiled
-  // program while it can actually be taken
-  let lightmapOn = false;
-  function setUseLightmap(on) {
-    if (on === lightmapOn) return;
-    lightmapOn = on;
-    globals.uUseLightmap.value = on ? 1.0 : 0.0;
-    for (const m of allMaterials) {
-      if (m.userData.mode !== 0) continue;
-      if (on) delete m.defines.LM_FALLBACK;
-      else (m.defines || (m.defines = {})).LM_FALLBACK = '';
-      m.needsUpdate = true;
-    }
   }
 
   // Props take NO analytic lights. Specular continuity across a cell handoff
   // is inherent (coincident portals + traversal); diffuse crossfades from the
   // previous cell's irradiance over ~0.2s (decayed each frame by the caller).
   // swap every material between shipping and debug-instrumented programs
-  // (same pattern as setUseLightmap: a rebuild hitch when toggling the GUI
-  // view is the price of debug-free shipping programs)
+  // (a rebuild hitch when toggling the GUI view is the price of debug-free
+  // shipping programs)
   function setDebugCompiled(on) {
     if (on === debugCompiled) return;
     debugCompiled = on;
@@ -297,7 +276,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
       if (m.uniforms.uSpecBoost) m.uniforms.uSpecBoost.value = on ? m.userData.spec0 : 0;
     }
   }
-  const sys = { globals, makeMaterial, setMaterialCell, setUseLightmap, setDebugCompiled,
+  const sys = { globals, makeMaterial, setMaterialCell, setDebugCompiled,
     setSpecular, specularOn: true, allMaterials, occ, texOcc };
   return sys;
 }

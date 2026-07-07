@@ -1,6 +1,6 @@
 # Perf Tier 2 - planning
 
-Tier 1 (shipped): blendedIrr gated behind the lightmap-off fallback,
+Tier 1 (shipped):
 rough>0.65 specular early-out (1 irradiance tap instead of the hull walk),
 FrontSide statics with normal-oriented winding, and recursive portal-frustum
 culling (NDC rect narrowing through portals; the graph is the PVS; all-visible

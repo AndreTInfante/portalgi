@@ -62,7 +62,11 @@ const SHOT_POSES = {
   17: { pos: [17.4, 1.6, -1.8], look: [21.5, 2.6, 1.6] },   // inside the courtyard (sky + sun)
   18: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.0, 22.5] },  // hall B spot-lit exhibits
   19: { pos: [13.6, 1.6, -12.6], look: [14.8, 1.25, -17.6] }, // L2 -> darkroom door (brown-stripe repro)
-  20: { pos: [11.7, 1.6, 4.2], look: [11.2, 1.2, 0] },        // pillar hall: debug pane grazing the pillar silhouette
+  20: { pos: [12.08, 1.6, 4.43], look: [11.3, 1.2, 0] },      // pillar-hall pane orbit: theta=10 (hallN)
+  21: { pos: [13.55, 1.6, 3.90], look: [11.3, 1.2, 0] },      // theta=30 (hallN, near boundary)
+  22: { pos: [14.75, 1.6, 2.89], look: [11.3, 1.2, 0] },      // theta=50 (hallE, crossed boundary)
+  23: { pos: [14, 1.6, 3.5], look: [11.3, 1.2, 0] },          // fixed cam; pane just N of the hallN/E boundary
+  24: { pos: [14, 1.6, 3.5], look: [11.3, 1.2, 0] },          // SAME cam; pane just S of it (cell flipped)
 };
 
 const overlay = document.getElementById('overlay');
@@ -179,15 +183,14 @@ async function boot() {
       ceilSpec: params.get('ceilspec') === '1',
       // ?occdynprop=999 restores uncapped prop-program dyn casters (A/B)
       occDynProp: params.has('occdynprop') ? parseInt(params.get('occdynprop')) : 4 });
-  const useLightmap = BAKE || params.get('lm') !== '0';
-  const lightmapper = useLightmap ? new Lightmapper(renderer, level, textures, {
+  const lightmapper = new Lightmapper(renderer, level, textures, {
     rays: lmSettings.lmrays, iterations: lmSettings.lmit,
     panelSamples: lmSettings.lmps, finalPasses: lmSettings.lmfp,
-  }) : null;
+  });
   // per-light probe visibility for prop spot direct (lightvis.js): CPU rays
-  // against the lightmapper's BVH at boot. Without it (?lm=0 debug boots)
-  // visibility stays all-1 (the pre-vis behavior). ?lvis=0 disables for A/B.
-  if (lightmapper && params.get('lvis') !== '0') {
+  // against the lightmapper's BVH at boot. ?lvis=0 disables for A/B (leaving
+  // visibility all-1, the pre-vis behavior).
+  if (params.get('lvis') !== '0') {
     matsys.globals.uLightVis.value = buildLightVisTexture(level, lightmapper.bvh);
     if (params.get('lvis') === 'black') { // positive control: every prop
       const t = matsys.globals.uLightVis.value; // spot must go dark
@@ -207,7 +210,6 @@ async function boot() {
     matsys.globals.uDebugMode.value = parseInt(params.get('debug'));
     matsys.setDebugCompiled(parseInt(params.get('debug')) > 0);
   }
-  if (params.has('irr')) matsys.globals.uIrrBlend.value = parseFloat(params.get('irr'));
 
   const manager = new THREE.LoadingManager();
   const paintingTexs = loadPaintingTextures(manager);
@@ -505,7 +507,7 @@ void main() {
   window.__setFbScale = v => renderer.xr.setFramebufferScaleFactor(v);
   const perf = new PerfHarness(scene); // GPU headroom probe (docs/unified-occluders.md)
   perf.attachGpuTimer(renderer); // real GPU ms where the browser exposes timer queries
-  const state = { bounces: useLightmap ? 1 : 3, baking: false };
+  const state = { bounces: 1, baking: false };
   const gui = buildGUI(matsys, state, wires, () => rebake(), () => relight(), culler, onStaticImposters, perf, audio, physWires);
   if (isTouchDevice()) gui.close(); // phones: collapsed to the title bar by default
 
@@ -534,8 +536,6 @@ void main() {
           if (p) props.grab(p);
         }
       }
-      if (e.code === 'KeyB' && !state.baking) rebake();
-      if (e.code === 'KeyL' && !state.baking) relight();
     });
     document.addEventListener('keyup', e => {
       if (e.code !== 'KeyE' || !eRot.down) return;
@@ -613,7 +613,7 @@ void main() {
 
   // path-trace the lightmap, then rebuild the cubemap cache from it
   function relight() {
-    if (!lightmapper || state.baking) return Promise.resolve();
+    if (state.baking) return Promise.resolve();
     state.baking = true;
     overlay.classList.remove('hidden');
     overlayMsg.textContent = 'Path tracing lightmap...';
@@ -646,7 +646,6 @@ void main() {
         }
         if (steps.next().done) {
           matsys.globals.uLightmap.value = lightmapper.texture;
-          matsys.setUseLightmap(true);
           state.baking = false;
           resolve(rebake());
           return;
@@ -677,7 +676,6 @@ void main() {
     overlayMsg.textContent = 'Re-cube: loading master lightmap...';
     const lmTex = await loadHalfTexture('./baked/lightmap.bin', manifest.lightmap.w, manifest.lightmap.h, true);
     matsys.globals.uLightmap.value = lmTex;
-    matsys.setUseLightmap(true);
     await rebake(); // cubemaps only, scene lit by the loaded lightmap
     const mb = await saveAtlasOnly(renderer, baker.atlasA, manifest);
     overlayMsg.textContent = `Atlas re-cubed (${mb.toFixed(1)} MB) at ${baker.atlasA.width}x${baker.atlasA.height}`;
@@ -700,7 +698,6 @@ void main() {
       ]);
       matsys.globals.uAtlas.value = atlasTex;
       matsys.globals.uLightmap.value = lmTex;
-      matsys.setUseLightmap(true);
       usedBaked = true;
     } catch (e) {
       errEl.textContent += `baked load failed (${e.message}); baking live\n`;
@@ -714,10 +711,7 @@ void main() {
       }
     }
   }
-  if (!usedBaked) {
-    if (lightmapper) await relight();
-    else await rebake();
-  }
+  if (!usedBaked) await relight();
 
   // pre-warm the wall-LOD twin programs so the first distance-demote mid-view
   // doesn't hitch on a shader compile (all twins share ~2 programs)
@@ -747,14 +741,22 @@ void main() {
     const pose = SHOT_POSES[SHOT] || SHOT_POSES[1];
     camera.position.set(...pose.pos);
     camera.lookAt(...pose.look);
-    if (SHOT === 7 || SHOT === 12 || SHOT === 20) { // pose the debug pane as if held up in front of the camera
+    if (SHOT === 7 || SHOT === 12 || SHOT >= 20) { // pose the debug pane as if held up in front of the camera
       const pane = props.list.find(p => p.debugPane);
       if (SHOT === 7) pane.mesh.position.set(1.2, 1.35, -1.2);
-      else if (SHOT === 20) pane.mesh.position.set(11.55, 1.4, 2.2);
+      else if (SHOT === 20) pane.mesh.position.set(11.73, 1.4, 2.46);
+      else if (SHOT === 21) pane.mesh.position.set(12.55, 1.4, 2.17);
+      else if (SHOT === 22) pane.mesh.position.set(13.22, 1.4, 1.61);
+      else if (SHOT === 23) pane.mesh.position.set(12.3, 1.4, 1.15);
+      else if (SHOT === 24) pane.mesh.position.set(12.3, 1.4, 0.85);
       else pane.mesh.position.set(0, 1.4, 12.4);
       pane.mesh.lookAt(camera.position);
     }
     props.update(0.016, player);
+    if (params.has('panecell')) { // force the pane's start cell to isolate the per-cell cubemap pop
+      const pn = props.list.find(p => p.debugPane);
+      pn.mats.forEach(m => { m.uniforms.uCell.value = parseInt(params.get('panecell')); });
+    }
     updateWallLod(camera.position); // shots reflect the same wall LOD as the loop
     if (occluders) occluders.update();
     updateDynOcc();
@@ -1009,8 +1011,6 @@ void main() {
               g.uDebugMode.value = wrap(g.uDebugMode.value, 7, d);
               matsys.setDebugCompiled(g.uDebugMode.value > 0); // rebuild hitch, expected
             } },
-          mkToggle('lightmap', () => g.uUseLightmap.value > 0.5,
-            on => matsys.setUseLightmap(on)),
           mkToggle('dyn shadows', () => g.uOccShadow.value > 0.001,
             on => { g.uOccShadow.value = on ? 0.85 : 0; }),
           { name: 'portal hops (glass)', value: () => String(g.uMaxSteps.value),

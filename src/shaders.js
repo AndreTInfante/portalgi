@@ -512,41 +512,6 @@ ${useUbo ? /* glsl */`
 }
 
 ${'' /* warp fields: traceSpecW is appended by warpGlsl() below (separate chunk) */}
-uniform float uIrrBlend;   // meters; 0 disables cross-portal diffuse blending
-
-// Diffuse continuity across portals: each cell captures irradiance from its own
-// center, so adjacent cells disagree slightly at a shared boundary and the cut
-// shows as a seam. Near a portal, blend toward the neighbor's irradiance.
-// The neighbor weight must reach 1.0 (not 0.5) at the plane: normalized, that
-// is a true 50/50, identical no matter which side shades the point - C0 in
-// space for static seams AND in time when a prop's cell assignment flips.
-// (A 0.5 weight normalizes to 2/3 self + 1/3 neighbor, which pops by
-// (A-B)/3 at the flip - the classic asymmetric-blend mistake.)
-vec3 blendedIrr(int cell, vec3 P, vec3 N) {
-  vec3 acc = sampleIrr(cell, N);
-  if (uIrrBlend < 0.001) return acc;
-  float wsum = 1.0;
-  int poc = int(hfetch(cell, 1).x);
-  for (int p = 0; p < 4; p++) {
-    if (p >= poc) break;
-    int base = ${PORTALS_OFF} + p * ${PORTAL_STRIDE};
-    vec4 ph = hfetch(cell, base);
-    vec4 pl = hfetch(cell, ${PLANES_OFF} + int(ph.x));
-    float planeD = max(dot(pl.xyz, P) + pl.w, 0.0);   // distance to the portal plane
-    float lateralD = 1e8;                              // signed distance into the portal prism
-    for (int e = 0; e < 4; e++) {
-      vec4 ep = hfetch(cell, base + 1 + e);
-      lateralD = min(lateralD, dot(ep.xyz, P) + ep.w);
-    }
-    float f = clamp(1.0 - planeD / uIrrBlend, 0.0, 1.0)
-            * clamp(1.0 + lateralD / uIrrBlend, 0.0, 1.0);
-    if (f > 0.001) {
-      acc += f * sampleIrr(int(ph.y), N);
-      wsum += f;
-    }
-  }
-  return acc / wsum;
-}
 `;
 
 // ---------------------------------------------------------------- one hop
@@ -1042,8 +1007,7 @@ void main() {
 // the uber-shader ran every pixel at worst-case register pressure (52% wave
 // occupancy measured on-device) for code paths it could never take. Unused
 // helper functions are stripped by the GLSL compiler once the CALLS are
-// template-removed. Statics compile their pre-lightmap fallback only under
-// the LM_FALLBACK define (materials toggle it with the lightmap state).
+// template-removed.
 // matte: guaranteed-rough statics (min roughness x factor > 0.65 across the
 // whole ORM set) ALWAYS take the irradiance early-out, so their program
 // compiles with no traversal at all. Register allocation is static per
@@ -1110,7 +1074,6 @@ uniform MP float uLodFade; // wall LOD: fades surface spec to 0 approaching the
                            // is seamless (1 everywhere else)
 uniform MP sampler2D uLightmap;
 ${texOcc && STATIC ? '// texture-space occlusion layer over the lightmap UVs (dynocc.js)\nuniform MP sampler2D uDynOcc;' : ''}
-uniform float uUseLightmap;
 uniform int uCell;
 uniform int uCellPrev;    // previous cell during a diffuse handoff crossfade (-1 = none)
 uniform float uPrevMix;   // crossfade weight of the previous cell, decays over ~0.2s
@@ -1138,18 +1101,6 @@ ${HOP1 ? HOP1_GLSL : ''}
 ${TONEMAP_GLSL}
 ${PROBE_GLSL}
 
-vec3 directLight(vec3 P, vec3 N) {
-  vec3 sum = vec3(0.0);
-  for (int i = 0; i < 8; i++) {
-    if (i >= uLightCount) break;
-    vec3 L = uLightPos[i] - P;
-    float d2 = dot(L, L);
-    L *= inversesqrt(d2);
-    sum += uLightColor[i] * (max(dot(N, L), 0.0) / max(d2, 0.05)); // true inverse-square
-  }
-  return sum;
-}
-
 // Karis' analytic environment BRDF approximation (mobile split-sum)
 MP vec3 envBRDF(MP vec3 F0, MP float rough, MP float NoV) {
   const MP vec4 c0 = vec4(-1.0, -0.0275, -0.572, 0.022);
@@ -1168,8 +1119,8 @@ ${noSpec ? /* glsl */`
   // diffuse-only fill (hard-diffuse ceilings): the specular chain is compiled
   // out, so the view vector, the uNrmMap fetch, and the tangent frame are all
   // dead work. The flat lightmap is non-directional (vUv2) and texture-space
-  // AO also reads vUv2; N is only touched by the capsule-AO fallback / boot
-  // LM_FALLBACK, where the geometric normal is fine. Pure texture fill.
+  // AO also reads vUv2; N is only touched by the capsule-AO fallback, where
+  // the geometric normal is fine. Pure texture fill.
   vec3 N = Ng;` : /* glsl */`
   vec3 V = normalize(cameraPosition - P);
 
@@ -1250,14 +1201,7 @@ ${PROP ? /* glsl */`
     diffuseL += uLightColor[li] * (spot * ndl * vis / max(ld2, 0.05));
   }
 ` : /* glsl */`
-#ifdef LM_FALLBACK
-  // pre-lightmap boot / lightmap-off debug: analytic lights + cross-portal
-  // blended irradiance (compiled in only while actually needed - it is ~25
-  // fetches of register pressure otherwise)
-  diffuseL = directLight(P, N) + blendedIrr(uCell, P, N);
-#else
   diffuseL = texture(uLightmap, vUv2).rgb;
-#endif
 `}
 ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
   : texOcc && STATIC ? /* glsl */`

@@ -119,17 +119,15 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
     get blendBase() { return g.uBlendBase.value; }, set blendBase(v) { g.uBlendBase.value = v; },
     get blendRough() { return g.uBlendRough.value; }, set blendRough(v) { g.uBlendRough.value = v; },
     get distRough() { return g.uDistRough.value; }, set distRough(v) { g.uDistRough.value = v; },
-    get irrBlend() { return g.uIrrBlend.value; }, set irrBlend(v) { g.uIrrBlend.value = v; },
     get exposure() { return Math.log2(g.uExposure.value); }, set exposure(v) { g.uExposure.value = Math.pow(2, v); },
     get view() { return g.uDebugMode.value; },
     set view(v) {
       g.uDebugMode.value = v;
       // debug views live in separate programs (step accumulator = register
-      // pressure); swapping causes a one-off rebuild hitch, like 'use lightmap'
+      // pressure); swapping causes a one-off rebuild hitch
       if (matsys.setDebugCompiled) matsys.setDebugCompiled(v > 0);
     },
     get portals() { return wires.visible; }, set portals(v) { wires.visible = v; },
-    get lightmap() { return g.uUseLightmap.value > 0.5; }, set lightmap(v) { matsys.setUseLightmap(v); },
   };
   const f1 = gui.addFolder('Traversal');
   // floors/props run ONE unrolled hop (hop1); these two only steer the full
@@ -140,9 +138,6 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   f1.add(proxy, 'blendBase', 0, 0.4, 0.01).name('blend width base (m)');
   f1.add(proxy, 'blendRough', 0, 3, 0.05).name('portal de-aliasing bias');
   f1.add(proxy, 'distRough', 0, 2, 0.05).name('rough growth (1=physical)');
-  // blendedIrr is compiled into the static program only in lightmap-off
-  // fallback mode (shader variants); this dial is inert during normal play
-  f1.add(proxy, 'irrBlend', 0, 6, 0.05).name('irr blend (lm-off only)');
   const f2 = gui.addFolder('Display');
   f2.add(proxy, 'exposure', -5, 2, 0.1).name('exposure (EV)');
   f2.add(proxy, 'view', { None: 0, 'Cell tint': 1, 'Step heatmap': 2, 'Irradiance only': 3, 'White world': 4, Lightmap: 5, 'Specular only (8x)': 6 });
@@ -221,7 +216,6 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   }
   if (DEV) {
     const f3 = gui.addFolder('Bake');
-    f3.add(proxy, 'lightmap').name('use lightmap');
     f3.add(state, 'bounces', 1, 3, 1);
     if (onRelight) f3.add({ relight: onRelight }, 'relight').name('re-trace lightmap (L)');
     f3.add({ rebake: onRebake }, 'rebake').name('re-bake cubemaps (B)');

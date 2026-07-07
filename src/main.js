@@ -1,4 +1,4 @@
-// PortalGI POC entry point.
+// PortalIBL POC entry point.
 // Boot order: manifest probe (baked artifacts?) -> level/hull -> baker ->
 // materials -> meshes/props/player -> lighting (load baked OR path-trace +
 // capture) -> loop. `?bake=1` runs a high-quality bake and PUTs the textures
@@ -51,7 +51,7 @@ const SHOT_POSES = {
   9: { pos: [0, 1.7, 19.2], look: [-0.9, 1.2, 23.5] },     // exhibit hall A: PBR models
   10: { pos: [4.4, 1.7, 22.5], look: [7.5, 1.2, 22.5] },   // cornell box
   11: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.1, 22.5] }, // exhibit hall B
-  // seam-artifact investigation close-ups (cell-boundary seams)
+  // cell-boundary seam close-ups
   13: { pos: [10.6, 1.5, -9.4], look: [12.3, 1.2, -11.6] }, // L-bend convex corner
   14: { pos: [14.3, 1.7, -8.8], look: [14.3, 0.0, -12.6] }, // L1/L2 floor seam (virtual portal)
   15: { pos: [0, 1.6, 2.4], look: [0, -0.2, 4.3] },         // gallery->corridor doorway floor strip
@@ -59,7 +59,7 @@ const SHOT_POSES = {
   16: { pos: [13.2, 1.6, 0], look: [17.5, 1.3, 0] },        // pillar hall -> courtyard door (sun pool)
   17: { pos: [17.4, 1.6, -1.8], look: [21.5, 2.6, 1.6] },   // inside the courtyard (sky + sun)
   18: { pos: [-4.4, 1.6, 22.5], look: [-8.5, 1.0, 22.5] },  // hall B spot-lit exhibits
-  19: { pos: [13.6, 1.6, -12.6], look: [14.8, 1.25, -17.6] }, // L2 -> darkroom door (brown-stripe repro)
+  19: { pos: [13.6, 1.6, -12.6], look: [14.8, 1.25, -17.6] }, // L2 -> darkroom door
 };
 
 const overlay = document.getElementById('overlay');
@@ -134,8 +134,8 @@ async function boot() {
   };
 
   const textures = buildTextures();
-  // Poly Haven photo sets replace the procedural ones (?realtex=0 to compare);
-  // on fetch failure the procedural fallback just stays in place
+  // Poly Haven photo sets replace the procedural ones (?realtex=0 keeps the
+  // procedural set); on fetch failure the procedural fallback stays in place
   if (params.get('realtex') !== '0') {
     overlayMsg.textContent = 'Loading textures...';
     try { await applyRealTextures(textures); }
@@ -145,54 +145,55 @@ async function boot() {
   await addStaticModels(level); // static exhibits join the builders BEFORE chart packing
   packLightmapCharts(level, lmSettings.lmden, lmSettings.lmw);
   const hullTex = buildHullTexture(level.cells);
-  // portal warp fields: OFF after the in-headset verdict (2026-07-05).
-  // The field cannot resolve geometry silhouettes BEYOND the portal (the
-  // hall pillar) at feasible angular resolution: behind-pillar reflections
-  // wobbled (t lerped across 5.6-degree bins) and hard seams appeared at
-  // every bin crossing (the tap-consensus reference id flips where bins
-  // disagree). The analytic per-pixel walk is exactly what makes those
-  // reflections stable - it stays. ?warp=1 re-enables the experiment.
+  // ?warp=1 enables portal warp fields (default off). A warp field cannot
+  // resolve geometry silhouettes BEYOND the portal (e.g. the hall pillar)
+  // at feasible angular resolution: behind-pillar reflections wobble as t
+  // lerps across ~5.6-degree bins, and hard seams appear at every bin
+  // crossing where the tap-consensus reference id flips. The analytic
+  // per-pixel walk keeps those reflections stable, so it is the default.
   const warp = params.get('warp') === '1' ? buildWarpField(renderer, level, hullTex) : null;
   const baker = new Baker(renderer, level, hullTex);
-  // ?fp16=0: compile everything highp (A/B for the mediump experiment -
-  // desktop ignores mediump entirely, so only the headset can judge it)
+  // ?fp16=0 compiles everything highp; the default runs mediump on the
+  // shader surfaces where it is numerically safe. Desktop GPUs ignore
+  // mediump, so only the headset shows a difference.
   const matsys = createMaterialSystem(level, textures, hullTex, baker.texture,
     // ?texocc=0: statics compile the analytic capsule loops instead of the
-    // texture-space occlusion tap (A/B + escape hatch, like fp16).
+    // texture-space occlusion tap.
     // ?hop1=0: floors/props compile the full march instead of the unrolled
-    // single hop (A/B; hop1 should be pixel-identical to ?hop1=0&steps=1)
+    // single hop (hop1 is pixel-identical to ?hop1=0&steps=1)
     { fp16: params.get('fp16') !== '0', texOcc: params.get('texocc') !== '0',
       hop1: params.get('hop1') !== '0', warp,
-      // ?pvd=0: prop diffuse (probes/AO/shadows) back to per-pixel (A/B)
+      // ?pvd=0: prop diffuse (probes/AO/shadows) computed per-pixel
       pvd: params.get('pvd') !== '0',
       // ?mattespec: 1 = tiered (default: one-hop only on open-plan
       // walls/ceilings that straddle cuts, zero-hop elsewhere),
-      // 3 = one-hop on ALL matte (tiering perf A/B), 2 = zero-hop
-      // everywhere (seams at cuts), 0 = flat irradiance
+      // 3 = one-hop on ALL matte, 2 = zero-hop everywhere (seams
+      // at cuts), 0 = flat irradiance
       matteSpec: params.has('mattespec') ? (parseInt(params.get('mattespec')) || 0) : 1,
-      // ?ceilspec=1 restores satin PCCM ceilings (default: ceilings are
-      // HARD diffuse, spec block compiled out - the 90Hz budget trade,
-      // walls keep satin; irradiance-tap demotion still seamed at cuts)
+      // ?ceilspec=1 enables satin PCCM ceilings; by default ceilings are
+      // HARD diffuse with the spec block compiled out (walls keep satin).
+      // The cheaper irradiance-tap demotion seams at cuts, so spec is
+      // dropped entirely instead.
       ceilSpec: params.get('ceilspec') === '1',
-      // ?occdynprop=999 restores uncapped prop-program dyn casters (A/B)
+      // ?occdynprop=N caps prop-program dyn casters (default 4; 999 = uncapped)
       occDynProp: params.has('occdynprop') ? parseInt(params.get('occdynprop')) : 4 });
   const lightmapper = new Lightmapper(renderer, level, textures, {
     rays: lmSettings.lmrays, iterations: lmSettings.lmit,
     panelSamples: lmSettings.lmps, finalPasses: lmSettings.lmfp,
   });
   // per-light probe visibility for prop spot direct (lightvis.js): CPU rays
-  // against the lightmapper's BVH at boot. ?lvis=0 disables for A/B (leaving
-  // visibility all-1, the pre-vis behavior).
+  // against the lightmapper's BVH at boot. ?lvis=0 disables it (visibility
+  // stays all-1).
   if (params.get('lvis') !== '0') {
     matsys.globals.uLightVis.value = buildLightVisTexture(level, lightmapper.bvh);
-    if (params.get('lvis') === 'black') { // positive control: every prop
-      const t = matsys.globals.uLightVis.value; // spot must go dark
+    if (params.get('lvis') === 'black') { // ?lvis=black zeroes visibility so
+      const t = matsys.globals.uLightVis.value; // every prop spot goes dark
       t.image.data.fill(0);
       t.needsUpdate = true;
     }
   }
 
-  // optional URL overrides for comparison screenshots
+  // optional URL overrides for tuning uniforms
   if (params.has('steps')) matsys.globals.uMaxSteps.value = parseInt(params.get('steps'));
   if (params.has('rhops')) matsys.globals.uRoughHops.value = parseFloat(params.get('rhops'));
   if (params.has('occd')) matsys.globals.uOccDensity.value = parseFloat(params.get('occd'));
@@ -225,7 +226,7 @@ async function boot() {
     m.userData.lodFar = false;
   }
   const updateWallLod = pos => {
-    if (!lodState.on) { // live A/B: restore every wall to the full program
+    if (!lodState.on) { // LOD off: restore every wall to the full program
       for (const m of lodWalls) {
         if (m.userData.lodFar || m.material.uniforms.uLodFade.value !== 1) {
           m.material = m.userData.lodFull;
@@ -256,8 +257,8 @@ async function boot() {
   // it) and in the player's view. Illumination comes from the analytic sun
   // point + the sky NEE panel instead. The material speaks the scene's HDR
   // convention: capture pass (uBake) writes linear radiance at uGain x the
-  // LDR jpg (an LDR dome capped reflections at 1.0 - sky read dim vs lit
-  // plaster at ~3+), display pass tonemaps with the shared exposure.
+  // LDR jpg (without the gain the dome caps reflections at 1.0 and reads dim
+  // vs lit plaster at ~3+), display pass tonemaps with the shared exposure.
   let dome = null;
   {
     const skyTex = new THREE.TextureLoader(manager)
@@ -288,9 +289,9 @@ void main() {
 }`,
       }));
     dome.position.set(19.6, 0, 0); // centered on the courtyard
-    // 0.0 aligns the HDRI's sun (u = 0.601 in the equirect, measured) with
-    // the analytic sun's azimuth: az = pi - 2*pi*u + rot for three's sphere
-    // UV mapping, solved for atan2(-10, 13.4). ?skyrot= still overrides.
+    // 0.0 aligns the HDRI's sun (u = 0.601 in the equirect) with the
+    // analytic sun's azimuth: az = pi - 2*pi*u + rot for three's sphere
+    // UV mapping, solved for atan2(-10, 13.4). ?skyrot= overrides.
     dome.rotation.y = params.has('skyrot') ? parseFloat(params.get('skyrot')) : 0.0;
     scene.add(dome);
   }
@@ -329,12 +330,12 @@ void main() {
     if (isTouchDevice()) new TouchControls(player, props, camera, renderer.domElement);
   }
   const wires = buildPortalWires(scene, level);
-  if (typeof location !== 'undefined' && location.search.includes('showportals')) wires.visible = true; // TEMP debug
+  if (typeof location !== 'undefined' && location.search.includes('showportals')) wires.visible = true; // ?showportals draws portal wires
   const staticModelMeshes = staticGroup.children.filter(mm => mm.name.includes(':smodel'));
   // everything with capsule proxies (statues AND furniture) is OUT of the
   // cubemap captures by default: one representation per object (capsules in
   // reflections, capsule AO in diffuse, lightmap receive-only).
-  // ?si=0 re-includes them for A/B.
+  // ?si=0 re-includes them.
   const proxiedStaticMeshes = staticGroup.children.filter(
     mm => mm.name.includes(':smodel') || mm.name.endsWith(':furniture'));
   if (params.get('si') !== '0') {
@@ -372,12 +373,12 @@ void main() {
         ], cellId, walnutAvg, walnutMat(cellId));
       } else {
         // pedestal: a single stretched vertical capsule (top ends at h so
-        // props resting on it start outside). Radius x1.2 (Andre 2026-07-04:
-        // x1.1, tight fit read too thin in reflections; +10% 2026-07-06).
-        // Bottom sphere center sunk BELOW the floor: the hemispherical cap
-        // used to taper right at ground level (~0.44r wide at y=0), leaving
-        // the contact shadow/AO detached from the base (peter panning) -
-        // clipped in, the full-width cross-section lines up with the base.
+        // props resting on it start outside). Radius x1.2: a tight fit reads
+        // too thin in reflections. Bottom sphere center sunk BELOW the floor
+        // so the hemispherical cap does not taper at ground level (~0.44r
+        // wide at y=0), which would detach the contact shadow/AO from the
+        // base (peter-panning); clipped in, the full-width cross-section
+        // lines up with the base.
         const r = cc.rx * 1.2;
         occluders.addPiece([
           [[cc.x, -0.08, cc.z], [cc.x, cc.h - r, cc.z], r],
@@ -392,14 +393,13 @@ void main() {
   // (constructed here, AFTER every static occluder group id is assigned);
   // props re-splat per frame - but only when one actually moved. The dials
   // stay live for the dyn layer; base-layer dial changes need a reload.
-  // layer density divisor vs the lightmap: half-res verified fine on Quest
-  // (Andre 2026-07-05) - Quest/mobile take 2, PC takes FULL res (1).
-  // ?dynres= overrides for A/B.
+  // layer density divisor vs the lightmap: Quest/mobile take half-res (2),
+  // PC takes FULL res (1). ?dynres= overrides.
   const dynDiv = params.has('dynres') ? parseInt(params.get('dynres'))
     : (navigator.userAgent.includes('OculusBrowser') || isTouchDevice()) ? 2 : 1;
   // splat penumbra floor ~ 1.5 LAYER texels (scales with the divisor):
   // shadows narrower than a texel dim out instead of aliasing.
-  // ?pensoft= overrides (meters; 0 = the old hard-edged splat).
+  // ?pensoft= overrides (meters; 0 = hard-edged splat).
   const penSoft = params.has('pensoft')
     ? parseFloat(params.get('pensoft')) : 1.5 * dynDiv / lmSettings.lmden;
   const occDialsObj = { ao: 0, aoClamp: 0, shadow: 0, penSoft };
@@ -415,9 +415,9 @@ void main() {
     dynOcc.bakeBase(occluders.statics, occDials());
     matsys.globals.uDynOcc.value = dynOcc.texture;
   }
-  // agent C: ONE shadow direction per CASTER - the luminance/d2-weighted
-  // average of its cell's lights AT the prop (the same weighting the shader's
-  // capsuleShadow ran per receiver pixel). Following the caster instead of
+  // ONE shadow direction per CASTER: the luminance/d2-weighted average of
+  // its cell's lights AT the prop (the same weighting the shader's
+  // capsuleShadow runs per receiver pixel). Following the caster instead of
   // the receiver's cell also removes the direction snap at portal crossings.
   const _sdAcc = new THREE.Vector3(), _sdL = new THREE.Vector3(), _sdAxis = new THREE.Vector3();
   const _sdRaw = new THREE.Vector4();
@@ -448,9 +448,9 @@ void main() {
       _sdRaw.set(_sdAcc.x / len, _sdAcc.y / len, _sdAcc.z / len, Math.min(len, 3));
     }
     // crossfade toward the fresh direction: a prop crossing a portal swaps
-    // its light list and the caster-anchored direction SNAPPED the shadow
-    // (Andre-caught, 2026-07-05). ~0.25s exponential settle, exact snap at
-    // the end so the dynocc change-detector can put the splat back to sleep.
+    // its light list, and the caster-anchored direction would otherwise snap
+    // the shadow. ~0.25s exponential settle, exact snap at the end so the
+    // dynocc change-detector can put the splat back to sleep.
     const sd = e.shadowDir || (e.shadowDir = new THREE.Vector4().copy(_sdRaw));
     sd.lerp(_sdRaw, alpha);
     const dx = sd.x - _sdRaw.x, dy = sd.y - _sdRaw.y, dz = sd.z - _sdRaw.z;
@@ -475,16 +475,16 @@ void main() {
   };
   if (params.has('occluders')) matsys.globals.uOccOn.value = parseFloat(params.get('occluders'));
   if (params.has('occsh')) matsys.globals.uOccShadow.value = parseFloat(params.get('occsh'));
-  // dyn-effects budgets by platform (Andre-tuned): Quest is the tightest
-  // (locked 72 at 9/9), phones hold 60 with headroom, PC is unconstrained.
-  // ?occbudget= / ?occrange= pin values for A/B and skip the auto switch.
+  // dyn-effects budgets by platform: Quest is the tightest (locked 72 at
+  // 9/9), phones hold 60 with headroom, PC is unconstrained. ?occbudget= /
+  // ?occrange= pin values and skip the auto switch.
   const applyDynBudget = () => {
     const g = matsys.globals;
     if (params.has('occbudget')) g.uOccBudget.value = parseFloat(params.get('occbudget'));
     if (params.has('occrange')) g.uOccRange.value = parseFloat(params.get('occrange'));
     if (params.has('occbudget') || params.has('occrange')) return;
-    // Quest range 12 (was 9): the shadow reach pre-reject + pack-time budget
-    // made distant receivers nearly free, so the fade can sit farther out
+    // Quest range 12: the shadow-reach pre-reject + pack-time budget make
+    // distant receivers nearly free, so the fade can sit farther out
     if (renderer.xr.isPresenting) { g.uOccBudget.value = 9; g.uOccRange.value = 12; }
     else if (isTouchDevice()) { g.uOccBudget.value = 16; g.uOccRange.value = 12; }
     else { g.uOccBudget.value = 32; g.uOccRange.value = 100; }
@@ -492,10 +492,10 @@ void main() {
   applyDynBudget();
   renderer.xr.addEventListener('sessionstart', applyDynBudget);
   renderer.xr.addEventListener('sessionend', applyDynBudget);
-  // eye-buffer scale 0.9: shipping at locked 72Hz (Andre 2026-07-06) instead
-  // of 90 - 90 needed ~70% res to hold the last hot view, too soft. At 72 the
-  // GPU has headroom for 0.9 (near-native). Foveation still trims periphery.
-  // Applies at session START - re-enter VR after changing the GUI slider.
+  // eye-buffer scale 0.9 at a locked 72Hz: 90Hz needs ~70% res to hold the
+  // hottest view (too soft), while 72Hz leaves GPU headroom for 0.9
+  // (near-native). Foveation still trims periphery. Applies at session
+  // START - re-enter VR after changing the GUI slider.
   renderer.xr.setFramebufferScaleFactor(
     params.has('fbscale') ? parseFloat(params.get('fbscale')) : 0.9);
   window.__setFbScale = v => renderer.xr.setFramebufferScaleFactor(v);
@@ -565,15 +565,15 @@ void main() {
     overlay.classList.remove('hidden');
     overlayMsg.textContent = 'Baking hull cubemaps...';
     // fence-paced like relight(): at most one tick's worth of capture work
-    // in flight (the old BAKE-mode budget of Infinity issued EVERY capture
-    // in one JS turn - same queue-flood hazard, smaller draws)
+    // in flight, so a single JS turn cannot flood the GPU queue with
+    // captures
     const gl = renderer.getContext();
     let fence = null;
     return new Promise(resolve => {
       const tick = () => {
         // a dead GL context no-ops every call: the generator would sprint
-        // to the end and "finish" a black bake (Andre's master-bake run).
-        // Stop loudly instead - there is nothing sane to resume.
+        // to the end and "finish" a black bake. Stop loudly instead - there
+        // is nothing sane to resume.
         if (glLost) {
           overlayMsg.textContent = 'GPU CONTEXT LOST - bake aborted';
           overlaySub.textContent = 'lower lmrays / lmps and reload the page';
@@ -615,12 +615,12 @@ void main() {
     let done = 0;
     const total = lightmapper.totalSteps();
     // GPU FENCE PACING: the bake never touches the canvas, so nothing
-    // backpressures rAF - the driver was ENQUEUEING strips at 60/s while
-    // the GPU executed ~2/s. Minutes of queued work froze the whole
-    // desktop's graphics and Chrome's GPU watchdog killed the process
-    // (the master-bake context losses; progress was counting submissions,
-    // not completions). One in-flight strip at a time: browser stays
-    // interactive, the watchdog stays happy, progress becomes real.
+    // backpressures rAF. Without a fence the driver enqueues strips at 60/s
+    // while the GPU executes ~2/s; minutes of queued work freeze the
+    // desktop's graphics and Chrome's GPU watchdog kills the process (and
+    // progress counts submissions, not completions). One in-flight strip at
+    // a time keeps the browser interactive, the watchdog happy, and progress
+    // real.
     const gl = renderer.getContext();
     let fence = null;
     return new Promise(resolve => {
@@ -768,11 +768,11 @@ void main() {
   let xrCarrier = null; // carrier driving the held prop in VR (see props.update)
   const tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion(), headPos = new THREE.Vector3();
   // controller world velocity: PEAK windowed estimate, not the full-window
-  // average. A throw accelerates into release and the hand starts braking at
-  // the exact release moment - averaging first-to-last over 120ms diluted
-  // the peak with the wind-up AND the brake, so throws felt weak
-  // (Andre, 2026-07-05). Try every sub-window ending at the newest sample
-  // (span >= 25ms for noise) and keep the fastest.
+  // average. A throw accelerates into release and the hand brakes at the
+  // release moment, so averaging first-to-last over 120ms dilutes the peak
+  // with both the wind-up and the brake and throws feel weak. Try every
+  // sub-window ending at the newest sample (span >= 25ms for noise) and
+  // keep the fastest.
   const ctrlVel = c => {
     const h = c && c.userData.hist;
     if (!h || h.length < 2) return new THREE.Vector3();
@@ -835,10 +835,10 @@ void main() {
       mode: 'attach',
     };
   };
-  // in-VR frame-rate cap toggle (A/X button on either controller)
-  // ship at LOCKED 72Hz (Andre 2026-07-06: 90 needed ~70% res to hold the
-  // last hot view = an unacceptable sharpness hit; 72 is rock-solid at 0.9
-  // res). A/X still toggles up to 90 for anyone who wants to try it.
+  // in-VR frame-rate cap toggle (A/X button on either controller).
+  // Default locked 72Hz: 90Hz needs ~70% res to hold the hottest view (an
+  // unacceptable sharpness hit), while 72 is rock-solid at 0.9 res. A/X
+  // still toggles up to 90.
   const rateState = { target: 72, ready: true };
   const rateCanvas = document.createElement('canvas');
   rateCanvas.width = 128; rateCanvas.height = 64;
@@ -862,7 +862,7 @@ void main() {
   }
   if (navigator.xr) renderer.xr.addEventListener('sessionstart', () => applyRate(renderer.xr.getSession()));
 
-  // perf sweep config string: names the A/B condition in every report
+  // perf sweep config string: names the current condition in every report
   perf.configFn = () =>
     `steps${matsys.globals.uMaxSteps.value}/rh${matsys.globals.uRoughHops.value > 0.5 ? 1 : 0}` +
     `/occ${matsys.globals.uOccOn.value > 0.5 ? 1 : 0}` +
@@ -874,7 +874,7 @@ void main() {
     const b = perf.batchSetup();
     perf.startBatch(b.configs, b.restore);
   }, 3000);
-  // one-button config matrix: the combinations we actually compare
+  // one-button config matrix of perf-comparison presets
   perf.batchSetup = () => {
     const g = matsys.globals;
     const saved = {
@@ -967,8 +967,8 @@ void main() {
       });
       vrMenu = new VRMenu({
         main: [
-          // THE headline A/B: full portal traversal vs plain parallax-
-          // corrected cubemaps, one click
+          // headline toggle: full portal traversal vs plain parallax-
+          // corrected cubemaps
           mkToggle('portal rendering', () => g.uMaxSteps.value > 0, on => {
             if (on) g.uMaxSteps.value = savedSteps || 3;
             else { savedSteps = g.uMaxSteps.value || 3; g.uMaxSteps.value = 0; }
@@ -1139,7 +1139,7 @@ void main() {
         if (Math.abs(x) < 0.3) snapReady = true;
       }
     }
-    // no raw A/B/Y bindings anymore: rate + perf batch live in the menu
+    // no raw A/B/Y button bindings: rate + perf batch live in the menu
     // (unlabeled mystery buttons read as broken to demo guests). A is the
     // menu's activate button; X toggles the menu.
     // hover: the RIGHT hand's ray picks menu rows; trigger clicks them
@@ -1201,7 +1201,7 @@ void main() {
   // adaptive quality: sharp periphery (low foveation) + full dyn range in the
   // cheap rooms - most of them - ratcheting up foveation and pulling the dyn
   // range in only when frames actually drop. Load is very room-dependent;
-  // static worst-case settings taxed every room for the two hot views.
+  // static worst-case settings would tax every room for a few hot views.
   const adapt = { fov: 0.5, t: 0 };
   const adaptTick = dt => {
     adapt.t += dt;
@@ -1280,16 +1280,16 @@ void main() {
     }
     culler.apply(staticGroup, props, state.baking);
     // the dome is not in staticGroup and its radius-70 sphere contains every
-    // camera, so nothing else ever culls it: it was binned in every room,
-    // both eyes. Only sky-adjacent cells can actually see it.
+    // camera, so nothing else ever culls it (it would otherwise bin in every
+    // room, both eyes). Only sky-adjacent cells can actually see it.
     dome.visible = state.baking || !culler.enabled ||
       culler.visible.has(skyCells[0]) || culler.visible.has(skyCells[1]);
     if (occluders && !state.baking) {
       // occluder slots in PRIORITY order: visible cells, then one ring of
-      // portal neighbors, then a SECOND ring (Andre: blobs popped into deep
-      // sphere reflections as the active set changed - the full march sees
-      // 2-3 portals deep). Slot exhaustion now drops ring 2 first, so the
-      // extra ring only spends what nearer cells left over.
+      // portal neighbors, then a SECOND ring (blobs pop into deep sphere
+      // reflections as the active set changes - the full march sees 2-3
+      // portals deep). Slot exhaustion drops ring 2 first, so the extra ring
+      // only spends what nearer cells left over.
       let active = null;
       if (culler.enabled) {
         occActive.clear();

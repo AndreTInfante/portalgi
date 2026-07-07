@@ -12,45 +12,44 @@ const USE_HULL_UBO = true;
 
 export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts = {}) {
   const numCells = level.cells.length;
-  // fp16 experiment: mediump on the provably-safe shader surface (see the
-  // halfp note in shaders.js). ?fp16=0 compiles everything highp for A/B.
+  // mediump on the provably-safe shader surface (see the halfp note in
+  // shaders.js). ?fp16=0 forces highp everywhere.
   const fp16 = sysOpts.fp16 !== false;
   // texture-space occlusion (dynocc.js): statics read one uDynOcc tap instead
-  // of compiling the capsule AO/shadow loops. ?texocc=0 restores the analytic
-  // path for A/B (and as the escape hatch if the layer misbehaves on-device).
+  // of compiling the capsule AO/shadow loops. ?texocc=0 selects the analytic
+  // path instead (escape hatch if the layer misbehaves on-device).
   const texOcc = sysOpts.texOcc !== false;
   // portal warp fields (warpfield.js): statics replace the recursive portal
   // walk with a baked field tap. null (?warp=0) keeps the loop everywhere.
   const warp = sysOpts.warp || null;
-  // one exact unrolled hop for floors + non-sharp props (Andre's re-pose
-  // after warp fields failed in motion): stable analytic reflections into
-  // the next room without a dynamic 8-hop loop's register pressure.
-  // ?hop1=0 restores the full march everywhere for A/B.
+  // one exact unrolled hop for floors + non-sharp props: stable analytic
+  // reflections into the next room without a dynamic 8-hop loop's register
+  // pressure. ?hop1=0 restores the full march everywhere.
   const hop1Sys = sysOpts.hop1 !== false;
   // PROP programs scan at most this many DYNAMIC casters (props interact
   // with far fewer objects than floors); statics never skipped. ?occdynprop=
   const occDynCap = sysOpts.occDynProp !== undefined ? sysOpts.occDynProp : 4;
   // prop diffuse per VERTEX (probes + AO + capsule shadows interpolated):
-  // per-pixel these halved the framerate with a held prop at the face.
-  // ?pvd=0 restores per-pixel evaluation for A/B.
+  // per-pixel evaluation roughly halves framerate with a prop held at the
+  // face. ?pvd=0 restores per-pixel evaluation.
   const pvd = sysOpts.pvd !== false;
   // matte/very-rough pixels: 1 = one-hop PCCM at material roughness
-  // (default), 2 = legacy zero-hop (?mattespec=2, seams at open-plan
-  // cell cuts - perf A/B), 0 = flat irradiance-along-R (?mattespec=0)
+  // (default), 2 = zero-hop (?mattespec=2, seams at open-plan cell cuts),
+  // 0 = flat irradiance-along-R (?mattespec=0)
   const matteSpec = sysOpts.matteSpec === undefined ? 1 : +sysOpts.matteSpec;
-  // ceilings demoted to HARD diffuse by default (the 90Hz budget call:
-  // least noticeable satin surface, biggest fill after walls; the spec
-  // block compiles out entirely - an irradiance-tap demotion still
-  // seamed at cuts because irradiance tiles are per-cell). ?ceilspec=1
-  // restores the satin ceiling PCCM for the A/B.
+  // ceilings demoted to HARD diffuse by default: least noticeable satin
+  // surface, biggest fill after walls, and the spec block compiles out
+  // entirely (an irradiance-tap demotion instead seams at cuts because
+  // irradiance tiles are per-cell). ?ceilspec=1 restores the satin ceiling
+  // PCCM.
   const ceilSpec = sysOpts.ceilSpec === true;
   let propVert = null;
   const vertFor = m => (m === 4 && pvd)
     ? (propVert || (propVert = sceneVertProp(numCells, USE_HULL_UBO, fp16, occDynCap)))
     : SCENE_VERT;
   // one pruned program per material mode (statics carry no probe code, props
-  // no lightmap code, glass/pane almost nothing) - the single uber-program
-  // capped wave occupancy at a measured 52%
+  // no lightmap code, glass almost nothing): a single uber-program's register
+  // pressure caps wave occupancy
   const fragByMode = {};
   // debug variants compile in the traversal step accumulator + debug views;
   // shipping programs carry none of that register pressure
@@ -76,8 +75,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   // analytic occluder block (filled per frame by OccluderSystem); UBO-only
   const occ = USE_HULL_UBO ? buildOccluderGroup(numCells) : null;
 
-  // defaults from interactive tuning: virtual portals ignore the edge blend in
-  // the shader, so modest blend widths here only affect doorways
+  // virtual portals ignore the edge blend in the shader, so modest blend
+  // widths here only affect doorways
   const blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
   blackTex.needsUpdate = true;
   const flatNrm = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
@@ -88,7 +87,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
   const globals = {
     uAtlas: { value: atlasTex },
     uHullTex: { value: hullTex },
-    uLightmap: { value: blackTex }, // swapped in once the path-traced bake lands
+    uLightmap: { value: blackTex }, // placeholder until the path-traced bake is swapped in
     uDynOcc: { value: flatOrm },    // white until DynOccLayer swaps its RT in
     uWarpTex: { value: warp ? warp.texture : blackTex },
     uWarpMeta: { value: warp ? warp.metaTex : blackTex },
@@ -111,35 +110,30 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
     uRoughHops: { value: 1.0 },
     uBlendOn: { value: 1.0 },
     uBlendBase: { value: 0.0 }, // sharp reflections get zero-width blend
-                                // (cone footprint is 0; the old 0.04 floor
-                                // over-blurred portals - user-tuned 2026-07-04)
-    uBlendRough: { value: 0.15 }, // "portal de-aliasing bias" (Andre, 2026-07-05):
-                                  // the blend band exists to anti-alias the
-                                  // partition at silhouette edges, not to model
-                                  // the lobe (linear-in-rough over-blends there
-                                  // on purpose). Re-tuned 1.0 -> 0.15 now that
-                                  // only first crossings blend.
+                                // (specular cone footprint is 0)
+    uBlendRough: { value: 0.15 }, // portal de-aliasing bias: the blend band
+                                  // anti-aliases the partition at silhouette
+                                  // edges rather than modeling the lobe
+                                  // (linear-in-rough over-blends there on
+                                  // purpose); only first crossings blend.
     uDistRough: { value: 1.0 },  // dimensionless: 1 = physical t*rough/d
-                                 // angular-footprint growth (was 0.12/m,
-                                 // which froze d at ~8m - see traceSpec)
+                                 // angular-footprint growth (see traceSpec)
     uBake: { value: 0.0 },
     uExposure: { value: 0.3 },
     uDebugMode: { value: 0 },
-    uOccOn: { value: 1.0 },      // analytic occluders: DEFAULT after the 2026-07-03
-                                 // A/B (0.23ms vs 2.1ms for planar smudges, worst view)
+    uOccOn: { value: 1.0 },      // analytic occluders on by default: far cheaper
+                                 // than marching for planar smudges
     uOccHops: { value: 2 },     // through-doorway blobs in the NEXT cell too.
-                                // The old 0.9ms cost was measured when every
-                                // floor pixel ran the multi-hop walk; only
-                                // glass/chrome/pane do now (small fill), and
-                                // hop-1 blobs without it popped in hard at
-                                // cell crossings in the glass sphere (Andre).
+                                // Only glass/chrome run the multi-hop walk
+                                // (small fill); without it, hop-1 blobs pop in
+                                // hard at cell crossings in the glass sphere.
                                 // traceSpec1 (floors/props) stays hop-0: its
                                 // second segment compiles no occSegment, and
                                 // rough blur hides the missing far smudges.
-    uOccDensity: { value: 1.6 },  // user-tuned 2026-07-04
-    uOccWiden: { value: 1.5 },    // user-tuned 2026-07-04   // cone growth per rough-meter: drives spread AND fade
+    uOccDensity: { value: 1.6 },
+    uOccWiden: { value: 1.5 },    // cone growth per rough-meter: drives spread AND fade
     uOccLod: { value: 2.0 },      // cone-footprint LOD threshold (occSegment)
-    uOccTint: { value: 0.8 },    // user-tuned: it's ~AO + optically-correct ambient
+    uOccTint: { value: 0.8 },    // ~AO + optically-correct ambient
     uOccAO: { value: 0.8 },      // contact-AO strength from the same capsules
     uOccAOClamp: { value: 0.03 }, // AO min-distance clamp (m), artist dial
     uOccShadow: { value: 0.85 }, // dynamic capsule shadow-ray strength
@@ -185,7 +179,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
       (mode === 0 || (mode === 4 && !sharp));
     // hopSpec: matte surfaces that can straddle a virtual cut (open-plan
     // walls/ceilings) compile the one-hop matte program; the rest keep
-    // the cheap zero-hop variant (tiering - the 90Hz recovery)
+    // the cheap zero-hop variant
     const hopSpec = !!opts.hopSpec;
     // ceilings compile with no specular term at all unless ?ceilspec=1
     // noSpec = diffuse-only program (whole specular chain compiled out):
@@ -195,8 +189,8 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
       glslVersion: THREE.GLSL3,
       vertexShader: vertFor(mode),
       fragmentShader: fragFor(mode, debugCompiled, !!opts.matte, hop1, hopSpec, noSpec),
-      // FrontSide: winding is normal-oriented at emit time; DoubleSide was a
-      // crutch that doubled binning/hidden-surface work on tiled GPUs (Tier 1)
+      // FrontSide: winding is normal-oriented at emit time; DoubleSide doubles
+      // binning/hidden-surface work on tiled GPUs
       side: THREE.FrontSide,
       uniforms: {
         ...globals, // shared identity - do not clone
@@ -209,7 +203,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
         uMode: { value: opts.mode || 0 },
         uTint: { value: new THREE.Vector3(...(opts.tint || [1, 1, 1])) },
         uEmissive: { value: new THREE.Vector3(...(opts.emissive || [0, 0, 0])) },
-        uRough: { value: opts.rough !== undefined ? opts.rough : 0.04 }, // glass/pane only
+        uRough: { value: opts.rough !== undefined ? opts.rough : 0.04 }, // glass only
         uOccSelf: { value: -1 }, // occluder id of THIS prop (self-occlusion skip)
         uRoughFactor: { value: opts.roughFactor !== undefined ? opts.roughFactor : 1 },
         uMetalFactor: { value: opts.metalFactor !== undefined ? opts.metalFactor : 0 },
@@ -268,7 +262,7 @@ export function createMaterialSystem(level, textures, hullTex, atlasTex, sysOpts
 
   // demo lever: kill/restore ALL surface specular (per-material uSpecBoost
   // values differ - floors are boosted - so restore from userData.spec0).
-  // Glass/pane don't read uSpecBoost: the balls keep reflecting, the lever
+  // Glass doesn't read uSpecBoost: the balls keep reflecting, the lever
   // is about SURFACE reflections.
   function setSpecular(on) {
     sys.specularOn = on;
@@ -305,10 +299,10 @@ export function buildStaticMeshes(scene, level, matsys, textures, paintingTexs) 
       // possible pixel - then the program compiles with no traversal at all
       const minG = set.ormMap && set.ormMap.userData && set.ormMap.userData.minG !== undefined
         ? set.ormMap.userData.minG : 0;
-      // o.matte overrides the roughness-threshold rule: matte now means
-      // "zero-hop PCCM", which is valid at ANY roughness - walls keep the
-      // traversal-free program while their roughness drops below 0.65 for
-      // a readable sheen (they just never resolve through-portal content)
+      // o.matte overrides the roughness-threshold rule: matte means "zero-hop
+      // PCCM", which is valid at ANY roughness - walls keep the traversal-free
+      // program while their roughness drops below 0.65 for a readable sheen
+      // (they just never resolve through-portal content)
       const matte = o.matte !== undefined ? !!o.matte : minG * rf > 0.65;
       const matOpts = {
         map: set.map, nrm: set.normalMap, orm: set.ormMap,

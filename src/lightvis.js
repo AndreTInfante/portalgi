@@ -1,25 +1,21 @@
-// Per-probe, per-light VISIBILITY (Andre's sun-integration design,
-// 2026-07-05): the probe grid can't carry direct beams, so props take
-// analytic spot direct - but with no shadow rays, props lit up in geometric
-// shade (worst: full sunlight under the courtyard loggia) and borrowed
-// spots had to be crudely gated per-cell (uLightLocal) to not shine through
-// walls. This bakes the missing visibility term where everything else
-// already lives: at the probes. For each probe and each of its cell's <= 8
-// analytic lights, jittered CPU shadow rays against the lightmapper's BVH
-// give a 0..1 visibility fraction; the prop vertex shader interpolates it
-// trilinearly (same weights as probe irradiance) and the spot loop
-// multiplies it in. The sun stops lighting shade, borrowed spots light
-// through doorways exactly where geometry permits, and the per-cell gate
-// retires (in the vertex-diffuse path). Boot-time, geometry-only, ~25K
-// rays: no bake artifact, no manifest coupling.
+// Per-probe, per-light VISIBILITY. The probe grid carries only irradiance, not
+// direct beams, so props take analytic spot direct light, but with no shadow
+// rays they light up even in geometric shade (e.g. full sunlight under an
+// occluding loggia) and spots shine through walls. This
+// bakes the missing visibility term at the probes, where irradiance already
+// lives. For each probe and each of its cell's <= 8 analytic lights, jittered
+// CPU shadow rays against the lightmapper's BVH give a 0..1 visibility
+// fraction; the prop vertex shader interpolates it trilinearly (same weights
+// as probe irradiance) and the spot loop multiplies it in. The sun stops
+// lighting shade and spots light through doorways exactly where geometry
+// permits. Boot-time and geometry-only: no bake artifact, no manifest coupling.
 import * as THREE from 'three';
 
 // Visibility samples on a DENSIFIED virtual grid: VIS_MULT x the probe grid
-// per axis, same bounds. The irradiance probes are spaced for smooth
-// ambience (~3-4m in the courtyard) - far too coarse for a shadow boundary:
-// trilinear over 4m smeared the loggia shade into "mostly sunny", so the
-// sun never turned off (Andre's report). Visibility is OUR texture, baked
-// at boot - density costs only boot rays, not atlas space. The shader
+// per axis, same bounds. Irradiance probes are spaced for smooth ambience
+// (~3-4m) - far too coarse for a shadow boundary, where trilinear over that
+// span smears shade into "mostly sunny". Visibility is our own texture baked
+// at boot, so densifying costs only boot rays, not atlas space. The shader
 // derives the dense dims arithmetically: visD = probeDims * 2 - 1.
 export const VIS_MULT = 2;
 const visDims = d => Math.max(1, d * VIS_MULT - 1);

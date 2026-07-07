@@ -107,7 +107,7 @@ export function buildPortalWires(scene, level) {
 }
 
 export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onStaticImposters, perf, audio, physWires) {
-  const gui = new GUI({ title: 'PortalGI' });
+  const gui = new GUI({ title: 'PortalIBL' });
   // ?dev=1 reveals the internal tools (perf sweeps, bake buttons); the public
   // deploy shows only the demo-facing folders
   const DEV = new URLSearchParams(location.search).has('dev');
@@ -131,7 +131,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   };
   const f1 = gui.addFolder('Traversal');
   // floors/props run ONE unrolled hop (hop1); these two only steer the full
-  // multi-hop march that survives in glass/chrome/pane (0 = PCCM everywhere)
+  // multi-hop march used in glass/chrome (0 = PCCM everywhere)
   f1.add(proxy, 'steps', 0, 6, 1).name('portal hops (glass; 0=PCCM)');
   f1.add(proxy, 'roughHops').name('rough-scaled hops (glass)');
   f1.add(proxy, 'edgeBlend').name('edge blend');
@@ -150,7 +150,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
   }
   if (onStaticImposters) f2.add({ si: true }, 'si').name('statues via proxies (rebakes)').onChange(onStaticImposters);
   {
-    // occluders now split by receiver: STATICS read the texture-space layer
+    // occluders split by receiver: STATICS read the texture-space layer
     // (dynocc.js splat - ao/shadow dials feed it live), PROPS evaluate the
     // capsules per VERTEX, reflections march occSegment. One switch, one
     // set of dials, three consumers.
@@ -177,7 +177,7 @@ export function buildGUI(matsys, state, wires, onRebake, onRelight, culler, onSt
       'sh', 0, 1, 0.01).name('dyn shadows');
     fo.add({ get mc() { return g.uOccBudget.value; }, set mc(v) { g.uOccBudget.value = v; } },
       'mc', 0, 32, 1).name('dyn capsule budget (pack)');
-    // range now gates only prop-receiver effects + reflection blobs; the
+    // range gates only prop-receiver effects + reflection blobs; the
     // static layer has no view fade (texel-bounded)
     fo.add({ get rg() { return g.uOccRange.value; }, set rg(v) { g.uOccRange.value = v; } },
       'rg', 4, 100, 1).name('dyn range (props+blobs, m)');

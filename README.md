@@ -1,4 +1,4 @@
-# PortalGI POC
+# PortalIBL POC
 
 Proof of concept for PortalIBL - **portal-linked convex-hull environment map based specular lighting technique** — a middle ground between parallax-corrected cubemaps and ray marching, aimed at mobile VR.
 
@@ -40,8 +40,6 @@ texture CORS.)
 Art-gallery / museum theme, 14 convex cells plus a skybox.
 Props: diffuse/chrome/glass spheres and cubes, plus the carryable PBR models.
 Glass = chrome sampled along the negated reflection vector
-There is also a **debug pane** (on the gallery bench): a near-clear glass sheet
-that billboards to the camera while held, so it shows the raw reflection approximation.
 
 ## Dynamic-object impostors (capsules)
 
@@ -93,15 +91,15 @@ recursion is already seamless there and blending would ghost. Classified
 automatically at build time into a per-portal bitmask.
 
 Static surfaces use fixed unrolled traversal tuned per material (matte
-walls/ceilings, one exact hop on glossy floors); glass, chrome, and the debug
-pane run the full recursive march the **portal hops** dial controls. Setting
+walls/ceilings, one exact hop on glossy floors); glass and chrome run the
+full recursive march the **portal hops** dial controls. Setting
 hops to 0 flattens the whole scene to PCCM — the headline A/B. Compare the
 glossy floor below the gallery→hall doorway: flat smudge at 0, correct depth
 once hops ≥ 1.
 
-URL params for headless screenshots: `?shot=1..20` drives fixed camera poses
+URL params for headless screenshots: `?shot=1..19` drives fixed camera poses
 (e.g. 1 gallery, 3 rotunda, 4 pillar hall, 6 L-room cut, 9 exhibit hall A,
-10 cornell, 17 courtyard, 7/12/20 debug pane held up); `?mark=1` self-uploads
+10 cornell, 17 courtyard); `?mark=1` self-uploads
 the PNG. Comparison overrides: `?steps=N` (0 = PCCM), `?blend=0|1`,
 `?debug=0..6` (2 = step heatmap, 6 = specular-only 8×).
 

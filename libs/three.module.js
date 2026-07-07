@@ -28158,7 +28158,7 @@ function WebGLUniformsGroups( gl, info, capabilities, state ) {
 
 		const buffer = buffers[ uniformsGroup.id ];
 
-		// PortalGI vendored patch: a group carrying a packed std140 mirror
+		// PortalIBL vendored patch: a group carrying a packed std140 mirror
 		// uploads it as ONE orphaning bufferData call. The stock path below
 		// issues one bufferSubData per changed uniform (~200 tiny writes for
 		// the per-frame occluder block) into a buffer the GPU may still be

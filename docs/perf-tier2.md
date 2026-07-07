@@ -26,10 +26,10 @@ on/off, 72 vs 90 cap:
    win on Adreno, the hot loop dominates glossy-floor pixels.
 
 2. Shader variants per mode (kill the uber-shader)
-   One program serves lightmapped statics, probe props, glass, and the pane;
+   One program serves lightmapped statics, probe props, and glass;
    every wave pays worst-case register pressure -> poor occupancy on mobile.
    Split via #define at makeMaterial time (MODE_STATIC / MODE_PROP /
-   MODE_GLASS / MODE_PANE) and prune dead code per variant. Statics need no
+   MODE_GLASS) and prune dead code per variant. Statics need no
    probe code; props need no lightmap code. Touches: shaders.js (wrap
    sections in #ifdef), materials.js (defines + program cache keys by mode).
 

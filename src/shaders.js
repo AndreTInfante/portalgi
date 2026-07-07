@@ -44,11 +44,9 @@ vec3 sampleSpec(int cell, vec3 dir, float lod) {
   vec3 b = sampleTile(cell, k1, o);
   return mix(a, b, lod - float(k0));
 }
-// NOTE (2026-07-04): a single-tap nearest-LOD sampler was tried for
-// secondary hops and blend partials - every use produced a visible artifact
-// (mip pop at thresholds, widened-looking blend bands). All atlas samples
-// are manual trilinear; the surviving traversal optimization is the
-// portal-plane mask, which changes no sampling at all.
+// All atlas samples are manual trilinear: a single-tap nearest-LOD sampler
+// pops mip columns at LOD thresholds and widens blend bands. The only
+// traversal optimization is the portal-plane mask, which changes no sampling.
 vec3 sampleIrr(int cell, vec3 n) {
   vec2 o = octEncode(normalize(n));
   vec2 base = vec2(IRR_X + BORDER_PX, float(cell) * ROW_H + BORDER_PX);
@@ -61,16 +59,15 @@ float roughToLod(float r) {
 `;
 
 // portal-hull traversal; hull records come from a std140 uniform block
-// (constant-register reads - the dependent texelFetch path is kept as a
-// fallback should UniformsGroup misbehave on some driver)
-// dbg: compile in the step-count accumulator + debug views. The accumulator
-// threads live state through the whole traversal loop - exactly the class of
-// register pressure that measurably tipped wave occupancy (see the
-// re-emission accumulator note) - so shipping programs compile it OUT.
+// (constant-register reads). The dependent texelFetch path is a fallback for
+// drivers where UniformsGroup misbehaves.
+// dbg: compiles in the step-count accumulator + debug views. The accumulator
+// threads live state through the whole traversal loop - register pressure that
+// tips wave occupancy - so shipping programs compile it OUT.
 // dynCap: PROP programs cap how many DYNAMIC casters their capsule loops
-// scan (Andre 2026-07-05: props interact with far fewer objects than
-// floors). 999 in every other program - the guards constant-fold away.
-// Statics (packed after the dyn prefix) are never skipped.
+// scan (props interact with far fewer objects than floors). 999 in every
+// other program - the guards constant-fold away. Statics (packed after the
+// dyn prefix) are never skipped.
 const traceGlsl = (numCells, useUbo, dbg = false, dynCap = 999) => /* glsl */`
 ${useUbo ? /* glsl */`
 layout(std140) uniform HullData {
@@ -86,7 +83,7 @@ layout(std140) uniform OccluderData {
   vec4 uOccColor[${MAX_OCC_PROPS}]; // rgb albedo; w packs group|count|firstCapsule
   // fp16 capsules RELATIVE to the entry bound center (uvec4 each:
   // (a-c).xy | (a-c).z,r | (b-c).xy | (b-c).z,-): half the constant-store
-  // footprint of the old two-vec4 slots, sub-mm error at capsule scale
+  // footprint of full-float two-vec4 slots, sub-mm error at capsule scale
   uvec4 uOccSph[${MAX_OCC_CAPS}];
 };
 // decode capsule slot: A = world a-endpoint, Ar = radius, u = b - a
@@ -111,8 +108,8 @@ uniform float uOccAO;      // contact-AO strength from the same capsules
 uniform float uOccAOClamp; // AO minimum-distance clamp (m): surfaces never
                            // evaluate closer than capsule surface + this
 uniform float uOccShadow;  // dynamic directional shadow strength (capsule shadow rays)
-// (the dyn capsule BUDGET is spent at pack time in occluders.update - it is
-// deterministic per cell per frame, so shader-side spending was pure waste)
+// (the dyn capsule BUDGET is spent at pack time in occluders.update -
+// deterministic per cell per frame, so the shader spends none)
 uniform float uOccRange;   // dynamic effects exist only within this radius of the
                            // viewer (2m feather; statics are unaffected) - the
                            // budget concentrates where anyone can see it
@@ -160,7 +157,7 @@ MP float capsuleAO(int cell, vec3 P, vec3 N, MP float dynFade) {
       float invd = inversesqrt(d2);
       MP float o1 = clamp(dot(N, d * invd), 0.0, 1.0) * (Ar * Ar) / d2;
       // smooth range falloff to zero BEFORE the binary entry reject radius -
-      // the reject alone printed a visible AO edge line around objects
+      // the reject alone prints a visible AO edge line around objects
       MP float reach = clamp(1.0 - (d2 * invd - Ar) / 0.6, 0.0, 1.0);
       aoc *= 1.0 - min(o1 * reach * reach * uOccAO, 0.85) * k;
     }
@@ -183,7 +180,7 @@ MP float capsuleShadow(int cell, vec3 P, vec3 N) {
   int first = int(uOccCell[cell].x);
   // reach pre-reject: the march is capped at 3m, so a pixel farther than
   // bound + 3m from EVERY caster can never be shadowed - skip the whole
-  // 8-light direction loop (it was paid by every pixel in furnished rooms)
+  // 8-light direction loop
   bool near = false;
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= dyn) break;
@@ -218,11 +215,10 @@ MP float capsuleShadow(int cell, vec3 P, vec3 N) {
   if (face <= 0.0) return 1.0;
   // 3m cap: coverage dims to ~0.13 by then (r^2/rw^2), invisible - and the
   // shorter segment lets the per-entry bound test reject far more pixels
-  // (the shadow march measured ~2ms at 125->85u; this is the cheap half)
   float span = min(len, 3.0);
   // single-ray visibility: overlapping volumes block the light ONCE - take
-  // the MAX coverage over capsules, not the product (the product printed
-  // extra darkening wherever authored capsules overlap)
+  // the MAX coverage over capsules, not the product (the product double-darkens
+  // wherever authored capsules overlap)
   MP float occl = 0.0;
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= dyn) break;
@@ -255,8 +251,8 @@ MP float capsuleShadow(int cell, vec3 P, vec3 N) {
       float dist = length(dv);
       float rw = Ar + s * 0.12;                  // ~7deg effective source size
       MP float pen = clamp((rw - dist) / max(rw * 0.45, 1e-3), 0.0, 1.0);
-      // near-contact RAMP, not a hard skip: the binary skip printed a bright
-      // pinprick in the middle of the shadow wherever a prop nearly touched
+      // near-contact RAMP, not a hard skip: a hard skip prints a bright
+      // pinprick in the middle of the shadow wherever a prop nearly touches
       // the receiver. Contact AO owns the contact zone; hand off smoothly.
       pen *= smoothstep(0.0, 0.12, s);
       occl = max(occl, pen * min(1.0, (Ar * Ar) / (rw * rw)));
@@ -284,8 +280,8 @@ MP float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBa
   int dyn = int(uOccCell[cell].z);
   // low-end knee: GGX blur is strongly nonlinear at small roughness (alpha ~
   // rough^2), so near-mirror surfaces (chrome/glass ~0.04) widen almost
-  // nothing - linear widening made their blobs ghostly-faint while their
-  // reflection image stayed crisp. Mid-rough floors (>= 0.15) are unchanged.
+  // nothing - linear widening makes their blobs ghostly-faint while their
+  // reflection image stays crisp. Mid-rough floors (>= 0.15) are unchanged.
   float wr = rough * clamp(rough * 6.667, 0.0, 1.0);
   for (int pi = 0; pi < ${MAX_PER_CELL}; pi++) {
     if (pi >= cnt) break;
@@ -307,7 +303,7 @@ MP float occSegment(int cell, vec3 o, vec3 d, float tMax, float rough, float tBa
     // cone-footprint LOD: once the cone widening dwarfs the whole entry,
     // the capsule set is indistinguishable from ONE bound-sphere smudge
     // (coverage r^2/rw^2 has already dimmed it to a blur) - skip the march.
-    // uOccLod = widening/bound-radius threshold; 0 disables (A/B dial).
+    // uOccLod = widening/bound-radius threshold; 0 disables.
     if (uOccLod > 0.0 && rb - b.w > uOccLod * b.w) {
       MP float q = 1.0 - dot(pc, pc) / (rb * rb);
       if (q > 0.0) {
@@ -383,8 +379,8 @@ MP vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, MP floa
     float d = dot(pl.xyz, pos) + pl.w;
     if (d < 0.01) pos += pl.xyz * (0.01 - d);
   }
-  // acc/w are LIVE across the whole hull walk - the register-pressure prize.
-  // Radiance fits fp16 (max 65504); w is a 0..1 weight
+  // acc/w are LIVE across the whole hull walk - the main register-pressure
+  // saving from mediump. Radiance fits fp16 (max 65504); w is a 0..1 weight
   MP vec3 acc = vec3(0.0);
   MP float w = 1.0;
   float tTot = 0.0;
@@ -408,11 +404,10 @@ MP vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, MP floa
     float tHit = tTot + bestT;
     // parallax-corrected roughness (Lagarde): the surface lobe's angular
     // width AS SEEN FROM THE CAPTURE POINT scales by t/d, so mip roughness
-    // = rough * t/d - the PURE ratio. (An earlier 1 + t/d baseline
-    // double-counted the lobe: at the typical t ~ d it pinned every wall
-    // at the max-blur mip, which is why neither specBoost nor material
-    // roughness changed anything visible. The pure ratio also models real
-    // contact sharpening: content close to the reflector stays crisp.)
+    // = rough * t/d - the PURE ratio. The naive 1 + t/d form double-counts
+    // the lobe: at the typical t ~ d it pins every wall at the max-blur mip,
+    // defeating both specBoost and material roughness. The pure ratio also
+    // models contact sharpening: content close to the reflector stays crisp.
     // uDistRough stays a dimensionless scale (1 = physical).
     float effR = min(1.0, rough * uDistRough * tHit / max(distance(hitP, h0.xyz), 0.5));
     MP float lod = roughToLod(effR);
@@ -426,10 +421,10 @@ ${useUbo ? /* glsl */`
       // footprint model already accounts for distance inside occSegment
       MP float tr = occSegment(cell, pos, dir, bestT, rough, tTot, dynFade, ocol);
       // tinted re-emission taps irradiance only at PERCEPTIBLE occlusion
-      // (>= 5%; the old 0.3% threshold bought an extra atlas fetch across
-      // every faintly-grazed pixel of cone-widened blob area). Kept per-hop:
-      // an accumulator threaded through the walk cost registers on every
-      // traceSpec in every pixel and tipped occupancy (measured regression)
+      // (>= 5%): a lower threshold buys an extra atlas fetch across every
+      // faintly-grazed pixel of cone-widened blob area. Done per-hop, not
+      // accumulated across the walk - threading an accumulator through the
+      // loop costs registers on every traceSpec in every pixel and tips occupancy
       if (tr < 0.95) acc += w * uOccTint * ocol * sampleIrr(cell, -dir);
       w *= tr;
       if (w < 0.005) return acc;
@@ -466,14 +461,12 @@ ${useUbo ? /* glsl */`
           if ((silMask & (1 << e)) != 0) blendD = min(blendD, d);
         }
         if (insideD > 0.0) {
-          // edge blending at EVERY crossing: restricting it to the first hop
-          // made the seam treatment depend on which cell the shaded surface
-          // belongs to - a visible side-dependent gap when walking through
-          // doorway-through-doorway views (in-headset report). The deep
-          // partial samples stay single-tap, so this costs half its original
-          // price.
+          // edge blending at EVERY crossing, not just the first: restricting
+          // it to the first hop makes the seam treatment depend on which cell
+          // the shaded surface belongs to, a visible side-dependent gap in
+          // doorway-through-doorway views. Deep partial samples stay single-tap.
           // FLOOR the blend width: a mirror-sharp reflector (rough 0 -> effR 0,
-          // e.g. the debug pane) gives bw = uBlendBase = 0, and blendD/0 is +Inf
+          // e.g. chrome) gives bw = uBlendBase = 0, and blendD/0 is +Inf
           // away from the silhouette (a hard, lurching crossing) but 0/0 = NaN
           // right AT the edge = garbage that warps as you orbit a portal corner.
           // 2cm keeps sharp reflections sharp while smoothing the seam and
@@ -488,9 +481,9 @@ ${useUbo ? /* glsl */`
     }
     vec3 localDir = hitP - h0.xyz;
     if (nextCell < 0 || blend <= 0.002) {
-      // the terminal sample is directly visible content: always trilinear.
-      // (Nearest-LOD here popped between mip columns as reflections crossed
-      // portal thresholds - fidelity discontinuity right at the seam.)
+      // the terminal sample is directly visible content: always trilinear
+      // (nearest-LOD pops between mip columns as reflections cross portal
+      // thresholds - a fidelity discontinuity right at the seam)
       acc += w * sampleSpec(cell, localDir, lod);
       return acc;
     }
@@ -511,25 +504,23 @@ ${'' /* warp fields: traceSpecW is appended by warpGlsl() below (separate chunk)
 `;
 
 // ---------------------------------------------------------------- one hop
-// Andre's re-pose after the warp-field failure (2026-07-05): one EXACT hop,
-// unrolled. One hop is visually stable in motion (it is the analytic walk -
-// no field quantization) and buys ~90% of the visual win: reflections see
-// into the next room and the first crossing keeps the silhouette edge blend.
-// What the compiler sees is straight-line code - two hull exits, one portal
-// scan, at most two atlas samples - with no live state carried across a
-// dynamic 8-iteration loop. Compiles into all non-matte STATICS (floors)
-// and all PROPS except sharp reflectors (chrome); glass/pane/chrome keep
-// the full march, where a real image can resolve a second portal.
-// Pixel-identical to the full walk at uMaxSteps=1 with uOccHops<=1 (the
-// configuration Andre judged in-headset); uMaxSteps=0 still = PCCM.
+// One EXACT hop, unrolled. One hop is visually stable in motion (it is the
+// analytic walk - no field quantization) and buys ~90% of the visual win:
+// reflections see into the next room and the first crossing keeps the
+// silhouette edge blend. What the compiler sees is straight-line code - two
+// hull exits, one portal scan, at most two atlas samples - with no live state
+// carried across a dynamic 8-iteration loop. Compiles into all non-matte
+// STATICS (floors) and all PROPS except sharp reflectors (chrome); glass/chrome
+// keep the full march, where a real image can resolve a second portal.
+// Pixel-identical to the full walk at uMaxSteps=1 with uOccHops<=1;
+// uMaxSteps=0 still = PCCM.
 // The occluder-hops and portal-hops GUI dials affect full-march programs only.
 // hop1Glsl(matte) emits the same straight-line walk for two callers:
 //   matte=false -> traceSpec1 (non-matte statics + props): distance-grown
-//     mip roughness + the local occluder segment. Byte-identical to the
-//     old HOP1_GLSL constant.
+//     mip roughness + the local occluder segment.
 //   matte=true  -> pccmSpec (matte walls/ceilings): mip from MATERIAL
 //     roughness alone (the t/d cone model collapses at satin roughness -
-//     it pinned walls at the featureless top mip and sharpened jambs to
+//     it pins walls at the featureless top mip and sharpens jambs to
 //     mirrors) and no occluder segment (satin blur hides prop blobs;
 //     keeps the biggest-fill programs light). The hop itself is what
 //     kills the virtual-portal seams on continuous walls/ceilings in
@@ -637,12 +628,11 @@ ${matte ? '' : `  MP float lod2 = roughToLod(min(1.0,
 const HOP1_GLSL = hop1Glsl(false);
 
 // ---------------------------------------------------------------- zero-hop PCCM
-// LEGACY (?mattespec=2, kept for the perf A/B): the original zero-hop
-// matte path - one hull exit, no portal scan. Once walls sampled
-// structured mips it seamed at virtual-portal cuts on continuous
-// walls/ceilings (L room, pillar hall): adjacent cells' parallax errors
-// at the cut plane disagree, and with no hop nothing reconciles them.
-// The shipping matte path is hop1Glsl(true) above.
+// Zero-hop matte path (?mattespec=2): one hull exit, no portal scan. With
+// walls sampling structured mips it seams at virtual-portal cuts on continuous
+// walls/ceilings (L room, pillar hall): adjacent cells' parallax errors at the
+// cut plane disagree, and with no hop nothing reconciles them. hop1Glsl(true)
+// is the default matte path.
 const PCCM_GLSL = /* glsl */`
 MP vec3 pccmSpec(int cell, vec3 pos, vec3 dir, float rough) {
   vec4 h0 = hfetch(cell, 0);
@@ -664,8 +654,8 @@ MP vec3 pccmSpec(int cell, vec3 pos, vec3 dir, float rough) {
   vec3 hitP = pos + dir * bestT;
   // NO distance-roughness ratio here (unlike traceSpec*): at satin roughness
   // the linear t/d cone model breaks down - walls reflect across the room
-  // (t ~ 2x capture distance) and pinned at the featureless 4px mip, while
-  // doorjambs reflecting content centimeters away (t ~ 0) sharpened to lod 0
+  // (t ~ 2x capture distance) and pin at the featureless 4px mip, while
+  // doorjambs reflecting content centimeters away (t ~ 0) sharpen to lod 0
   // mirrors. Plain PCCM (mip from material roughness alone) keeps fixtures
   // visible as broad parallax-correct blobs, which is the point of this path.
   return sampleSpec(cell, hitP - h0.xyz, roughToLod(rough));
@@ -701,9 +691,9 @@ MP vec3 pccmSpecMatte(int cell, vec3 pos, vec3 nrm, vec3 dir, float rough) {
 // STATIC programs - one local hull exit + local occSegment + quadrilinear
 // field tap + ONE far atlas sample; no live registers across an 8-hop loop.
 // Certainty fades toward the local flat sample (parallax-exact at portal
-// silhouettes - the same fallback the loop's edge blend used); the first
+// silhouettes - the same fallback the loop's edge blend uses); the first
 // crossing keeps the loop's exact silhouette-edge blend band. NO fallback
-// loop compiles in: register allocation is per-program (the matte lesson).
+// loop compiles in: register allocation is per-program.
 const warpGlsl = (warp) => /* glsl */`
 uniform sampler2D uWarpTex;
 uniform sampler2D uWarpMeta; // 4 texels/directed portal (D = cell*4 + slot)
@@ -741,8 +731,8 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   MP float lod = roughToLod(effR);
   MP vec3 acc = vec3(0.0);
   MP float w = 1.0;
-  // local occluder segment (the walk's hop-0 term, the shipping default;
-  // through-portal blobs were already dial-gated off)
+  // local occluder segment (the walk's hop-0 term; through-portal blobs are
+  // dial-gated off in this path)
   if (uOccOn > 0.5 && uOccHops > 0.0) {
     MP vec3 ocol = vec3(0.0);
     MP float tr = occSegment(cell, pos, dir, bestT, rough, 0.0, dynFade, ocol);
@@ -752,7 +742,7 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
   }
   MP float kFar = 0.0;
   MP vec3 farS = vec3(0.0);
-  // uMaxSteps == 0 keeps the PCCM-baseline A/B lever meaningful
+  // uMaxSteps == 0 keeps this a zero-hop PCCM baseline
   if (uMaxSteps > 0 && bestPlane >= 0) {
     vec4 h1 = hfetch(cell, 1);
     if ((int(h1.w) & (1 << bestPlane)) != 0) {
@@ -801,7 +791,7 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
         // smooth consensus over the 2x2 direction bins: taps that disagree
         // with the HEAVIEST bin's terminal id drop out with their weight, so
         // dir-bin discontinuities fade continuously (a binary all-agree gate
-        // printed hard 0/1 flips along reflected jamb edges)
+        // prints hard 0/1 flips along reflected jamb edges)
         vec4 wgt = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y),
                         (1.0 - f.x) * f.y, f.x * f.y);
         float id = wgt.x >= max(wgt.y, max(wgt.z, wgt.w)) ? s00.y
@@ -835,14 +825,14 @@ MP vec3 traceSpecW(int cell, vec3 pos, vec3 dir, float rough, MP float dynFade) 
 `;
 
 // Diffuse for dynamic objects: per-cell irradiance PROBE GRID, trilinear over
-// 8 probes. Each probe was convolved at bake time from its own position with
+// 8 probes. Each probe is convolved at bake time from its own position with
 // the parallax warp applied to the radiance BEFORE the cosine convolution -
 // the correct operation order, so none of the warp-after-convolve artifacts
-// (kernel skew, hull-edge creases) can appear. Convexity guarantees probes
-// see their whole cell: no visibility term needed, no leaking within a cell.
-// (Shared chunk: PROP programs evaluate this in the VERTEX shader - 8
-// scattered atlas taps per PIXEL halved the framerate with a prop at the
-// face; irradiance is low-frequency, per-vertex interpolation is free.)
+// (kernel skew, hull-edge creases) appear. Convexity guarantees probes see
+// their whole cell: no visibility term needed, no leaking within a cell.
+// (Shared chunk: PROP programs evaluate this in the VERTEX shader - per pixel
+// it is 8 scattered atlas taps, but irradiance is low-frequency so per-vertex
+// interpolation is effectively free.)
 const PROBE_GLSL = /* glsl */`
 vec3 probeDiffuse(int cell, vec3 P, vec3 N) {
   vec4 m0 = hfetch(cell, ${PROBE_META_OFF});
@@ -873,13 +863,12 @@ vec3 probeDiffuse(int cell, vec3 P, vec3 N) {
 
 // PROP vertex shader: the prop's LOW-FREQUENCY diffuse - probe irradiance
 // (with the cell-handoff crossfade), contact AO, and capsule shadows - is
-// evaluated per VERTEX and interpolated. Per pixel these were 8-16 scattered
-// atlas taps + three capsule loops; with a held prop filling the view that
-// measured as a halved framerate while full-screen floors held 90 (floors
-// tap two coherent textures). Spot direct (crisp cone edges) and specular
-// stay per-pixel. Vertex normals feed the probe + capsule terms - the
-// geometric normal is exactly what capsuleShadow wants anyway, and bump
-// detail survives in the per-pixel specular.
+// evaluated per VERTEX and interpolated. Per pixel these are 8-16 scattered
+// atlas taps + three capsule loops, which halves framerate with a held prop
+// filling the view (floors, by contrast, tap two coherent textures). Spot
+// direct (crisp cone edges) and specular stay per-pixel. Vertex normals feed
+// the probe + capsule terms - the geometric normal is exactly what
+// capsuleShadow wants anyway, and bump detail survives in the per-pixel specular.
 export function sceneVertProp(numCells, useUbo = true, halfp = true, occDynCap = 999) {
   return /* glsl */`
 precision highp float;
@@ -999,40 +988,37 @@ void main() {
 }
 `;
 
-// One PRUNED program per material mode (0 static, 2 glass, 3 pane, 4 prop):
-// the uber-shader ran every pixel at worst-case register pressure (52% wave
-// occupancy measured on-device) for code paths it could never take. Unused
-// helper functions are stripped by the GLSL compiler once the CALLS are
-// template-removed.
+// One PRUNED program per material mode (0 static, 2 glass, 4 prop): a single
+// uber-shader runs every pixel at worst-case register pressure for code paths
+// it can never take, capping wave occupancy. Unused helper functions are
+// stripped by the GLSL compiler once the CALLS are template-removed.
 // matte: guaranteed-rough statics (min roughness x factor > 0.65 across the
 // whole ORM set) ALWAYS take the irradiance early-out, so their program
 // compiles with no traversal at all. Register allocation is static per
-// program - without this, wall/ceiling pixels (most fill) ran at
-// glossy-floor occupancy to execute one irradiance tap.
-// halfp (the fp16 experiment): default precision stays HIGHP; MP marks only
-// the provably-fp16-safe surface - texture fetch results, color/radiance
-// chains (HDR fits fp16's 65504 max), 0..1 factors, and the traversal's
-// live accumulators. Positions, plane math, ray t's, directions, and
-// atlas/lightmap UV math (2048+ px, past fp16's 10-bit mantissa) never get
-// MP. On Adreno fp16 halves the register footprint of what it touches, and
-// occupancy is the measured structural ceiling; desktop GPUs ignore
-// mediump, so the A/B (?fp16=0) only means anything on-device.
+// program - without this, wall/ceiling pixels (most fill) run at glossy-floor
+// occupancy just to execute one irradiance tap.
+// halfp: default precision stays HIGHP; MP marks only the provably-fp16-safe
+// surface - texture fetch results, color/radiance chains (HDR fits fp16's
+// 65504 max), 0..1 factors, and the traversal's live accumulators. Positions,
+// plane math, ray t's, directions, and atlas/lightmap UV math (2048+ px, past
+// fp16's 10-bit mantissa) never get MP. On Adreno fp16 halves the register
+// footprint of what it touches, and occupancy is the structural ceiling;
+// desktop GPUs ignore mediump. ?fp16=0 forces highp everywhere.
 export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte = false, halfp = true, texOcc = false, warp = null, hop1 = false, occDynCap = 999, pvd = false, matteSpec = 1, hopSpec = false, noSpec = false) {
-  const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2, PANE = mode === 3;
+  const STATIC = mode === 0, PROP = mode === 4, GLASS = mode === 2;
   const PVD = pvd && PROP; // prop diffuse arrives from the vertex shader
   // matte + very-rough pixels: ?mattespec 1 = TIERED one-hop PCCM at
   // material roughness (default: only materials tagged hopSpec compile
   // the hop - open-plan walls/ceilings, the only surfaces that can
   // straddle a virtual cut; single-cell rooms keep the cheap zero-hop
-  // program), 3 = one-hop on ALL matte (tiering A/B), 2 = zero-hop
-  // everywhere (seams at open-plan cuts), 0 = flat irradiance-along-R.
-  // The rough>0.65 early-out in floor/prop programs is always zero-hop
-  // (blur hides cut seams there, and those programs sit on the
-  // register-occupancy edge)
+  // program), 3 = one-hop on ALL matte, 2 = zero-hop everywhere (seams at
+  // open-plan cuts), 0 = flat irradiance-along-R. The rough>0.65 early-out
+  // in floor/prop programs is always zero-hop (blur hides cut seams there,
+  // and those programs sit on the register-occupancy edge).
   // noSpec (demoted ceilings): HARD diffuse - the whole specular block
-  // compiles out. (An irradiance-tap demotion was tried first and still
-  // seamed: the tap is direction-only but PER-CELL, and adjacent cells'
-  // irradiance tiles differ at a cut. No view-dependent term = no seam.)
+  // compiles out. An irradiance-tap demotion still seams: the tap is
+  // direction-only but PER-CELL, and adjacent cells' irradiance tiles differ
+  // at a cut. No view-dependent term = no seam.
   const MATTE_HOP = matte && !noSpec && (matteSpec === 3 || (matteSpec === 1 && hopSpec));
   const ROUGH_SPEC = matteSpec
     ? (MATTE_HOP ? 'pccmSpec(uCell, P, Ng, R, rough)'
@@ -1040,7 +1026,7 @@ export function sceneFrag(numCells, useUbo = true, mode = 0, dbg = false, matte 
         : 'pccmSpec(uCell, P, R, rough)')
     : 'sampleIrr(uCell, R)';
   // warp fields replace the recursive walk in STATIC programs only: props/
-  // glass/pane are near-mirror small-fill and keep the exact loop; debug
+  // glass is near-mirror small-fill and keeps the exact loop; debug
   // variants keep it too so the step heatmap stays a ground-truth view
   const WARP = !!warp && STATIC && !matte && !dbg;
   // one exact unrolled hop (floors + non-sharp props); debug keeps the loop
@@ -1073,7 +1059,7 @@ ${texOcc && STATIC ? '// texture-space occlusion layer over the lightmap UVs (dy
 uniform int uCell;
 uniform int uCellPrev;    // previous cell during a diffuse handoff crossfade (-1 = none)
 uniform float uPrevMix;   // crossfade weight of the previous cell, decays over ~0.2s
-uniform int uMode;        // 0 = surface, 1 = chrome, 2 = glass, 3 = debug pane, 4 = dynamic diffuse (parallax-corrected irradiance)
+uniform int uMode;        // 0 = surface, 1 = chrome, 2 = glass, 4 = dynamic diffuse (parallax-corrected irradiance)
 uniform vec3 uTint;
 uniform vec3 uEmissive;
 uniform float uRough;
@@ -1121,8 +1107,8 @@ ${noSpec ? /* glsl */`
   vec3 V = normalize(cameraPosition - P);
 
   // tangent-space normal mapping (specular + probe response; the flat lightmap
-  // itself is non-directional for now). Geometries without tangents (primitive
-  // props) read a zero attribute - guard against normalize(0) = NaN.
+  // itself is non-directional). Geometries without tangents (primitive props)
+  // read a zero attribute - guard against normalize(0) = NaN.
   vec3 N = Ng;
   vec3 Traw = vTan.xyz - Ng * dot(Ng, vTan.xyz);
   float tLen = length(Traw);
@@ -1150,12 +1136,6 @@ ${GLASS ? /* glsl */`
   ${dbg ? 'float s2;' : ''}
   MP vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, dynFade${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
   color = mix(thru, refl, F);
-` : PANE ? /* glsl */`
-  // debug pane: continue the eye ray straight through with zero roughness -
-  // a direct, unrefracted window into the hull cubemap structure (a -R trick
-  // here would mirror the lateral ray component and act like an inverting
-  // lens). Faint green cast marks the glass.
-  color = traceSpec(uCell, P, -V, 0.0, 8, dynFade${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
 ` : /* glsl */`
   MP vec3 albedo = texture(uMap, vUv).rgb * uTint;
   ${dbg ? 'if (uDebugMode == 4) albedo = vec3(0.75);' : ''}
@@ -1177,9 +1157,9 @@ ${PROP && !PVD ? /* glsl */`
   }` : ''}
 ${PROP ? /* glsl */`
   // analytic SPOT direct on props: the probe grid averages a room's light but
-  // cannot represent a narrow beam, so props in a spotlight stayed flat.
-  // Point lights (w = -2) skip - their energy is already in the probes. Cone
-  // math matches the lightmapper's (soft 0.08-cos shoulder).
+  // cannot represent a narrow beam, so without this props in a spotlight stay
+  // flat. Point lights (w = -2) skip - their energy is already in the probes.
+  // Cone math matches the lightmapper's (soft 0.08-cos shoulder).
   // ${PVD ? 'Shadowed by the baked per-light probe visibility (lightvis.js):'
           : 'Unshadowed; borrowed spots gate per-cell (uLightLocal):'}
   for (int li = 0; li < 8; li++) {
@@ -1205,19 +1185,19 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
   // shadow for STATIC receivers is pre-evaluated per lightmap texel into a
   // quarter-res layer - one bilinear tap replaces both capsule loops (and
   // their register pressure; matte walls become pure texture fill). Bonus:
-  // the splat is global world-space, so shadows no longer clip at portal
-  // planes and need no view-range pop-in gating.
+  // the splat is global world-space, so shadows don't clip at portal planes
+  // and need no view-range pop-in gating.
   if (uOccOn > 0.5) diffuseL *= texture(uDynOcc, vUv2).r;
 ` : /* glsl */`
   // live contact AO from the occluder capsules (props AND proxied statics -
-  // the statics cast nothing in the lightmap by design; dyn entries fade
-  // with dynFade inside)
+  // the statics cast nothing in the lightmap; dyn entries fade with dynFade
+  // inside)
   if (uOccOn > 0.5) {
     diffuseL *= capsuleAO(uCell, P, N, dynFade);
     // dynamic directional shadows: one capsule-marched ray toward the
-    // weighted local light direction ("we have raytracing at home").
-    // Ng, NOT the bumped N: bump facets tilting past a facing gate punched
-    // bright acne pinpricks through the shadow interior
+    // weighted local light direction. Ng, NOT the bumped N: bump facets
+    // tilting past a facing gate punch bright acne pinpricks through the
+    // shadow interior
     if (uOccShadow > 0.001 && dynFade > 0.0) {
       diffuseL *= mix(1.0, capsuleShadow(uCell, P, Ng), dynFade);
     }
@@ -1231,7 +1211,7 @@ ${useUbo ? (PVD ? '' /* AO + shadows folded into vDiff in the vertex shader */
     vec3 R = reflect(-V, N);
     // very rough surfaces (most wall/ceiling area): the traversal's max-lod
     // result is indistinguishable from one cosine-convolved irradiance tap
-    // along R - skip the whole hull walk (Tier 1)
+    // along R - skip the whole hull walk
     MP vec3 pre = ${matte ? ROUGH_SPEC
       : `(rough > 0.65) ? ${ROUGH_SPEC}
                               : ${WARP ? 'traceSpecW(uCell, P, R, rough, dynFade)'
@@ -1282,7 +1262,7 @@ ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 void main() {
   // LOD0 is the sharpest mip and the only one near-mirror surfaces (glass,
-  // chrome, grazing floors) sample. A single cube tap per oct texel combed
+  // chrome, grazing floors) sample. A single cube tap per oct texel combs
   // high-contrast edges (a bright doorway against dark floor) into visible
   // spikes: the octahedral map's non-uniform texel density undersamples the
   // edge, and the prefiltered mips hide it but LOD0 shows it raw. Box-filter

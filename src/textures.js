@@ -176,7 +176,7 @@ function makeImgTex(img, { tile = 1, target = null, flatten = 1, norFlat = 1, ro
 //   norFlat  0..1 normal-map strength (1 = full)
 //   roughMul scales ORM roughness; lower = glossier
 export const REAL_SETS = {
-  // Andre's CC0 white veined marble ships as separate maps (cgbookcase-style
+  // CC0 white veined marble ships as separate maps (cgbookcase-style
   // naming): give `files` explicitly; ao + rough compose into an ORM in-loader
   marble: {
     dir: 'marble_0017_ao_1k',
@@ -191,16 +191,15 @@ export const REAL_SETS = {
   concrete: { slug: 'concrete_floor_worn_001', res: '1k', target: [135, 135, 132] },
   // board-formed panels with form ties: wall-styled, so walls only (floors
   // keep the plain slab above via the concrete/concreteWall key split).
-  // rough ~0.5-0.75: sharp enough for the wall sheen to read (a 0.7 floor
-  // sampled near-uniform max mips - boosting it did nothing visible).
+  // rough ~0.5-0.75: sharp enough for the wall sheen to read.
   // Walls stay on the cheap zero-hop program via the explicit matte flag
   // in level.js, not the roughness threshold.
   concreteWall: { slug: 'concrete_wall_009', res: '2k', roughMin: 0.4, roughMul: 0.6 },
   walnut: { slug: 'dark_wood', res: '1k' },
   brick: { slug: 'red_bricks_04', res: '2k' }, // courtyard paving
   // mild flatten reins in the photo's stains without going flat-procedural
-  // (also feeds plasterPlain = ceilings/jambs). rough lowered from the 0.7
-  // matte floor for a readable eggshell sheen; matte is forced in level.js
+  // (also feeds plasterPlain = ceilings/jambs). rough sits below the matte
+  // floor for a readable eggshell sheen; matte is forced in level.js
   plaster: { slug: 'painted_plaster_wall', res: '1k', target: [230, 226, 219], flatten: 0.65, norFlat: 0.7, roughMin: 0.4, roughMul: 0.6 },
 };
 
@@ -251,7 +250,7 @@ export async function applyRealTextures(textures) {
     return Promise.all(parts.map(p => loadImg(url(p))));
   }));
   // NOTE each map gets ONLY its own opts: norFlat/roughMul rescale channels
-  // and would tint the albedo if spread into the diffuse call (they did)
+  // and would tint the albedo if spread into the diffuse call
   const set = (imgs, opts = {}) => ({
     map: makeImgTex(imgs[0], { tile: opts.tile, target: opts.target,
       flatten: opts.flatten, srgb: true, band: opts.bandAlbedo }),
@@ -261,9 +260,9 @@ export async function applyRealTextures(textures) {
       ? makeOrmTex(imgs[2], imgs[3], opts)
       : makeImgTex(imgs[2], { tile: opts.tile, roughMul: opts.roughMul,
           roughMin: opts.roughMin,
-          // trim band rough 0.72 (was 0.45): the band shares the wall
-          // material, and one glossy pixel would disqualify walls from the
-          // traversal-free MATTE program
+          // band rough 0.72: the band shares the wall material, and one
+          // glossy pixel would disqualify walls from the traversal-free
+          // MATTE program
           band: opts.band && (() => [255, 184, 0]) }),
   });
   // baseboard strip painted back over the wall set, matching the procedural one

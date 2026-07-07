@@ -17,9 +17,6 @@ const PROP_DEFS = [
   { shape: 'sphere', mode: 4, x: 0, z: 1.4, tint: [0.95, 0.96, 0.97], roughFactor: 0.04, metalFactor: 1 }, // chrome
   { shape: 'sphere', mode: 2, x: 2.5, z: 1.4 },
   { shape: 'cube', mode: 4, x: -2.5, z: -1.4, tint: [0.85, 0.4, 0.3], roughFactor: 0.8, metalFactor: 0 },
-  // (chrome + glass cubes cut 2026-07-04: read poorly, and fewer dyn props
-  // keeps the blob budget balanced - their pedestals now hold the small
-  // horse and elephant moved over from hall A)
 ];
 
 export class Props {
@@ -78,7 +75,7 @@ export class Props {
     }
   }
 
-  // legacy single-held view (desktop paths, crosshair checks): first hold
+  // single-held accessor (desktop paths, crosshair checks): first hold
   get held() {
     for (const h of this.holds.values()) return h.p;
     return null;
@@ -168,7 +165,7 @@ export class Props {
       const target = carrier.pos.clone().addScaledVector(carrier.viewDir, CARRY_DIST);
       p.vel.copy(target.sub(p.mesh.position).multiplyScalar(14));
       // step cap: an uncapped carry spring could sweep a prop clean through
-      // the pillar between two hull clamps (fast look-turns tunneled it)
+      // the pillar between two hull clamps on fast look-turns
       tmpD.copy(p.vel).multiplyScalar(step);
       if (tmpD.length() > 0.4) tmpD.setLength(0.4);
       p.mesh.position.add(tmpD);
@@ -180,9 +177,8 @@ export class Props {
     const pos = p.mesh.position;
     for (const c of this.level.colliders) {
       // statues carry their true convex-hull planes (physics.js): sphere-vs-
-      // convex pushout along the least-penetrated face. The old center
-      // cylinder blocked approach mid-statue and let held props clip clean
-      // through the extremities the cylinder never covered.
+      // convex pushout along the least-penetrated face, which covers the
+      // extremities a bounding cylinder would let held props clip through.
       if (c.hullPlanes) {
         let best = -1e9, bn = null;
         for (const pl of c.hullPlanes) {

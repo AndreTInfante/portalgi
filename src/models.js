@@ -13,7 +13,7 @@ import { GeoBuilder } from './level.js';
 export const STATIC_MODEL_DEFS = [
   { slug: 'horse_statue_01', size: 2.2, cell: 2, x: 0, z: 13.3, rotY: Math.PI },
   { slug: 'bronze_whale_statue', size: 2.4, cell: 8, x: 13.4, z: -15.8, rotY: Math.PI / 5 },
-  // courtyard greenery (Andre-sourced, CC0): opposite corners, off the benches
+  // courtyard greenery (CC0): opposite corners, off the benches
   { slug: 'potted_plant_02', size: 1.15, cell: 13, x: 17.5, z: -3.6, rotY: 0.6 },
   { slug: 'potted_plant_04', size: 1.35, cell: 13, x: 23.7, z: 3.6, rotY: -1.1 },
 ];
@@ -76,9 +76,8 @@ export async function addStaticModels(level) {
       });
       // physics spheres: vertical band fit over the REAL world vertices
       // (centroid + 90th-percentile radius per band). The authored occluder
-      // capsules are tuned for reflection blobs, not contact - the horse's
-      // fat plinth ball left props standing proud while uncovered legs let
-      // them sink clean inside (Andre report)
+      // capsules are tuned for reflection blobs, not contact, so they can't
+      // be reused for collision.
       const physSpheres = [];
       if (physPts.length > 12) {
         let minY = Infinity, maxY = -Infinity;
@@ -99,8 +98,8 @@ export async function addStaticModels(level) {
       // r: generous player-collision radius (can't clip the statue overhang);
       // rx/rz: reflection-contact footprint = the plinth, NOT the collision r.
       // physPts: the raw world-space samples - physics.js hulls them at a
-      // 50-vert budget (the band spheres survive only as a hull-failure
-      // fallback; they left statue contact "all over the place")
+      // 50-vert budget; the band spheres survive only as a hull-failure
+      // fallback.
       level.colliders.push({
         x: def.x, z: def.z, r: def.size * 0.42,
         rx: def.size * 0.25, rz: def.size * 0.25, rot: 0,
@@ -113,20 +112,18 @@ export async function addStaticModels(level) {
 }
 
 export const MODEL_DEFS = [
-  // horse + elephant live in the gallery now (on the pedestals the cut
-  // chrome/glass cubes vacated) - spreads dyn props across rooms
+  // horse + elephant on the gallery pedestals - spreads dynamic props across rooms
   { slug: 'horse_statue_01', size: 0.85, cell: 0, x: 0, z: -1.4, ped: true },
   { slug: 'carved_wooden_elephant', size: 0.62, cell: 0, x: 2.5, z: -1.4, ped: true },
   { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -2.4, z: 24.7, ped: true },
   { slug: 'bronze_whale_statue', size: 1.15, cell: 11, x: 6.6, z: 22.5 },
   { slug: 'ceiling_fan', size: 1.0, cell: 10, x: 1.8, z: 24, hangCeil: 4.0 },
   { slug: 'CoffeeCart_01', size: 1.4, cell: 10, x: -2.4, z: 25.6, rotY: Math.PI },
-  // chairs face the room center (Andre-specified turns from their old facing)
+  // chairs face the room center
   { slug: 'BarberShopChair_01', size: 1.15, cell: 12, x: -9.3, z: 24.2, rotY: Math.PI * 0.75 },
   { slug: 'mid_century_lounge_chair', size: 0.95, cell: 12, x: -4.8, z: 22.5, rotY: -Math.PI / 2 },
   { slug: 'modern_arm_chair_01', size: 0.95, cell: 12, x: -9.3, z: 20.8, rotY: Math.PI / 4 },
   { slug: 'ClassicConsole_01', size: 1.35, cell: 12, x: -7.1, z: 24.55 },
-  // ornate_mirror_01 cut 2026-07-04 (hanging mirror read badly)
 ];
 
 export async function loadModelProps(matsys, manager) {

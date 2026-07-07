@@ -24,20 +24,17 @@ const capToWorld = (v, f) => {
   return new THREE.Vector3(f.x + c * v.x + s * v.z, v.y, f.z - s * v.x + c * v.z);
 };
 
-// TOTAL SIZE IS A PLATFORM CONSTRAINT, not a tuning knob: raising the block
-// to ~15.7KB total UBO (with HullData) regressed EVERY on-device config
-// incl. steps0, which runs none of the occluder code - consistent with
-// Adreno demoting all uniform-block reads to the slow path once the fast
-// constant store overflows. ~13KB total measured good. Capacity within the
-// budget comes from packing only VISIBLE cells (+ portal neighbors) per
-// frame instead of reserving slots for the whole level: the same bytes now
-// support 16 entries/cell and 8 capsules/entry in the rooms that matter.
+// TOTAL SIZE IS A PLATFORM CONSTRAINT, not a tuning knob: Adreno demotes all
+// uniform-block reads to the slow path once the fast constant store overflows,
+// so the whole block (with HullData) must stay under ~13KB - past that even a
+// shader running none of the occluder code slows down. Packing only VISIBLE
+// cells (+ portal neighbors) per frame, instead of reserving slots for the
+// whole level, keeps 16 entries/cell and 8 capsules/entry within that budget.
 export const MAX_OCC_PROPS = 40;
 // capsules pack fp16 RELATIVE to their entry's fp32 bound center (offsets
 // <= ~1.5m keep fp16 error under 1mm; absolute coords would quantize at
-// 3cm): one uvec4 per capsule instead of two vec4 - the sphere region
-// halves to 1.28KB of the ~13KB constant-store ceiling (headroom is the
-// scaling axis for more cells)
+// 3cm): one uvec4 per capsule instead of two vec4 halves the sphere region
+// to 1.28KB of the ~13KB constant-store ceiling, leaving headroom for cells.
 export const MAX_OCC_CAPS = 80;
 export const MAX_PER_CELL = 16;
 export const MAX_SPH_PER_PROP = 8;
@@ -63,8 +60,8 @@ export function buildOccluderGroup(numCells) {
   mk(MAX_OCC_CAPS);    // capsule slots (uvec4 of fp16 pairs; same 16B layout)
   // packed std140 mirror: OccluderSystem writes floats here and the vendored
   // three patch uploads it as ONE orphaning bufferData call per frame. The
-  // stock per-uniform path did ~200 tiny bufferSubData writes into an
-  // in-flight buffer whenever props moved (measured as movement-only drops)
+  // stock per-uniform path instead issues ~200 tiny bufferSubData writes into
+  // an in-flight buffer whenever props move, which stalls the pipeline.
   const fast = new Float32Array((numCells + MAX_OCC_PROPS * 2 + MAX_OCC_CAPS) * 4);
   group.userData = { fastArray: fast };
   // uint view over the same bytes: the capsule region holds packed halfs
@@ -73,8 +70,8 @@ export function buildOccluderGroup(numCells) {
 
 // Automatic fit: one CAPSULE per submesh bounding box - elongated boxes get
 // a single stretched capsule along the long axis, compact ones degenerate to
-// a sphere (a == b). Local space; largest 5 kept.
-// (Hero statics get a manual authoring pass later - see the design doc.)
+// a sphere (a == b). Local space; largest MAX_SPH_PER_PROP kept.
+// (Hero statics get a manual authoring pass - see the design doc.)
 export function fitCapsules(root) {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
@@ -97,8 +94,8 @@ export function fitCapsules(root) {
     const axes = ['x', 'y', 'z'].sort((a, b) => ext[b] - ext[a]);
     const L = axes[0], sa = ext[axes[1]], sb = ext[axes[2]];
     const ratio = ext[L] / Math.max(Math.max(sa, sb), 1e-3);
-    // radii from the max EXTENT, not the bbox diagonal - the diagonal made a
-    // sphere prop's occluder 1.47x the ball (phantom poking through the floor)
+    // radii from the max EXTENT, not the bbox diagonal - the diagonal
+    // over-inflates a round prop's radius so it pokes through the floor
     if (ratio > 1.4) {
       const r = 0.55 * Math.max(sa, sb);
       const a = ctr.clone(), b = ctr.clone();
@@ -202,8 +199,8 @@ export class OccluderSystem {
   }
 
   // group ids pack into 6 bits of color.w - overflowing 63 would silently
-  // corrupt the sphereCount bits (agent-flagged). Clamping to 63 merely
-  // over-shares one group (some false self-skips), which degrades gracefully
+  // corrupt the sphereCount bits. Clamping to 63 merely over-shares one group
+  // (some false self-skips), which degrades gracefully
   _takeGroup() {
     if (this._nextGroup > 63) {
       console.error('occluders: group id space exhausted (>63); sharing group 63');
@@ -265,12 +262,11 @@ export class OccluderSystem {
   // activeOrder: cell ids in PRIORITY order (visible -> ring 1 -> ring 2,
   // built by the caller), or null for all cells (bakes, cull=0). Cells pack
   // in that order, so when entry/sphere slots run out the LEAST important
-  // cells lose their blobs - previously cells packed by id, so a far
-  // low-id cell could starve the room the viewer was standing in.
+  // cells lose their blobs, never the room the viewer is standing in.
   // viewPos: dynamic entries pack CLOSEST-FIRST to it. capsuleBudget: dyn
   // entries are TRUNCATED here, at pack time - the budget outcome is
-  // deterministic per cell per frame, so spending it in the shader was pure
-  // per-pixel waste (and forced the color/meta read before the bound reject)
+  // deterministic per cell per frame, so enforcing it in the shader would be
+  // per-pixel waste and would force the color/meta read before the bound reject
   update(activeOrder = null, viewPos = null, capsuleBudget = Infinity) {
     const occ = this.occ;
     const activeCells = activeOrder
@@ -280,8 +276,8 @@ export class OccluderSystem {
       activeCells.clear();
       for (const c of activeOrder) activeCells.add(c);
     }
-    // pooled per-frame structures: this runs 72x/s and Quest-browser GC
-    // pauses read as unexplained single-frame drops
+    // pooled per-frame structures: this runs 72x/s, and GC pauses from
+    // per-frame allocation show up as single-frame drops on the Quest browser
     const byCell = this._byCell || (this._byCell = new Map());
     for (const list of byCell.values()) list.length = 0;
     const push = (cellId, item) => {
@@ -308,9 +304,9 @@ export class OccluderSystem {
       item.d2 = viewPos ? mesh.position.distanceToSquared(viewPos) : 0;
       push(e.p.cell, item);
       // near a portal, register in the neighbor too: shadows, contact AO and
-      // reflection occlusion clipped hard at portal planes when a caster
-      // could live in only one cell (worst in the pillar-hall ring). The
-      // margin covers the shadow's likely stretch; duplicates stay rare.
+      // reflection occlusion clip hard at portal planes if a caster lives in
+      // only one cell. The margin covers the shadow's likely stretch;
+      // duplicates stay rare.
       if (this.level) {
         const cell = this.level.cells[e.p.cell];
         const pos = mesh.position;
@@ -361,8 +357,8 @@ export class OccluderSystem {
           if (e.dyn) {
             // closest-first capsule budget, spent here so every consumer
             // (AO / shadows / reflection occlusion) sees the same caster set.
-            // Check-then-commit: charging skipped entries let one oversized
-            // close prop block every smaller one behind it (agent-flagged)
+            // Check-then-commit: charge the budget only for committed entries,
+            // else one oversized close prop blocks every smaller one behind it
             if (dynCaps + e.world.length > capsuleBudget) continue; // statics still follow
             dynCaps += e.world.length;
           }

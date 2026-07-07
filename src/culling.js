@@ -1,10 +1,10 @@
 // Classic cell-and-portal visibility culling: start from the camera's cell
 // with the full screen rect; a neighbor cell is visible only if one of its
 // portals' projected NDC bounds intersects the current rect, and recursion
-// continues with the INTERSECTION (frustum narrowing through each doorway).
+// continues with the intersection (frustum narrowing through each doorway).
 // The portal graph doubles as a PVS, Quake-style.
 //
-// Uniquely safe here: reflections/GI read the baked atlas, not live geometry,
+// Reflections/GI read the baked atlas, not live geometry,
 // so hiding off-screen cells can never break a mirror or a probe.
 import * as THREE from 'three';
 import { findCell } from './level.js';

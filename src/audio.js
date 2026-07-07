@@ -116,7 +116,7 @@ export class AudioSystem {
     src.start(t, Math.random() * 0.7, decay + 0.05);
   }
 
-  // step on stone: mostly low-end body with a soft mid tap (no bright tick)
+  // step on stone: mostly low-end body with a soft mid tap
   _step() {
     const t = this.ctx.currentTime;
     const v = 0.8 + Math.random() * 0.4;

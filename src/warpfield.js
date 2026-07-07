@@ -1,14 +1,16 @@
-// Portal warp fields (portal agent re-pose): everything a reflection ray
+// ADDENDUM: This did not work: creates bad artifacts unless angular error is
+// extremely low, which requires a huge LUT. Deprecated.
+// Portal warp fields: everything a reflection ray
 // does AFTER crossing a portal is a pure function of the crossing point on
 // the portal rect and the ray direction - the level is static geometry, so
 // (t_beyond, terminal_cell_id) is bakeable per DIRECTED portal into a small
 // 4D field: rect (s,t) x hemi-octahedral direction. The static programs'
 // recursive hull walk (live registers across up to 8 hops of atlas samples -
-// the measured occupancy ceiling) collapses to: one local hull exit, one
+// the occupancy ceiling) collapses to: one local hull exit, one
 // local occSegment, a field tap, and one far atlas sample (traceSpecW in
 // shaders.js). Near-mirror props/glass keep the real loop.
 //
-// Certainty (Andre's LUT-uncertainty design, 2026-07-05): each texel bakes
+// Certainty: each texel bakes
 // 8 jittered walks; where they disagree on the terminal cell - portal-frame
 // silhouettes, grazing directions - the texel is AMBIGUOUS. A post-pass
 // also zeroes certainty where the 3x3 in-tile neighborhood disagrees, so
@@ -30,8 +32,8 @@
 import * as THREE from 'three';
 import { PLANES_OFF, PORTALS_OFF, PORTAL_STRIDE } from './hulldata.js';
 
-export const WARP_ST = 16;   // rect texels per tile axis (8 stair-stepped
-                              // visibly at doorway-jamb reflections)
+export const WARP_ST = 16;   // rect texels per tile axis (coarser tiles
+                              // stair-step visibly at doorway-jamb reflections)
 export const WARP_DIR = 16;  // hemi-oct direction bins per axis
 
 const VERT = /* glsl */`
@@ -152,9 +154,9 @@ void main() {
 }`;
 
 // pass 2, fullscreen: GRADE certainty by how much of the 3x3 in-tile
-// neighborhood agrees on the terminal id (a binary zero printed visible
-// stair-steps along reflected doorway jambs - the fade band needs smooth
-// shoulders, not a hard 2-texel cliff). The runtime bilinear tap then
+// neighborhood agrees on the terminal id (grading rather than a binary zero
+// gives the fade band smooth shoulders instead of a hard 2-texel cliff that
+// stair-steps along reflected doorway jambs). The runtime bilinear tap then
 // returns a ready-made continuous fade ramp at every discontinuity.
 const SPREAD_FRAG = /* glsl */`
 precision highp float;
@@ -252,8 +254,8 @@ export function buildWarpField(renderer, level, hullTex) {
     u.uBlockOrigin.value.set(bx, by);
     u.uStartCell.value = po.neighbor;
     // per-block viewport via the TARGET's viewport: renderer.setViewport
-    // mutates the persistent CANVAS viewport instead (it shrank the main
-    // view to one block - black frames with a 128px scene in the corner)
+    // would instead mutate the persistent CANVAS viewport, shrinking the
+    // main view to one block
     rt1.viewport.set(bx, by, block, block);
     renderer.setRenderTarget(rt1); // re-bind applies the new viewport
     renderer.render(fsScene, cam);

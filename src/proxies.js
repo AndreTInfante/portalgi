@@ -1,7 +1,6 @@
 // Hand-authored occluder capsule sets + blob albedo colors (authored in-app:
 // ?proxyedit=1, DUMP, paste here). Auto-fit is the fallback for any slug not
-// keyed. Full set authored by Andre 2026-07-04; simplified pass (fewer
-// capsules, fixed colors, plant proxies added) later the same day.
+// keyed.
 //
 // COORDINATE FRAME (both statics and props): the model's authoring-local
 // frame - scaled to its in-game size, grounded/centered exactly as the game

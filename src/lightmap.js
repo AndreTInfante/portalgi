@@ -3,7 +3,7 @@
 // All static geometry (already in world space, with packed uv2 charts) is
 // merged into one mesh with per-vertex albedo/emissive, raytraced in-shader
 // via three-mesh-bvh. The lightmap stores "diffuse light" D (irradiance-ish),
-// rendered as albedo x D -- same convention as the analytic path it replaces.
+// rendered as albedo x D.
 //
 // Passes:
 //   1. G-buffer: rasterize charts in uv2 space -> world position + normal
@@ -99,12 +99,12 @@ void main() {
   vec4 pw = texelFetch(uPos, tx, 0);
   if (pw.a < 0.5) {
     // jittered G-buffers can uncover a border texel in one pass and not the
-    // next: keep the accumulated value instead of zeroing it. (An attempt to
-    // pass uAccum through UNCONDITIONALLY polluted the gutter ring with
-    // alpha=1 iteration-era values, no-opping the final dilation - gray
-    // lines at every chart border. Diagonal borders are instead fixed at the
-    // GEOMETRY level: open-plan rooms share one floor/ceiling chart, so
-    // there are no razor-edge texels to protect.)
+    // next: keep the accumulated value instead of zeroing it. Only while
+    // accumulating (uAccumW > 0); passing uAccum through UNCONDITIONALLY fills
+    // the gutter ring with alpha=1 values that no-op the final dilation,
+    // leaving gray lines at every chart border. Diagonal borders are fixed at
+    // the GEOMETRY level instead: open-plan rooms share one floor/ceiling
+    // chart, so there are no razor-edge texels to protect.
     fragColor = uAccumW > 0.0 ? texelFetch(uAccum, tx, 0) : vec4(0.0);
     return;
   }
@@ -127,12 +127,12 @@ void main() {
       spot = smoothstep(uLightDir[i].w, uLightDir[i].w + 0.08, dot(-Ln, uLightDir[i].xyz));
       if (spot <= 0.0) continue;
     }
-    // shadow prefilter (Andre's sampling-theorem read, 2026-07-05): a point
-    // emitter bakes a step-function shadow edge the texel grid cannot
-    // represent - stair aliasing at reconstruction. Jittering the shadow
-    // target over the light's finite radius band-limits the SIGNAL: penumbras
-    // span 2-3 texels and bilinear reconstructs them cleanly. Softer shadows
-    // traded for aliasing, by design. 4 rays/iteration; iterations accumulate.
+    // shadow prefilter: a point emitter bakes a step-function shadow edge the
+    // texel grid cannot represent - stair aliasing at reconstruction.
+    // Jittering the shadow target over the light's finite radius band-limits
+    // the SIGNAL: penumbras span 2-3 texels and bilinear reconstructs them
+    // cleanly. Trades shadow sharpness for alias-free reconstruction. 4
+    // rays/iteration; iterations accumulate.
     float vis = 0.0;
     for (int s = 0; s < 4; s++) {
       vec3 jp = uLightPos[i] +
@@ -218,10 +218,9 @@ export class Lightmapper {
     this.level = level;
     // TDR guard: rays is a compile-time loop bound INSIDE one strip draw -
     // past ~512/texel a strip takes multiple seconds and Windows' 2s GPU
-    // watchdog kills the GL context (browser crash on lmrays=3840, Andre
-    // 2026-07-05). Excess rays convert into extra INDEPENDENT final passes:
-    // same total rays and variance reduction, MORE AA jitters, and every
-    // draw stays watchdog-sized.
+    // watchdog kills the GL context. Excess rays convert into extra
+    // INDEPENDENT final passes: same total rays and variance reduction, MORE
+    // AA jitters, and every draw stays watchdog-sized.
     const wantRays = opts.rays || 64;
     this.rays = Math.min(wantRays, 512);
     this.iterations = opts.iterations || 3;
@@ -347,13 +346,11 @@ export class Lightmapper {
       pb.push(new THREE.Vector4(pn.sz / 2, e * c[0], e * c[1], e * c[2]));
     }
     this.nPanels = pa.length;
-    // per-draw workload budget, anchored to the config that has NEVER
-    // crashed a driver (64-row strips at 384 gather rays + 32 panel
-    // samples), with a 0.75 safety factor: heavier settings SHRINK the
-    // strip instead of lengthening the draw. Andre's master bake (rays
-    // 512 after the cap + lmps=64) still tripped Windows' 2s watchdog at
-    // 64 rows - per-draw time is what kills the context, so per-draw
-    // work is what must stay constant.
+    // per-draw workload budget, anchored to a reference config (64-row strips
+    // at 384 gather rays + 32 panel samples) with a 0.75 safety factor:
+    // heavier settings SHRINK the strip instead of lengthening the draw.
+    // Per-draw time is what kills the GL context, so per-draw work is what
+    // must stay constant.
     const drawCost = (rays, ps) => rays + ps * this.nPanels + 24 * 4;
     this.stripRows = Math.max(8, Math.min(64,
       Math.floor(0.75 * 64 * drawCost(384, 32) / drawCost(this.rays, this.panelSamples)) & ~7));
@@ -439,9 +436,9 @@ export class Lightmapper {
     renderer.render(this.bakeScene, this.cam);
     yield;
     // shading iterations: read the DILATED previous map (lmC), write lmA, swap.
-    // Gather rays hitting near a chart border take bilinear taps that straddle
-    // into the pad ring - reading it un-dilated (black) under-gathered every
-    // chart seam a little more each iteration (the dark seam lines)
+    // Gather rays near a chart border take bilinear taps that straddle into
+    // the pad ring; reading it un-dilated (black) under-gathers every chart
+    // seam, compounding each iteration into dark seam lines.
     renderer.setRenderTarget(this.lmB);
     renderer.clear();
     for (let it = 0; it < this.iterations; it++) {
@@ -494,8 +491,8 @@ export class Lightmapper {
       }
       this.ptUniforms.uAccumW.value = 0;
     }
-    // dilation ping-pong (4 passes: each grows 1 texel; the pad ring is 4px
-    // now so mip levels 1-2 average dilated data, never zeros)
+    // dilation ping-pong (4 passes: each grows the covered region by 1 texel,
+    // for a 4px pad ring so mip levels 1-2 average dilated data, never zeros)
     for (let d = 0; d < 4; d++) {
       this.dilateMat.uniforms.uSrc.value = this.lmA.texture;
       this.runFs(this.lmB, this.dilateMat);

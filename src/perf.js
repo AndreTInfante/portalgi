@@ -8,7 +8,7 @@
 // sweep at 90Hz and 72Hz caps spans exactly 2.78ms of frame budget, which
 // calibrates burn units into milliseconds on the actual device.
 //
-// A/B: feature cost in ms = (tip without feature - tip with) x ms-per-unit.
+// Feature cost in ms = (tip without feature - tip with) x ms-per-unit.
 import * as THREE from 'three';
 
 const BURN_VERT = /* glsl */`
@@ -190,8 +190,8 @@ export class PerfHarness {
         this.deltas.push(d); // ring buffer feeds the vsync-period median
         if (this.deltas.length > 240) this.deltas.shift();
       }
-      // sweep accounting keeps slower frames too (they are DROPS, not gaps) -
-      // discarding them made a pathological config read as 0% dropped
+      // sweep accounting keeps slower frames too (they are DROPS, not gaps);
+      // discarding them would let a pathological config read as 0% dropped
       if (!(d > 0 && d < 5000)) d = undefined;
     }
     this._last = nowMs;
@@ -245,8 +245,8 @@ export class PerfHarness {
     s.results.push([s.level, pct]);
     if (pct > this.threshold) s.hi = s.level; else s.lo = s.level;
     // climb by full steps until the first tip, then bisect (lo, hi) down to
-    // ~5u resolution (~0.25ms) - step quantization otherwise puts +-1ms error
-    // bars on A/B differences
+    // ~5u resolution (~0.25ms) - coarser steps put +-1ms quantization error
+    // bars on measured differences
     let next = null;
     if (s.hi === undefined) {
       if (s.level < this.maxLevel) next = s.level + this.step;

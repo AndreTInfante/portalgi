@@ -93,7 +93,7 @@ export class GeoBuilder {
   polygon(pts, n, uvFn) {
     // Newell's method for the winding test: the first-three-points cross
     // product is degenerate when a footprint starts with collinear vertices
-    // (e.g. L1's split south edge), which flipped its floor into a backface.
+    // and can flip the floor into a backface.
     let nx = 0, ny = 0, nz = 0;
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i], b = pts[(i + 1) % pts.length];
@@ -157,8 +157,8 @@ export class GeoBuilder {
 // One lightmap chart shared across polygons that live in DIFFERENT builders
 // (each cell keeps its own mesh: correct uCell for the traversal, normal
 // culling - but the ATLAS sees one rect, so sector boundaries land in the
-// chart INTERIOR where every texel is covered, and cannot seam. Andre: the
-// cell partition does not have to partition the lightmap.)
+// chart INTERIOR where every texel is covered, and cannot seam. The cell
+// partition does not have to partition the lightmap.)
 // items: [{ geo, pts }] convex polys sharing plane normal n.
 // The chart object carries per-geo spans; packLightmapCharts packs it once
 // and writes uv2 into every span.
@@ -204,15 +204,15 @@ export function emitSharedChart(items, n, uvFn) {
 
 // Shelf-pack every chart of every builder into one lightmap atlas and write
 // per-vertex uv2. Vertices map to the chart RECT edges, so border texel
-// centers sample the surface half a texel INSIDE the mesh edge - mapping
-// edges onto texel centers (the old scheme) made border coverage knife-edge
-// (dashed dark seams from alternating fill-rule coverage) and baked the
-// extreme corner point of every lighting gradient. Runtime bilinear at a
-// mesh edge blends the border texel with its dilated gutter copy = same
-// value, so seams stay continuous. (2px pad ring is filled by dilation.)
+// centers sample the surface half a texel INSIDE the mesh edge; mapping
+// edges onto texel centers instead makes border coverage knife-edge (dashed
+// dark seams from alternating fill-rule coverage) and bakes the extreme
+// corner point of every lighting gradient. Runtime bilinear at a mesh edge
+// blends the border texel with its dilated gutter copy = same value, so
+// seams stay continuous. (The pad ring is filled by dilation.)
 export function packLightmapCharts(level, density = 16, atlasW = 1024) {
-  const PAD = 4; // was 2: the shipped lightmap is mipped now, and 4px of
-                 // dilated gutter keeps mip levels 1-2 from crossing charts
+  const PAD = 4; // the lightmap is mipped; 4px of dilated gutter keeps mip
+                 // levels 1-2 from crossing charts
   const entries = [];
   const seenShared = new Set();
   for (const cell of level.cells) {
@@ -375,12 +375,11 @@ const LIGHT_DEFS = [
   // courtyard: the sun - a far, hot cone whose rays enter through the open
   // ceiling; global shadow rays keep it out of every roofed room, and the
   // slant pools light through the doorway into the pillar hall.
-  // i 6500 (was 3000): outdoors read as bright as the interiors, which is
-  // physically implausible - midday should push toward overexposure.
+  // i 6500: outdoors reads much brighter than the interiors; midday should
+  // push toward overexposure.
   // SPOT, not point: props take analytic direct from spots only (point
-  // energy is probe-averaged, but probes cannot carry direct sun - props
-  // stood in full sunlight looking dull). The 42deg cone covers the whole
-  // courtyard + the door beam, so the bake is unchanged.
+  // energy is probe-averaged, and probes cannot carry direct sun). The 42deg
+  // cone covers the whole courtyard + the door beam.
   // soft 0.8m at ~30m ~= 1.5deg angular sun: courtyard shadows get 3-10cm
   // penumbras (2-3 lightmap texels) instead of texel-stair hard edges
   [{ p: [34, 22, -10], c: [1.0, 0.92, 0.78], i: 6500, d: [-13.4, -22, 10], cone: 42, soft: 0.8 }],
@@ -403,7 +402,7 @@ const PANEL_DEFS = [
   { cell: 10, x: 0, z: 20.6, sx: 1.6, sz: 1.2, i: 5 },
   { cell: 10, x: 0, z: 24.3, sx: 1.6, sz: 1.2, i: 5 },
   { cell: 11, x: 6.4, z: 22.5, sx: 1.4, sz: 1.4, i: 110 }, // cornell area light
-  // hall B panels removed: the spot-lit room's light is all accent cones
+  // hall B has no panels: the spot-lit room's light is all accent cones
   // sky: NEE area light for the courtyard's open ceiling. noGeo - the visual
   // sky is the HDRI dome mesh (main.js), not an emissive slab
   { cell: 13, x: 20.6, z: 0, sx: 7.4, sz: 8.4, y: 4.55, i: 4.0, color: [0.55, 0.72, 1.0], noGeo: true },
@@ -430,7 +429,7 @@ const PAINTING_DEFS = [
 ];
 
 const BENCH_DEFS = [
-  // courtyard perimeter (Andre: "feels a bit like a prison" without them)
+  // courtyard perimeter benches
   { cell: 13, x: 18.9, z: 3.8, rot: 0 },
   { cell: 13, x: 22.3, z: 3.8, rot: 0 },
   { cell: 13, x: 18.9, z: -3.8, rot: 0 },
@@ -446,11 +445,10 @@ const BENCH_DEFS = [
 const PEDESTAL_DEFS = [
   { cell: 0, x: -2.5, z: 1.4 }, { cell: 0, x: 0, z: 1.4 }, { cell: 0, x: 2.5, z: 1.4 },
   { cell: 0, x: -2.5, z: -1.4 }, { cell: 0, x: 0, z: -1.4 }, { cell: 0, x: 2.5, z: -1.4 },
-  // hall A thinned 2026-07-04: horse + elephant moved to the gallery, their
-  // pedestals (and the never-used one under the fan) removed - only the
-  // brass pan pedestal remains, keeping the dyn blob load balanced per room
+  // hall A: just the brass pan pedestal (keeps the dynamic-blob load
+  // balanced per room)
   { cell: 10, x: -2.4, z: 24.7 },
-  // (hall B pedestals removed 2026-07-04: the furniture room shows furniture)
+  // hall B has no pedestals: the furniture room shows furniture
 ];
 
 // rotunda paintings get placed on decagon edges by index
@@ -513,8 +511,8 @@ export function buildLevel() {
         pos: l.p.slice(), color: l.c.slice(), intensity: l.i,
         dir: l.d ? l.d.slice() : null, cone: l.cone, // spot: aim axis + outer degrees
         soft: l.soft, // emitter radius (m) for baked penumbras; default in lightmap.js
-        cell: id, // home cell: only LOCAL spots feed prop direct (no shadow
-                  // rays vs walls - the borrowed sun lit props through them)
+        cell: id, // home cell: only LOCAL spots feed prop direct (props get
+                  // no shadow rays vs walls, so borrowed spots leak through)
       })),
       portals: [],
       builders: new Map(),
@@ -605,7 +603,6 @@ export function buildLevel() {
         edge.doorShifted = true;
         // record it: doored hull planes sit at MID-wall, so anything clamped
         // against the plane alone can reach halfway into the visible wall
-        // (Andre: carried balls sank into the hallS/L1 wall)
         (cell.doorPlanes || (cell.doorPlanes = new Set())).add(edge.planeIndex);
       }
       const portal = makePortal(cell, edge, otherId, s0, s1, cell.floorY, cell.floorY + def.h, false, WALL_T / 2);
@@ -668,8 +665,7 @@ export function buildLevel() {
   // ---- shadow-light continuity (AFTER all portal pairing): cells joined by
   // VIRTUAL portals are one visual room (the pillar ring, the L bend) - they
   // must share an IDENTICAL runtime light list or the per-pixel weighted
-  // shadow direction snaps mid-room at invisible boundaries (one-hop merge
-  // still differed: hallE carried the sun, hallW the gallery lights). Union
+  // shadow direction snaps mid-room at invisible boundaries. Union
   // find over virtual portals; each component takes every member's lights
   // plus every DOOR neighbor's lights, weight-sorted against the COMPONENT
   // centroid so truncation is identical for all members. Doorway boundaries
@@ -733,8 +729,8 @@ export function buildLevel() {
   // bend): each cell KEEPS its own mesh (correct uCell for the traversal,
   // normal culling), but their floor polygons share ONE lightmap chart -
   // sector boundaries land in the chart interior where every texel is
-  // covered, so the diagonal cuts cannot seam. (Andre: the cell partition
-  // does not have to partition the lightmap.)
+  // covered, so the diagonal cuts cannot seam. (The cell partition does not
+  // have to partition the lightmap.)
   const openPlan = new Set();
   {
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
@@ -757,10 +753,10 @@ export function buildLevel() {
         // Runs before the per-cell mesh loop, so these cells' plasterPlain
         // builders (jambs included) carry the tag via first-call-wins.
         // MUST stay under the 'plasterPlain' key (shared with the door jambs
-        // at jb below): the master lightmap was packed with ceilings+jambs in
-        // one builder. Splitting them into a separate 'ceil' key reshuffled
-        // the shelf-pack (equal-height charts reorder) and stranded the jamb
-        // uv2 on stale lightmap data - a brown stripe over doorways. The
+        // at jb below): the lightmap is packed with ceilings+jambs in one
+        // builder. A separate 'ceil' key would reshuffle the shelf-pack
+        // (equal-height charts reorder) and strand the jamb uv2 on stale
+        // lightmap data (a brown stripe over doorways). The
         // ceil:true material demotion is opt-only and does NOT affect the
         // pack; first-call-wins (ceiling precedes jb) hard-diffuses the jambs
         // too, which is imperceptible on the narrow door surrounds.
@@ -779,7 +775,7 @@ export function buildLevel() {
       { mapKey: cell.floor.key, roughFactor: cell.floor.roughFactor,
         specBoost: cell.floor.specBoost });
     // 'plasterPlain' (NOT a separate 'ceil' key): shares the builder with the
-    // door jambs so the lightmap pack matches the master bake (see the shared
+    // door jambs so the lightmap pack matches the baked atlas (see the shared
     // ceiling above). ceil:true (opt-only, no pack impact) hard-diffuses it.
     const cb = getBuilder(cell, 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true, ceil: true });
     const uvf = p => [p[0] * 0.35, p[2] * 0.35];
@@ -804,10 +800,9 @@ export function buildLevel() {
       if (edge.open) continue;
       // concrete walls use the wall-styled set (form-tie panels); the plain
       // 'concrete' key stays on floors where panel seams would look wrong.
-      // specBoost: walls run matte PCCM (pccmSpec) - dielectric F0
-      // at plaster roughness reads as almost nothing, so the same
-      // clear-coat cheat the floors use (2.5 boost did nothing - the 0.7 rough floor
-      // was the real culprit; rough dropped instead, matte FORCED explicitly).
+      // specBoost: walls run matte PCCM (pccmSpec) - dielectric F0 at plaster
+      // roughness reads as almost nothing, so specBoost applies the same
+      // clear-coat cheat the floors use; matte is FORCED explicitly.
       // hopSpec only where a wall can straddle a virtual cut (open-plan
       // rooms); single-cell rooms keep the cheap zero-hop matte program.
       const wb = getBuilder(cell, edge.mat, {
@@ -857,14 +852,14 @@ export function buildLevel() {
       return best;
     });
     // plasterPlain: the plaster set's baked-in baseboard stripe (v < 0.045)
-    // must not paint across jamb reveals (the "footers in door frames" bug)
+    // must not paint across jamb reveals
     const jb = getBuilder(sa.cell, 'plasterPlain', { mapKey: 'plasterPlain', specBoost: 1.8, matte: true });
     const fb = getBuilder(sa.cell, 'floor');
     const mid = A[0].clone().add(A[2]).add(Bp[0]).add(Bp[2]).multiplyScalar(0.25);
     const quadToward = (builder, p0, p1, p2, p3) => {
       const e1 = p1.clone().sub(p0), e2 = p3.clone().sub(p0);
-      // world-proportional UVs at the floor/ceiling density; a fixed square
-      // scale squashed the texture ~10:1 on the tall thin reveals
+      // world-proportional UVs at the floor/ceiling density, so the texture
+      // is not squashed on the tall thin reveals
       const us = e1.length() * 0.35, vs = e2.length() * 0.35;
       const g = e1.clone().cross(e2);
       const inC = mid.clone().sub(p0);
@@ -950,7 +945,7 @@ export function buildLevel() {
     return { cell: p.cell, x: p.x, y, z: p.z, sx: p.sx, sz: p.sz, intensity: p.i, color: c };
   });
 
-  // darkroom lamp base: the corner lamp panel floated at y 0.55 with nothing
+  // darkroom lamp base: the corner lamp panel sits at y 0.55 with nothing
   // under it - an onyx block grounds it (and gets a collider below)
   getBuilder(cells[9], 'lampbase', { mapKey: 'white', tint: [0.028, 0.028, 0.034] })
     .box(16.6, 0.255, -23.2, 0.26, 0.51, 0.26, 1);

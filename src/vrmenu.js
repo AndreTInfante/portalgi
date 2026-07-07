@@ -1,11 +1,10 @@
-// In-VR menu: a canvas panel on the LEFT hand, toggled with X. Built for
-// DEMO GUESTS first: the main page holds the big show-off levers (portals
-// on/off vs PCCM, reflections, AO+shadows, framerate target) and everything
-// in-the-weeds lives on the 'tuning' subpage. Interact by POINTING the right
-// hand at a row and pulling the trigger (main.js raycasts and routes the
-// trigger here instead of grabbing), or right stick + A. A one-line help
-// string lives inside the panel; an always-on prompt under the left hand
-// says how to open it.
+// In-VR menu: a canvas panel on the LEFT hand, toggled with X. The main page
+// holds the top-level levers (portals on/off vs PCCM, reflections, AO+shadows,
+// framerate target); detailed controls live on the 'tuning' subpage. Interact
+// by POINTING the right hand at a row and pulling the trigger (main.js raycasts
+// and routes the trigger here instead of grabbing), or right stick + A. A
+// one-line help string lives inside the panel; an always-on prompt under the
+// left hand says how to open it.
 import * as THREE from 'three';
 
 const W = 512, H = 640;
@@ -36,7 +35,7 @@ export class VRMenu {
     this.mesh.visible = false;
     this.mesh.renderOrder = 10;
 
-    // always-on hand prompt (how outsiders discover the controls)
+    // always-on hand prompt showing the basic controls
     const pc = document.createElement('canvas');
     pc.width = 512; pc.height = 96;
     const ctx = pc.getContext('2d');
@@ -124,7 +123,7 @@ export class VRMenu {
     ctx.fillStyle = '#8fb8ff';
     ctx.font = 'bold 30px system-ui';
     ctx.textAlign = 'left';
-    ctx.fillText(this.page === 'main' ? 'PortalGI' : 'PortalGI · tuning', 20, 44);
+    ctx.fillText(this.page === 'main' ? 'PortalIBL' : 'PortalIBL · tuning', 20, 44);
     ctx.font = '21px system-ui';
     ctx.fillStyle = '#7a8699';
     ctx.fillText('point + trigger · stick: rows, A: toggle · X closes', 20, 76);

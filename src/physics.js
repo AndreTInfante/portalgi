@@ -1,7 +1,7 @@
 // cannon-es world for prop physics. Static geometry comes from the level
 // build (wall pieces WITH their door holes, ceilings, furniture colliders) so
 // props collide with benches, pedestals, pillars and door frames for free.
-// The hull-plane solver in props.js survives only for the HELD prop (its
+// The hull-plane solver in props.js applies only to the HELD prop (its
 // body is kinematic; hull planes keep it out of walls, portal-aware).
 import * as CANNON from '../libs/cannon-es.js';
 import * as THREE from 'three';
@@ -18,20 +18,19 @@ function hullVertCount(hull) {
 }
 
 // convex hull of REAL surface points -> cannon ConvexPolyhedron, under a
-// vertex budget: cannon's convex-convex narrowphase tests every edge PAIR -
-// two ~150-vert statue hulls in contact ran the frame into single digits
-// (Andre: elephant + horse touching). The dedup grid coarsens until the
-// hull fits; kept points are exact surface points (the grid only
-// sparsifies), so resting contact never drifts. Budget scales with object
-// size: a whale at 28 verts is a potato.
+// vertex budget: cannon's convex-convex narrowphase tests every edge PAIR,
+// so two high-vert hulls in contact cost O(edges^2) and tank the frame. The
+// dedup grid coarsens until the hull fits; kept points are exact surface
+// points (the grid only sparsifies), so resting contact never drifts. Budget
+// scales with object size: a whale at 28 verts is a potato.
 export function convexFromPoints(pts, budget = 28) {
   if (pts.length < 8) return null;
   try {
     let hull = new ConvexHull().setFromPoints(pts);
     let grid = 0.04;
-    // cloud centroid: sparsification keeps each cell's FURTHEST point from
-    // it - keep-first dropped support points and shrank extremities (the
-    // whale's tail pulled in ~30cm at a 50-vert budget)
+    // cloud centroid: sparsification keeps each cell's FURTHEST point from it
+    // so support points / extremities survive - keeping an arbitrary point per
+    // cell shrinks the hull inward
     const ctr = new THREE.Vector3();
     for (const p of pts) ctr.add(p);
     ctr.divideScalar(pts.length);
@@ -69,10 +68,10 @@ export function convexFromPoints(pts, budget = 28) {
       faces.push(idx);
     }
     // CENTER the hull on its centroid and return the centroid as a shape
-    // offset: cannon assumes a convex shape's LOCAL ORIGIN IS INSIDE it
-    // (its winding check tests normals against the origin) - world-space
-    // statue hulls with the body at the origin spammed "points into the
-    // shape?" warnings for every origin-facing face (Andre)
+    // offset: cannon assumes a convex shape's LOCAL ORIGIN IS INSIDE it (its
+    // winding check tests normals against the origin), so a hull whose points
+    // sit far from the local origin spams "points into the shape?" warnings on
+    // every origin-facing face
     let cx = 0, cy = 0, cz = 0;
     for (const v of verts) { cx += v.x; cy += v.y; cz += v.z; }
     cx /= verts.length; cy /= verts.length; cz /= verts.length;
@@ -102,10 +101,10 @@ export function convexFromPoints(pts, budget = 28) {
   }
 }
 
-// prop-local convex hull of the REAL mesh vertices. Replaces the
-// capsule-compound approximation (authored capsules are tuned for
-// reflection blobs, not contact: chairs wobbled on sphere strings). The
-// hull's bottom face spans the leg tips = flat resting base for free.
+// prop-local convex hull of the REAL mesh vertices. Authored capsules are
+// tuned for reflection blobs, not contact (props wobble on sphere strings),
+// so contact uses a hull instead. Its bottom face spans the leg tips = flat
+// resting base for free.
 export function convexFromMesh(root, budget = 28) {
   root.updateMatrixWorld(true);
   // body space = root position+rotation WITHOUT scale (cannon shapes carry
@@ -156,11 +155,10 @@ export class PhysicsWorld {
     // colliders register in addStaticModels, which runs after buildLevel
     // (reading earlier silently skipped every statue)
     for (const cc of level.colliders) {
-      // statics with sampled world vertices (statues, plants): a proper
-      // convex hull at a generous budget - the 4-band sphere fit left the
-      // whale's and big horse's contact "all over the place" (Andre, with
-      // the collision viewer): extremities uncovered, midsections proud.
-      // Points are world-space, so the body sits at the origin.
+      // statics with sampled world vertices (statues, plants): a proper convex
+      // hull at a generous budget - a sphere-band fit leaves extremities
+      // uncovered and midsections proud. Points are world-space, so the body
+      // sits at the origin.
       if (cc.physPts && cc.physPts.length >= 8) {
         const hull = convexFromPoints(
           cc.physPts.map(p => new THREE.Vector3(p[0], p[1], p[2])), 50);
@@ -169,9 +167,8 @@ export class PhysicsWorld {
           body.addShape(hull.shape, hull.offset); // offset = world centroid
           this.world.addBody(body);
           // world-space face planes for the HELD-prop carry pushout: held
-          // props are KINEMATIC (cannon ignores statics for them) and used
-          // the legacy center cylinder - blocked mid-statue, clipped clean
-          // through the whale's tail (Andre, via the collision viewer)
+          // props are KINEMATIC, so cannon ignores statics for them - explicit
+          // hull planes push the held prop out of this static instead
           cc.hullPlanes = hull.shape.faces.map((f, i) => {
             const n = hull.shape.faceNormals[i];
             const v = hull.shape.vertices[f[0]];
@@ -208,7 +205,7 @@ export class PhysicsWorld {
     this.world.addBody(body);
   }
 
-  // dynamic body for a prop: sphere for balls, box for cubes/pane, and for
+  // dynamic body for a prop: sphere for balls, box for cubes, and for
   // gltf exhibits a CONVEX HULL of the real mesh (convexFromMesh above) -
   // contact matches what the eye sees, and the hull base is flat across the
   // leg tips so furniture rests straight. Authored occluder capsules remain
@@ -234,9 +231,9 @@ export class PhysicsWorld {
           body.addShape(new CANNON.Sphere(r), new CANNON.Vec3(q.x, q.y, q.z));
         }
       }
-      // flat foot: sphere compounds have no stable ground plane, so chairs
-      // and the cart never settled straight once disturbed. A thin box at
-      // the rest base (rFloor below the root) gives a real contact patch.
+      // flat foot: sphere compounds have no stable ground plane, so a
+      // disturbed prop never settles straight. A thin box at the rest base
+      // (rFloor below the root) gives a real contact patch.
       const bb = new THREE.Box3().setFromObject(p.mesh);
       const size = bb.getSize(new THREE.Vector3());
       body.addShape(

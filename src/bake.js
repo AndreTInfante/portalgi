@@ -28,7 +28,7 @@ export class Baker {
     this.atlasA = new THREE.WebGLRenderTarget(ATLAS_W, atlasHeight(n), rtOpts);
     this.atlasB = new THREE.WebGLRenderTarget(ATLAS_W, atlasHeight(n), rtOpts);
 
-    // 1024 (was 256): feeds the now-512px oct LOD0 with 2x linear headroom so
+    // 1024 cube capture feeds the 512px oct LOD0 with 2x linear headroom so
     // the cubeToOctFrag supersample genuinely box-filters (each oct texel
     // averages ~2x2 cube texels) rather than point-sampling a same-res cube
     this.cubeRT = new THREE.WebGLCubeRenderTarget(1024, {

@@ -77,11 +77,6 @@ export async function loadHalfTexture(path, w, h, mips = false) {
   const buf = await res.arrayBuffer();
   if (buf.byteLength !== w * h * 4 * 2) throw new Error(`size mismatch for ${path}`);
   const tex = new THREE.DataTexture(new Uint16Array(buf), w, h, THREE.RGBAFormat, THREE.HalfFloatType);
-  // mips (the lightmap): distant floors/walls were sampling an unmipped
-  // 2048x2752 texture - worst-case cache locality AND minification shimmer.
-  // RGBA16F is filterable+renderable here (EXT_color_buffer_float required
-  // at boot), so generateMipmap works; chart PAD is 4px so levels 1-2 stay
-  // inside their gutters. The atlas keeps manual LOD + its own borders.
   tex.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.generateMipmaps = mips;
@@ -105,10 +100,6 @@ export async function saveBaked(renderer, atlasRT, lightmapRT, settings) {
 }
 
 // Rewrite ONLY the cubemap atlas (e.g. after an atlas-resolution change),
-// reusing the existing lightmap.bin untouched. The lightmap is the expensive
-// path-traced artifact and is unaffected by the atlas layout, so this skips
-// the hour-long relight entirely. prevManifest carries the lightmap dims +
-// original bake settings forward unchanged.
 export async function saveAtlasOnly(renderer, atlasRT, prevManifest) {
   const atlas = textureToHalfBytes(renderer, atlasRT.texture, atlasRT.width, atlasRT.height);
   await putFile('./baked/atlas.bin', atlas);

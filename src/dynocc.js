@@ -1,6 +1,6 @@
-// Texture-space dynamic occlusion (capsule agent re-pose): contact AO and
-// capsule shadows are LOW-FREQUENCY signals over STATIC receivers - so they
-// are evaluated once per lightmap texel into a small occlusion layer over
+// Texture-space dynamic occlusion: contact AO and
+// capsule shadows are LOW-FREQUENCY signals over STATIC receivers
+// evaluated once per lightmap texel into a small occlusion layer over
 // the lightmap UV space, instead of per stereo-MSAA fragment per frame.
 // Scene shaders read the answer with one bilinear tap
 // (diffuseL *= texture(uDynOcc, vUv2).r), which deletes both capsule loops -
@@ -15,13 +15,13 @@
 //   dyn layer   (per frame): dynamic props' AO x shadow over the baseline.
 //                            NO group logic at all - props never approximate
 //                            static receivers.
-//   props       (eye space): the analytic loops survive in the PROP program
+//   props       (eye space): the analytic loops run in the PROP program
 //                            only; props have no lightmap UVs and are a
 //                            small fraction of fill.
 // Shadow directions come from the CPU, one per prop (weighted average of its
-// cell's lights at the CASTER - agent C), deleting the per-pixel 8-light
-// loop and, as a side effect, the shadow-direction snap at portal crossings
-// (the direction now follows the caster, not the receiver's cell).
+// cell's lights at the CASTER), deleting the per-pixel 8-light loop and, as
+// a side effect, the shadow-direction snap at portal crossings (the direction
+// follows the caster, not the receiver's cell).
 import * as THREE from 'three';
 
 const MAX_ENT = 16;   // entries per splat pass (statics run multiple passes)
@@ -51,9 +51,9 @@ void main() {
 }`;
 
 // capsule contact AO: Quilez sphere occlusion at the nearest axis point,
-// interior distance clamp, smooth reach falloff - the same math the eye-space
-// capsuleAO loop used, on the GEOMETRIC normal (quarter-res texels can't
-// resolve bump facets anyway)
+// interior distance clamp, smooth reach falloff - the same math as the
+// eye-space capsuleAO loop, on the GEOMETRIC normal (quarter-res texels
+// can't resolve bump facets anyway)
 const AO_BODY = /* glsl */`
 float capAO(vec3 P, vec3 N, vec4 A, vec3 Bp, float aoK, float aoClamp) {
   vec3 u = Bp - A.xyz;
@@ -124,8 +124,7 @@ uniform vec4 uCapA[${MAX_CAPS}];
 uniform vec4 uCapB[${MAX_CAPS}];
 uniform float uAO, uAOClamp, uShadow;
 uniform float uPenSoft; // penumbra width floor (m) ~ 1.5 layer texels: the
-                        // quarter-res grid cannot represent a harder edge -
-                        // rasterizing one printed stair aliasing (Andre).
+                        // quarter-res grid cannot represent a harder edge.
                         // Band-limit the SIGNAL: sub-texel shadows dim out.
 ${AO_BODY}
 void main() {
@@ -399,8 +398,7 @@ export class DynOccLayer {
     // seed the LAYER with the fresh baseline immediately: during ?bake=1 the
     // frame loop (state.baking) never runs update() before the cubemap
     // captures, and an unrendered layerRT reads all-zero - every static
-    // multiplied its diffuse by 0 and the captures came out BLACK
-    // (Andre's rebake, 2026-07-05)
+    // would multiply its diffuse by 0 and the captures come out black
     this.update([], { ao: 0.8, aoClamp: 0.03, shadow: 0.85, penSoft: 0 });
   }
 

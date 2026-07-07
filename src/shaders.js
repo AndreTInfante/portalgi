@@ -71,7 +71,7 @@ float roughToLod(float r) {
 // scan (Andre 2026-07-05: props interact with far fewer objects than
 // floors). 999 in every other program - the guards constant-fold away.
 // Statics (packed after the dyn prefix) are never skipped.
-const traceGlsl = (numCells, useUbo, dbg = false, dynCap = 999, fullDepth = false) => /* glsl */`
+const traceGlsl = (numCells, useUbo, dbg = false, dynCap = 999) => /* glsl */`
 ${useUbo ? /* glsl */`
 layout(std140) uniform HullData {
   vec4 uHull[${numCells * HULL_TEX_W}];
@@ -370,12 +370,8 @@ MP vec3 traceSpec(int cell, vec3 pos, vec3 dir, float rough, int hopCap, MP floa
   // early-out at the call site is the 0-hop rung of the same ladder.
   // hopCap: callers whose contribution is faint (glass fresnel reflection,
   // ~4-10% of the mix) cap their depth instead of paying the full budget.
-  // fullDepth (the debug pane): march the caller's full hopCap regardless of
-  // the gameplay uMaxSteps dial - a diagnostic must show ground-truth portal
-  // recursion even when portal rendering is turned down/off. Gameplay callers
-  // (glass, floors) stay capped at min(uMaxSteps, hopCap).
-  int maxHops = ${fullDepth ? 'hopCap' : 'min(uMaxSteps, hopCap)'};
-  if (uRoughHops > 0.5${fullDepth ? ' && false' : ''}) {
+  int maxHops = min(uMaxSteps, hopCap);
+  if (uRoughHops > 0.5) {
     if (rough > 0.35) maxHops = min(uMaxSteps, 1);
     else if (rough > 0.12) maxHops = min(uMaxSteps, 2);
   }
@@ -482,7 +478,7 @@ ${useUbo ? /* glsl */`
           // right AT the edge = garbage that warps as you orbit a portal corner.
           // 2cm keeps sharp reflections sharp while smoothing the seam and
           // killing the NaN; gameplay reflectors already exceed it.
-          float bw = max(0.02, uBlendBase + uBlendRough * effR * max(tHit, 0.3));
+          float bw = uBlendBase + uBlendRough * effR * max(tHit, 0.3);
           blend = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
           nextCell = int(ph.y);
           break;
@@ -602,7 +598,7 @@ ${matte ? '' : `  if (uOccOn > 0.5 && uOccHops > 0.0) {     // local occluder se
           if ((silMask & (1 << e)) != 0) blendD = min(blendD, d);
         }
         if (insideD > 0.0) {
-          float bw = max(0.02, uBlendBase + uBlendRough * ${matte ? 'rough' : 'effR'} * max(bestT, 0.3)); // floor: no blendD/0 NaN (see traceSpec)
+          float bw = uBlendBase + uBlendRough * ${matte ? 'rough' : 'effR'} * max(bestT, 0.3);
           blend = (uBlendOn < 0.5) ? 1.0 : clamp(blendD / bw, 0.0, 1.0);
           nextCell = int(ph.y);
           break;
@@ -1094,7 +1090,7 @@ uniform int uDebugMode;   // 0 off, 1 cell tint, 2 step heatmap, 3 irradiance, 4
 ${atlasGLSL(numCells)}
 ${OCT_GLSL}
 ${ATLAS_SAMPLE_GLSL}
-${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999, PANE)}
+${traceGlsl(numCells, useUbo, dbg, PROP ? occDynCap : 999)}
 ${(STATIC || PROP) && matteSpec && !noSpec ? (MATTE_HOP ? hop1Glsl(true) : (matte ? PCCM_MATTE_GLSL : PCCM_GLSL)) : ''}
 ${WARP ? warpGlsl(warp) : ''}
 ${HOP1 ? HOP1_GLSL : ''}
@@ -1155,14 +1151,11 @@ ${GLASS ? /* glsl */`
   MP vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, dynFade${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
   color = mix(thru, refl, F);
 ` : PANE ? /* glsl */`
-  // debug pane: continue the eye ray straight through into the hull cubemap
-  // structure (a -R trick here would mirror the lateral ray and act like an
-  // inverting lens). The 0.06 roughness (~the glass ball) is REQUIRED, not
-  // cosmetic: at rough 0 the razor-sharp top mip resolves the per-cell cubemap
-  // parallax mismatch at every portal crossing, so the image lurches as you
-  // orbit a portal. The glass ball never shows this precisely because its 0.04
-  // roughness blurs that mismatch away. Faint green cast marks the glass.
-  color = traceSpec(uCell, P, -V, 0.06, 8, dynFade${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
+  // debug pane: continue the eye ray straight through with zero roughness -
+  // a direct, unrefracted window into the hull cubemap structure (a -R trick
+  // here would mirror the lateral ray component and act like an inverting
+  // lens). Faint green cast marks the glass.
+  color = traceSpec(uCell, P, -V, 0.0, 8, dynFade${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
 ` : /* glsl */`
   MP vec3 albedo = texture(uMap, vUv).rgb * uTint;
   ${dbg ? 'if (uDebugMode == 4) albedo = vec3(0.75);' : ''}

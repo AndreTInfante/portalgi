@@ -1,5 +1,6 @@
 // ADDENDUM: This did not work: creates bad artifacts unless angular error is
 // extremely low, which requires a huge LUT. Deprecated.
+
 // Portal warp fields: everything a reflection ray
 // does AFTER crossing a portal is a pure function of the crossing point on
 // the portal rect and the ray direction - the level is static geometry, so

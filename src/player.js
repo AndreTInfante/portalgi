@@ -3,7 +3,7 @@
 // crossing point lies inside the portal polygon. Cell membership is tracked by
 // most-inside among {current cell + portal neighbors}.
 import * as THREE from 'three';
-import { findCell } from './level.js';
+import { findCell, pushOutCollider } from './level.js';
 
 const EYE = 1.7;
 const RADIUS = 0.32;
@@ -106,14 +106,7 @@ export class Player {
       }
       if (!passable) this.pos.addScaledVector(pl.n, RADIUS - d);
     }
-    for (const c of colliders) {
-      const dx = this.pos.x - c.x, dz = this.pos.z - c.z;
-      const dist = Math.hypot(dx, dz), min = c.r + RADIUS * 0.6;
-      if (dist < min && dist > 1e-5) {
-        this.pos.x += dx / dist * (min - dist);
-        this.pos.z += dz / dist * (min - dist);
-      }
-    }
+    for (const c of colliders) pushOutCollider(this.pos, c, RADIUS * 0.6);
   }
 
   insideLateral(portal, margin) {

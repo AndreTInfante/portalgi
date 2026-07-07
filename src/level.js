@@ -920,13 +920,15 @@ export function buildLevel() {
     put(-0.6, 0.21, 0, 0.08, 0.42, 0.38);
     put(0.6, 0.21, 0, 0.08, 0.42, 0.38);
     // rx/rz/rot/h: footprint + height for the analytic occluder capsules
-    // (seat is 1.5x0.42, legs at +-0.6); r stays the player-collision radius
-    colliders.push({ x: b.x, z: b.z, r: 0.85, rx: 0.7, rz: 0.24, rot: b.rot, h: 0.56 });
+    // (seat is 1.5x0.42, legs at +-0.6). box:true = collide as this tight
+    // oriented box (matching the cannon static), not the r bounding cylinder;
+    // r survives as the broad-phase / occluder radius.
+    colliders.push({ x: b.x, z: b.z, r: 0.85, rx: 0.7, rz: 0.24, rot: b.rot, h: 0.56, box: true });
   }
   for (const p of PEDESTAL_DEFS) {
     getBuilder(cells[p.cell], 'furniture', { mapKey: 'walnut', occProxied: true })
       .box(p.x, 0.5, p.z, 0.42, 1.0, 0.42, 0.8);
-    colliders.push({ x: p.x, z: p.z, r: 0.4, rx: 0.24, rz: 0.24, rot: 0, h: 1.0 });
+    colliders.push({ x: p.x, z: p.z, r: 0.4, rx: 0.24, rz: 0.24, rot: 0, h: 1.0, box: true });
   }
 
   // panels: emissive fixture geometry (the light sources seen in reflections,
@@ -949,7 +951,7 @@ export function buildLevel() {
   // under it - an onyx block grounds it (and gets a collider below)
   getBuilder(cells[9], 'lampbase', { mapKey: 'white', tint: [0.028, 0.028, 0.034] })
     .box(16.6, 0.255, -23.2, 0.26, 0.51, 0.26, 1);
-  colliders.push({ x: 16.6, z: -23.2, r: 0.3, rx: 0.15, rz: 0.15, rot: 0, h: 0.51 });
+  colliders.push({ x: 16.6, z: -23.2, r: 0.3, rx: 0.15, rz: 0.15, rot: 0, h: 0.51, box: true });
 
   // spot fixtures: a black cylinder (octagonal prism, reads round at 12cm)
   // aimed along the beam, emissive white cap on the business end, thin stem to
@@ -1020,6 +1022,38 @@ export function findCell(cells, p, hint = -1) {
     if (d > bd) { bd = d; best = c.id; }
   }
   return best;
+}
+
+// Push a point out of a collider's footprint in the XZ plane, inflating it by
+// `pad` (the colliding sphere's radius). Returns true if it moved. Furniture
+// colliders (box:true) use their tight ORIENTED box - rx/rz half-extents about
+// the rot yaw, the same box the cannon static uses - so a long bench blocks a
+// bench-shaped region, not a fat bounding cylinder. Colliders without the flag
+// (statues) keep the generous r cylinder: their rx/rz is only the plinth, and r
+// is sized to cover the overhang.
+export function pushOutCollider(pos, c, pad) {
+  if (c.box && c.rx !== undefined) {
+    const cos = Math.cos(c.rot || 0), sin = Math.sin(c.rot || 0);
+    const dx = pos.x - c.x, dz = pos.z - c.z;
+    // world offset -> collider-local (rotate by -rot)
+    const lx = dx * cos + dz * sin, lz = -dx * sin + dz * cos;
+    const px = (c.rx + pad) - Math.abs(lx), pz = (c.rz + pad) - Math.abs(lz);
+    if (px <= 0 || pz <= 0) return false; // outside the inflated box
+    // eject along the least-penetrated local axis, then rotate back to world
+    let plx = 0, plz = 0;
+    if (px < pz) plx = lx < 0 ? -px : px; else plz = lz < 0 ? -pz : pz;
+    pos.x += plx * cos - plz * sin;
+    pos.z += plx * sin + plz * cos;
+    return true;
+  }
+  const dx = pos.x - c.x, dz = pos.z - c.z;
+  const dist = Math.hypot(dx, dz), min = c.r + pad;
+  if (dist < min && dist > 1e-5) {
+    pos.x += dx / dist * (min - dist);
+    pos.z += dz / dist * (min - dist);
+    return true;
+  }
+  return false;
 }
 
 export function clampToHull(cell, p, margin = 0.02) {

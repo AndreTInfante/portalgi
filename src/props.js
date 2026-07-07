@@ -4,7 +4,7 @@
 // which makes it a razor-sharp probe of environment-approximation quality.
 import * as THREE from 'three';
 import * as CANNON from '../libs/cannon-es.js';
-import { findCell, WALL_T } from './level.js';
+import { findCell, WALL_T, pushOutCollider } from './level.js';
 
 const REST = 0.35;
 const tmpD = new THREE.Vector3();
@@ -194,13 +194,9 @@ export class Props {
         continue;
       }
       if (c.h !== undefined && pos.y - p.rFloor > c.h) continue; // clear above it
-      const dx = pos.x - c.x, dz = pos.z - c.z;
-      const min = (c.rx !== undefined ? Math.max(c.rx, c.rz) : c.r) + p.radius * 0.7;
-      const dist = Math.hypot(dx, dz);
-      if (dist < min && dist > 1e-5) {
-        pos.x += dx / dist * (min - dist);
-        pos.z += dz / dist * (min - dist);
-      }
+      // furniture (box:true) ejects along its tight oriented box - the same
+      // footprint the player and cannon static use - not the r bounding cylinder
+      pushOutCollider(pos, c, p.radius * 0.7);
     }
   }
 

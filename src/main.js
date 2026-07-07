@@ -324,6 +324,18 @@ void main() {
     muteEl.classList.remove('hidden');
     drawMute();
     muteEl.addEventListener('click', () => { audio.muted = !audio.muted; drawMute(); });
+    // auto-suspend audio when the tab is hidden or the window loses focus
+    // (battery + politeness). NEVER while an immersive XR session presents:
+    // the 2D page reports hidden during VR but headset audio must keep going.
+    const syncAudio = () => {
+      const active = renderer.xr.isPresenting ||
+        (document.visibilityState === 'visible' && document.hasFocus());
+      audio.setActive(active);
+    };
+    document.addEventListener('visibilitychange', syncAudio);
+    window.addEventListener('blur', syncAudio);
+    window.addEventListener('focus', syncAudio);
+    renderer.xr.addEventListener('sessionend', syncAudio); // re-sync on VR exit
     document.getElementById('about').classList.remove('hidden');
     // phones/tablets: floating joystick + swipe-look + tap-to-grab. The
     // desktop mousedown/keyboard handlers all gate on pointer lock, which

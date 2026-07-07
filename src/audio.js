@@ -33,6 +33,16 @@ export class AudioSystem {
   get sfx() { return this._sfx; }
   set sfx(v) { this._sfx = v; if (this.sfxGain) this.sfxGain.gain.value = v; }
 
+  // background/foreground gate: suspend halts the audio thread entirely
+  // (battery on mobile) and stops the looping music source; update()/impact()
+  // already no-op on a non-running context. Orthogonal to manual mute, which
+  // lives on masterGain, so volumes and mute state survive a suspend/resume.
+  setActive(active) {
+    if (!this.ctx) return;                                  // not unlocked yet
+    if (active) { if (this.ctx.state === 'suspended') this.ctx.resume(); }
+    else        { if (this.ctx.state === 'running')   this.ctx.suspend(); }
+  }
+
   unlock() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;

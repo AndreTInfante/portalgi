@@ -1155,11 +1155,14 @@ ${GLASS ? /* glsl */`
   MP vec3 thru = traceSpec(uCell, P, -R, uRough + 0.03, 8, dynFade${dbg ? ', s2' : ''}) * vec3(0.90, 0.97, 0.93);
   color = mix(thru, refl, F);
 ` : PANE ? /* glsl */`
-  // debug pane: continue the eye ray straight through with zero roughness -
-  // a direct, unrefracted window into the hull cubemap structure (a -R trick
-  // here would mirror the lateral ray component and act like an inverting
-  // lens). Faint green cast marks the glass.
-  color = traceSpec(uCell, P, -V, 0.0, 8, dynFade${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
+  // debug pane: continue the eye ray straight through into the hull cubemap
+  // structure (a -R trick here would mirror the lateral ray and act like an
+  // inverting lens). The 0.06 roughness (~the glass ball) is REQUIRED, not
+  // cosmetic: at rough 0 the razor-sharp top mip resolves the per-cell cubemap
+  // parallax mismatch at every portal crossing, so the image lurches as you
+  // orbit a portal. The glass ball never shows this precisely because its 0.04
+  // roughness blurs that mismatch away. Faint green cast marks the glass.
+  color = traceSpec(uCell, P, -V, 0.06, 8, dynFade${dbg ? ', steps' : ''}) * vec3(0.93, 1.0, 0.96);
 ` : /* glsl */`
   MP vec3 albedo = texture(uMap, vUv).rgb * uTint;
   ${dbg ? 'if (uDebugMode == 4) albedo = vec3(0.75);' : ''}

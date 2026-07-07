@@ -1,0 +1,19 @@
+file,platform,group,feature,meanMs,ci95,medMs,min,max,n
+baked/bench-pcdirty3.json,pc-timerquery,cell,"PORTAL reflections vs none        (portal - off)",0.44261668571428575,0.15655037425227764,0.374784,-1.1919359999999999,2.57536,70
+baked/bench-pcdirty3.json,pc-timerquery,cell,"PORTAL reflections vs zero-hop IBL (portal - pccm)",0.150528,0.1560133815372781,0.07782400000000012,-1.5032320000000001,2.1104640000000003,70
+baked/bench-pcdirty3.json,pc-timerquery,cell,"ALL VFX vs none                   (full - off)",1.2740754285714289,0.2934015526892225,1.0127360000000003,-1.1530239999999998,4.686848,70
+baked/bench-pcdirty3.json,pc-timerquery,cell,"  reflections: zero-hop PCCM IBL  (pccm - off)",0.29208868571428565,0.143027474620799,0.24473600000000006,-1.24928,2.6531840000000004,70
+baked/bench-pcdirty3.json,pc-timerquery,cell,"  + portal traversal              (portal - pccm)",0.150528,0.1560133815372781,0.07782400000000012,-1.5032320000000001,2.1104640000000003,70
+baked/bench-pcdirty3.json,pc-timerquery,cell,"  + contact-AO tap                (ao-tap - portal)",0.010122971428571421,0.13357077857548347,0.008191999999999977,-1.7602560000000005,1.913856,70
+baked/bench-pcdirty3.json,pc-timerquery,cell,"  + dyn-occ layer regen (moving)  (ao-regen - ao-tap)",0.9182500571428577,0.2646737528447805,0.8919040000000003,-1.46944,4.093952,70
+baked/bench-pcdirty3.json,pc-timerquery,cell,"  + reflection-ray occlusion      (ao - ao-regen)",0.009932799999999955,0.1844801806411751,0.007168000000000063,-2.8856319999999998,3.401728,70
+baked/bench-pcdirty3.json,pc-timerquery,cell,"  + dynamic soft shadows          (full - ao)",-0.10684708571428574,0.24924871279008276,-0.007167999999999841,-3.7099519999999995,2.1370880000000003,70
+baked/bench-pcdirty3.json,pc-timerquery,worst,"PORTAL reflections vs none        (portal - off)",0.35355306666666675,0.22892841429595476,0.314368,-0.551936,2.2231039999999997,30
+baked/bench-pcdirty3.json,pc-timerquery,worst,"PORTAL reflections vs zero-hop IBL (portal - pccm)",0.05256533333333336,0.21383224345494753,0.10752000000000006,-1.1059199999999998,1.4919679999999995,30
+baked/bench-pcdirty3.json,pc-timerquery,worst,"ALL VFX vs none                   (full - off)",0.7456768000000001,0.42956465437049035,0.1925119999999998,-0.5478399999999999,3.7519360000000006,30
+baked/bench-pcdirty3.json,pc-timerquery,worst,"  reflections: zero-hop PCCM IBL  (pccm - off)",0.30098773333333334,0.19578402872073805,0.3082239999999996,-0.6625280000000002,1.8995199999999999,30
+baked/bench-pcdirty3.json,pc-timerquery,worst,"  + portal traversal              (portal - pccm)",0.05256533333333336,0.21383224345494753,0.10752000000000006,-1.1059199999999998,1.4919679999999995,30
+baked/bench-pcdirty3.json,pc-timerquery,worst,"  + contact-AO tap                (ao-tap - portal)",-0.07956479999999999,0.19478512324393485,0.001024000000000136,-1.2390400000000001,1.1560960000000002,30
+baked/bench-pcdirty3.json,pc-timerquery,worst,"  + dyn-occ layer regen (moving)  (ao-regen - ao-tap)",0.6973781333333332,0.4331722209104087,0.39526400000000006,-1.180672,3.3167359999999997,30
+baked/bench-pcdirty3.json,pc-timerquery,worst,"  + reflection-ray occlusion      (ao - ao-regen)",0.09390080000000009,0.3611262971542913,0.04608000000000034,-1.8872319999999996,2.9767680000000003,30
+baked/bench-pcdirty3.json,pc-timerquery,worst,"  + dynamic soft shadows          (full - ao)",-0.3195904,0.3187491980630303,-0.13516799999999973,-3.305472,1.143808,30

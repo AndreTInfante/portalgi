@@ -1520,6 +1520,7 @@ void main() {
   let last = performance.now(), fpsAvg = 0;
   let benchJitterHook = null; // ?benchremote installs a per-frame prop wobble so
   // the dyn AO/shadow layer keeps regenerating in VR (see the ?benchremote block)
+  let vrNoRegen = false; // ?benchremote ao-tap rung: hold the layer regen off
   // scripted gag: the hall-A ceiling fan drops 1.5s after you walk in.
   // its dynamic body spawns asleep at the ceiling (gravity frozen while
   // sleeping - that is what holds it up); one wakeUp() and it falls and
@@ -1609,8 +1610,9 @@ void main() {
       occluders.update(active, inXR ? headPos : player.pos,
         matsys.globals.uOccBudget.value);
       // normal gameplay: splat every frame. ?benchremote: splat only when AO/
-      // shadows are on, so the layer-regen cost attributes to the ao/full rungs.
-      if (!benchJitterHook || matsys.globals.uOccOn.value > 0.5) updateDynOcc(dt);
+      // shadows are on (so regen attributes to ao/full), and never on the ao-tap
+      // rung (vrNoRegen isolates the pure per-pixel tap from the regen pass).
+      if ((!benchJitterHook || matsys.globals.uOccOn.value > 0.5) && !vrNoRegen) updateDynOcc(dt);
     }
     if (physWires.group.visible) physWires.update(); // sync dynamic bodies
     if (!inXR) {
@@ -1639,12 +1641,18 @@ void main() {
   // driver knows when to run ovrgpuprofiler. Rungs = the ?bench ladder.
   if (params.has('benchremote')) {
     const gg = matsys.globals;
+    const vrOccHopsDefault = gg.uOccHops.value;
+    // full 7-rung ladder, matching the flat/PC bench: ao-tap (occHops 0 + no
+    // regen) isolates the per-pixel tap, ao-regen adds the layer-regen pass,
+    // ao adds per-hop reflection occlusion. See the RUNGS note above.
     const RR = {
-      off:    { program: 'off',    steps: 3, occ: 0, shadow: 0 },
-      pccm:   { program: 'pccm',   steps: 0, occ: 0, shadow: 0 },
-      portal: { program: 'portal', steps: 3, occ: 0, shadow: 0 },
-      ao:     { program: 'portal', steps: 3, occ: 1, shadow: 0 },
-      full:   { program: 'portal', steps: 3, occ: 1, shadow: 0.85 },
+      off:        { program: 'off',    steps: 3, occ: 0, shadow: 0 },
+      pccm:       { program: 'pccm',   steps: 0, occ: 0, shadow: 0 },
+      portal:     { program: 'portal', steps: 3, occ: 0, shadow: 0 },
+      'ao-tap':   { program: 'portal', steps: 3, occ: 1, shadow: 0, occHops: 0, noRegen: 1 },
+      'ao-regen': { program: 'portal', steps: 3, occ: 1, shadow: 0, occHops: 0 },
+      ao:         { program: 'portal', steps: 3, occ: 1, shadow: 0 },
+      full:       { program: 'portal', steps: 3, occ: 1, shadow: 0.85 },
     };
     let curProg = 'portal', lastSeq = -1;
     // per-frame prop wobble (installed into the render loop): keeps the dynamic
@@ -1657,8 +1665,14 @@ void main() {
       if (!jbase) return; // not armed until the first driver command (props settled, VR entered)
       jframe++;
       for (let k = 0; k < props.list.length; k++) {
-        const b = jbase[k], m = props.list[k].mesh;
-        m.position.set(b.x + JIT * Math.sin(jframe * 0.9 + k), b.y, b.z + JIT * Math.cos(jframe * 0.7 + k * 1.3));
+        const b = jbase[k], p = props.list[k], m = p.mesh;
+        // only the cell you're standing in wobbles - realistic, and it keeps the
+        // dirty-region layer on its dirty path instead of the all-moved full fallback
+        if (p.cell === player.cell) {
+          m.position.set(b.x + JIT * Math.sin(jframe * 0.9 + k), b.y, b.z + JIT * Math.cos(jframe * 0.7 + k * 1.3));
+        } else {
+          m.position.copy(b);
+        }
         m.updateMatrixWorld(true);
       }
     };
@@ -1674,6 +1688,8 @@ void main() {
       if (r) {
         if (r.program !== curProg) { matsys.benchSetRung(r.program); curProg = r.program; }
         gg.uMaxSteps.value = r.steps; gg.uOccOn.value = r.occ; gg.uOccShadow.value = r.shadow;
+        gg.uOccHops.value = r.occHops !== undefined ? r.occHops : vrOccHopsDefault;
+        vrNoRegen = !!r.noRegen;
       }
       try {
         await fetch('./baked/bench-state.json', { method: 'PUT',

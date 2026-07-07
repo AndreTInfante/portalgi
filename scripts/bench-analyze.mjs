@@ -20,19 +20,21 @@ if (!files.length) {
 
 const RUNGS = ['off', 'pccm', 'portal', 'ao-tap', 'ao-regen', 'ao', 'full'];
 // [label, fromRung, toRung] : cost = median(to) - median(from), paired per pose.
-// The old single "capsule AO + refl-occlusion (ao-portal)" delta is now split
-// into its three real mechanisms (tap / layer regen / reflection occlusion);
-// the aggregate is kept below so historical numbers stay comparable. Older
-// result files without the ao-tap/ao-regen rungs simply skip those rows.
+// Headline comparisons first (the write-up's questions), then the per-feature
+// breakdown - each breakdown rung adds exactly one feature over the previous.
+// Older result files missing the ao-tap/ao-regen rungs simply skip those rows.
 const FEATURES = [
-  ['reflections / single-step IBL (pccm-off)', 'off', 'pccm'],
-  ['portal traversal (portal-pccm)', 'pccm', 'portal'],
-  ['contact-AO uDynOcc tap (ao-tap - portal)', 'portal', 'ao-tap'],
-  ['dyn-occ layer regen, props moving (ao-regen - ao-tap)', 'ao-tap', 'ao-regen'],
-  ['reflection-ray occlusion (ao - ao-regen)', 'ao-regen', 'ao'],
-  ['  = uOccOn aggregate (ao - portal)', 'portal', 'ao'],
-  ['dynamic soft shadows (full-ao)', 'ao', 'full'],
-  ['ALL reflection features (full-off)', 'off', 'full'],
+  // -- headline comparisons --
+  ['PORTAL reflections vs none        (portal - off)', 'off', 'portal'],
+  ['PORTAL reflections vs zero-hop IBL (portal - pccm)', 'pccm', 'portal'],
+  ['ALL VFX vs none                   (full - off)', 'off', 'full'],
+  // -- per-feature breakdown (one feature per rung) --
+  ['  reflections: zero-hop PCCM IBL  (pccm - off)', 'off', 'pccm'],
+  ['  + portal traversal              (portal - pccm)', 'pccm', 'portal'],
+  ['  + contact-AO tap                (ao-tap - portal)', 'portal', 'ao-tap'],
+  ['  + dyn-occ layer regen (moving)  (ao-regen - ao-tap)', 'ao-tap', 'ao-regen'],
+  ['  + reflection-ray occlusion      (ao - ao-regen)', 'ao-regen', 'ao'],
+  ['  + dynamic soft shadows          (full - ao)', 'ao', 'full'],
 ];
 const BUDGET = { '90Hz': 11.11, '72Hz': 13.89 };
 
@@ -77,7 +79,7 @@ for (const file of files) {
       const deltas = P.filter(p => p[aR] != null && p[bR] != null).map(p => p[bR] - p[aR]);
       const st = stats(deltas);
       if (st.n) {
-        console.log(`    ${label.padEnd(42)} ${f3(st.mean)} ms  95%CI +-${st.ci95.toFixed(3)}  range [${f3(st.min)},${f3(st.max)}]  n=${st.n}`);
+        console.log(`    ${label.padEnd(52)} ${f3(st.mean)} ms  95%CI +-${st.ci95.toFixed(3)}  range [${f3(st.min)},${f3(st.max)}]  n=${st.n}`);
         summary.push({ file, platform: d.meta.platform, group: gk, feature: label, meanMs: st.mean, ci95: st.ci95, medMs: st.med, min: st.min, max: st.max, n: st.n });
       }
     }

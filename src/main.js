@@ -70,6 +70,10 @@ const overlaySub = document.getElementById('overlay-sub');
 const fpsEl = document.getElementById('fps');
 const errEl = document.getElementById('err');
 
+// Yield long enough for a style/paint flush before a synchronous block, so the
+// last status message is actually on screen while the main thread is busy.
+const paintPause = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
 function fail(msg) {
   overlayMsg.textContent = msg;
   overlaySub.textContent = '';
@@ -781,6 +785,20 @@ void main() {
   }
   if (!usedBaked) await relight();
 
+  // Do the heavy GPU warm-up (big texture uploads + full shader compile) HERE,
+  // under the loading overlay, so it doesn't stall the first visible frame.
+  // This is the ~10 s "frozen" stretch after the file counter completes: label
+  // it and yield once so the message paints before we block. The overlay's CSS
+  // progress bar keeps sliding on the compositor thread throughout.
+  overlayMsg.textContent = 'Compiling shaders…';
+  overlaySub.textContent = '';
+  await paintPause();
+  if (usedBaked && renderer.initTexture) { // force the atlas + lightmap upload now
+    for (const u of [matsys.globals.uAtlas, matsys.globals.uLightmap]) {
+      if (u && u.value) { try { renderer.initTexture(u.value); } catch (e) {} }
+    }
+  }
+
   // pre-warm the wall-LOD twin programs so the first distance-demote mid-view
   // doesn't hitch on a shader compile (all twins share ~2 programs)
   if (lodWalls.length) {
@@ -1128,7 +1146,11 @@ void main() {
     return;
   }
 
-  overlay.classList.add('hidden');
+  // Keep the loading overlay (and its animated bar) up until the FIRST real
+  // frame has rendered, so the first-frame texture upload / residual compile
+  // happens behind it instead of a black screen, and the reveal cuts straight
+  // to the scene. Hidden in the render loop below once that frame lands.
+  let bootRevealed = false;
 
   // ---- WebXR (Quest): VR button, controller grab, stick locomotion
   let xrCarrier = null; // carrier driving the held prop in VR (see props.update)
@@ -1699,6 +1721,7 @@ void main() {
     perf.gpuBegin();
     renderer.render(scene, camera);
     perf.gpuEnd();
+    if (!bootRevealed) { bootRevealed = true; overlay.classList.add('hidden'); }
     perf.tick(now);
     if (inXR) drawPerfLabel();
     fpsAvg = fpsAvg * 0.95 + (1 / Math.max(dt, 1e-4)) * 0.05;

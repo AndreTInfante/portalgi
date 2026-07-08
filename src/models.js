@@ -115,7 +115,9 @@ export const MODEL_DEFS = [
   // horse + elephant on the gallery pedestals - spreads dynamic props across rooms
   { slug: 'horse_statue_01', size: 0.85, cell: 0, x: 0, z: -1.4, ped: true },
   { slug: 'carved_wooden_elephant', size: 0.62, cell: 0, x: 2.5, z: -1.4, ped: true },
-  { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -2.4, z: 24.7, ped: true },
+  // collInflate: the pan's real-mesh hull is thin/finicky to catch, so grow
+  // its collision hull 20% (about its centroid) for a more forgiving grab/contact
+  { slug: 'brass_pan_01', size: 0.5, cell: 10, x: -2.4, z: 24.7, ped: true, collInflate: 1.2 },
   { slug: 'bronze_whale_statue', size: 1.15, cell: 11, x: 6.6, z: 22.5 },
   // specBoost consumes the fan's KHR_materials_specular map, which our shader
   // has no per-texel channel for: it's a near-uniform ~0.5 spec-intensity mask
@@ -174,7 +176,7 @@ export async function loadModelProps(matsys, manager) {
       if (def.hangCeil !== undefined) y = def.hangCeil - (box.max.y - center.y) - 0.02;
       if (def.yCenter !== undefined) y = def.yCenter;
       root.position.set(def.x, y, def.z);
-      out.push({ root, mats, radius, rFloor, cell: def.cell, slug: def.slug });
+      out.push({ root, mats, radius, rFloor, cell: def.cell, slug: def.slug, collInflate: def.collInflate });
     } catch (e) {
       console.error(`model load failed: ${def.slug}`, e);
     }

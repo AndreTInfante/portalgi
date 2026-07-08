@@ -9,7 +9,9 @@ import { findCell, WALL_T, pushOutCollider } from './level.js';
 const REST = 0.35;
 const tmpD = new THREE.Vector3();
 const HOLD_DIST = 0.12;  // rigid-attach rest offset in front of the hand (VR)
-const CARRY_DIST = 1.9;  // ray-carry distance in front of the eye (desktop)
+const CARRY_DIST = 1.9;  // default ray-carry distance in front of the eye (desktop)
+const CARRY_MIN = 0.7;   // mouse-wheel clamp: closer overlaps the player capsule
+const CARRY_MAX = 3.0;   // ...farther exceeds the 3.5m grab reach
 
 const PROP_DEFS = [
   // mode 4 = dynamic PBR prop: probe-grid diffuse + traversal specular
@@ -28,6 +30,7 @@ export class Props {
     // (hold = hand-space offsets + beam progress). VR carries a prop in
     // EACH hand; desktop only ever uses its one slot.
     this.holds = new Map();
+    this.carryDist = CARRY_DIST; // desktop hold distance, nudged by the mouse wheel
     this.carriers = {}; // per-key carriers, refreshed by main each frame (VR)
     // cannon 'collide' events feed the impact audio (with the per-prop cooldown)
     this.impactCb = (p, speed) => {
@@ -69,6 +72,7 @@ export class Props {
         round: false, boxHalf: null,
         cell: mp.cell,
         slug: mp.slug, // authored occluder proxy key (proxies.js)
+        collInflate: mp.collInflate, // per-prop collision-hull inflation (undefined -> 1)
       };
       if (physics) p.body = physics.addProp(p, this.impactCb);
       this.list.push(p);
@@ -162,7 +166,7 @@ export class Props {
     } else {
       // no hull clamp on the target: clamping pops ~0.6m when the best-containing
       // hull flips mid-doorway. collide() already keeps the prop out of walls.
-      const target = carrier.pos.clone().addScaledVector(carrier.viewDir, CARRY_DIST);
+      const target = carrier.pos.clone().addScaledVector(carrier.viewDir, this.carryDist);
       p.vel.copy(target.sub(p.mesh.position).multiplyScalar(14));
       // step cap: an uncapped carry spring could sweep a prop clean through
       // the pillar between two hull clamps on fast look-turns
@@ -294,7 +298,13 @@ export class Props {
 
   grab(p, key = 'desktop') {
     this._take(p, key);
+    if (key === 'desktop') this.carryDist = CARRY_DIST; // each pickup starts at rest distance
     this.holds.set(key, { p, hold: null });
+  }
+
+  // mouse wheel adjusts how far the desktop-carried prop floats from the eye
+  nudgeCarry(delta) {
+    this.carryDist = THREE.MathUtils.clamp(this.carryDist + delta, CARRY_MIN, CARRY_MAX);
   }
 
   // rigid attach preserving the current hand-relative pose (direct VR grab,

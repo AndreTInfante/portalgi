@@ -530,6 +530,14 @@ void main() {
       }
     });
     renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+    // mouse wheel pushes the held prop out (scroll up) / pulls it in (scroll down).
+    // sign, not raw deltaY: mice report ~100/notch, trackpads tiny fractions in a
+    // different deltaMode - a fixed step per event feels consistent across both.
+    renderer.domElement.addEventListener('wheel', e => {
+      if (!player.locked || !props.held) return;
+      e.preventDefault();
+      props.nudgeCarry(-Math.sign(e.deltaY) * 0.15);
+    }, { passive: false });
     // hold-E + mouse rotates the held prop (look is suppressed); a quick tap
     // (<250ms, <6px) keeps tap-to-drop. Rotation persists after release.
     const UP = new THREE.Vector3(0, 1, 0);

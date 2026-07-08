@@ -23,7 +23,7 @@ function hullVertCount(hull) {
 // dedup grid coarsens until the hull fits; kept points are exact surface
 // points (the grid only sparsifies), so resting contact never drifts. Budget
 // scales with object size: a whale at 28 verts is a potato.
-export function convexFromPoints(pts, budget = 28) {
+export function convexFromPoints(pts, budget = 28, inflate = 1) {
   if (pts.length < 8) return null;
   try {
     let hull = new ConvexHull().setFromPoints(pts);
@@ -75,7 +75,10 @@ export function convexFromPoints(pts, budget = 28) {
     let cx = 0, cy = 0, cz = 0;
     for (const v of verts) { cx += v.x; cy += v.y; cz += v.z; }
     cx /= verts.length; cy /= verts.length; cz /= verts.length;
-    for (const v of verts) { v.x -= cx; v.y -= cy; v.z -= cz; }
+    // center on the centroid; `inflate` grows the hull about that centroid
+    // (offset stays the centroid, so the resting pose is unchanged - the body
+    // just settles a hair higher on its now-larger base)
+    for (const v of verts) { v.x = (v.x - cx) * inflate; v.y = (v.y - cy) * inflate; v.z = (v.z - cz) * inflate; }
     // robust outward winding: slim triangles (dense clouds hulled after
     // sparsification) can fool a cross-product normal - cannon then warns
     // and SAT can pick bogus separating axes. Newell normal per face,
@@ -105,7 +108,7 @@ export function convexFromPoints(pts, budget = 28) {
 // tuned for reflection blobs, not contact (props wobble on sphere strings),
 // so contact uses a hull instead. Its bottom face spans the leg tips = flat
 // resting base for free.
-export function convexFromMesh(root, budget = 28) {
+export function convexFromMesh(root, budget = 28, inflate = 1) {
   root.updateMatrixWorld(true);
   // body space = root position+rotation WITHOUT scale (cannon shapes carry
   // no scale, but the body tracks mesh position/quaternion only) - any root
@@ -131,7 +134,7 @@ export function convexFromMesh(root, budget = 28) {
       pts.push(v.clone());
     }
   });
-  return convexFromPoints(pts, budget);
+  return convexFromPoints(pts, budget, inflate);
 }
 
 const FIXED_DT = 1 / 90;
@@ -214,7 +217,7 @@ export class PhysicsWorld {
   addProp(p, onImpact) {
     const body = new CANNON.Body({ mass: Math.max(0.3, p.radius ** 3 * 40) });
     const proxy = p.slug && OCCLUDER_PROXIES.props[p.slug];
-    const hull = !p.round && !p.boxHalf && p.slug ? convexFromMesh(p.mesh) : null;
+    const hull = !p.round && !p.boxHalf && p.slug ? convexFromMesh(p.mesh, 28, p.collInflate) : null;
     if (p.round) {
       body.addShape(new CANNON.Sphere(p.radius));
     } else if (p.boxHalf) {

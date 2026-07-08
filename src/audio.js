@@ -4,6 +4,7 @@
 // refuse to start an AudioContext otherwise, and headless shots never gesture.
 
 const MUSIC_URL = './assets/audio/music.mp3';
+const FADE = 1.0; // seconds to fade audio out/in when the tab loses/regains focus
 
 export class AudioSystem {
   constructor() {
@@ -17,6 +18,7 @@ export class AudioSystem {
     this.stepDist = 0;   // accumulated horizontal travel since the last footstep
     this.lastStepT = 0;
     this.prevPos = null;
+    this._suspendTimer = null; // pending post-fade-out ctx.suspend(), cancelled by a re-focus
   }
 
   _applyMaster() { if (this.masterGain) this.masterGain.gain.value = this._muted ? 0 : this._master; }
@@ -33,14 +35,38 @@ export class AudioSystem {
   get sfx() { return this._sfx; }
   set sfx(v) { this._sfx = v; if (this.sfxGain) this.sfxGain.gain.value = v; }
 
-  // background/foreground gate: suspend halts the audio thread entirely
-  // (battery on mobile) and stops the looping music source; update()/impact()
-  // already no-op on a non-running context. Orthogonal to manual mute, which
-  // lives on masterGain, so volumes and mute state survive a suspend/resume.
+  // ramp fadeGain to `target` over FADE seconds from wherever it currently sits.
+  // read-before-cancel pins the live (possibly mid-ramp) value so an interrupted
+  // fade reverses smoothly instead of snapping.
+  _fade(target) {
+    const g = this.fadeGain.gain;
+    const now = this.ctx.currentTime;
+    const cur = g.value;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(cur, now);
+    g.linearRampToValueAtTime(target, now + FADE);
+  }
+
+  // background/foreground gate: fade out then suspend (suspend halts the audio
+  // thread entirely - battery on mobile - and freezes currentTime, so it can't
+  // run concurrently with the fade; we schedule it for after the ramp). A
+  // re-focus mid-fade cancels the pending suspend and ramps back up from the
+  // current level. Orthogonal to manual mute, which lives on masterGain, so
+  // volumes and mute state survive a suspend/resume.
   setActive(active) {
     if (!this.ctx) return;                                  // not unlocked yet
-    if (active) { if (this.ctx.state === 'suspended') this.ctx.resume(); }
-    else        { if (this.ctx.state === 'running')   this.ctx.suspend(); }
+    if (this._suspendTimer !== null) { clearTimeout(this._suspendTimer); this._suspendTimer = null; }
+    if (active) {
+      if (this.ctx.state === 'suspended') this.ctx.resume(); // clock must run before the ramp
+      this._fade(1);
+    } else {
+      if (this.ctx.state !== 'running') return;             // already suspended/paused
+      this._fade(0);
+      this._suspendTimer = setTimeout(() => {
+        this._suspendTimer = null;
+        if (this.ctx.state === 'running') this.ctx.suspend();
+      }, FADE * 1000 + 50);
+    }
   }
 
   unlock() {
@@ -49,7 +75,13 @@ export class AudioSystem {
     if (!AC) return;
     this.ctx = new AC();
     this.masterGain = this.ctx.createGain();
-    this.masterGain.connect(this.ctx.destination);
+    // dedicated fade stage between master and output: focus in/out ramps live
+    // here so they never collide with the direct gain writes on masterGain
+    // (mute / master volume). starts fully open - no fade on first unlock.
+    this.fadeGain = this.ctx.createGain();
+    this.fadeGain.gain.value = 1;
+    this.masterGain.connect(this.fadeGain);
+    this.fadeGain.connect(this.ctx.destination);
     this._applyMaster();
     this.musicGain = this.ctx.createGain();
     this.musicGain.gain.value = this._music;

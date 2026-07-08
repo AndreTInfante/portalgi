@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from '../libs/loaders/GLTFLoader.js';
 import { GeoBuilder } from './level.js';
+import { tick } from './loadprogress.js';
 
 // Scaled-up STATIC (non-carryable) exhibit copies: full members of the baked
 // world - lightmap charts (their photoscan UVs are unique, so the whole mesh
@@ -107,6 +108,8 @@ export async function addStaticModels(level) {
       });
     } catch (e) {
       console.error(`static model failed: ${def.slug}`, e);
+    } finally {
+      tick();
     }
   }));
 }
@@ -180,6 +183,8 @@ export async function loadModelProps(matsys, manager) {
       out.push({ root, mats, radius, rFloor, cell: def.cell, slug: def.slug, boxFit: def.boxFit, collInflate: def.collInflate });
     } catch (e) {
       console.error(`model load failed: ${def.slug}`, e);
+    } finally {
+      tick();
     }
   }));
   return out;

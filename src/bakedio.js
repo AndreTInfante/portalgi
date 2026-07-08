@@ -71,17 +71,52 @@ export async function fetchManifest() {
   }
 }
 
-export async function loadHalfTexture(path, w, h, mips = false) {
+// Stream the raw half-float bytes of a baked binary, reporting progress as
+// chunks arrive (onBytes(received, total)). Kept separate from texture
+// construction so the (large) download can be kicked off early and overlap
+// the rest of boot; halfTextureFromBuffer() finishes the job once the bytes
+// are in hand.
+export async function fetchHalfBuffer(path, onBytes) {
   const res = await fetch(path);
   if (!res.ok) throw new Error(`missing baked texture: ${path}`);
-  const buf = await res.arrayBuffer();
-  if (buf.byteLength !== w * h * 4 * 2) throw new Error(`size mismatch for ${path}`);
+  const total = +res.headers.get('content-length') || 0;
+  // no streaming body (very old browsers): fall back to a single buffer read
+  if (!res.body || !res.body.getReader) {
+    const buf = await res.arrayBuffer();
+    if (onBytes) onBytes(buf.byteLength, buf.byteLength || total);
+    return buf;
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (onBytes) onBytes(received, total);
+  }
+  const out = new Uint8Array(received);
+  let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out.buffer;
+}
+
+export function halfTextureFromBuffer(buf, w, h, mips = false) {
+  if (buf.byteLength !== w * h * 4 * 2) {
+    throw new Error(`size mismatch: got ${buf.byteLength}, expected ${w * h * 4 * 2}`);
+  }
   const tex = new THREE.DataTexture(new Uint16Array(buf), w, h, THREE.RGBAFormat, THREE.HalfFloatType);
   tex.minFilter = mips ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.generateMipmaps = mips;
   tex.needsUpdate = true;
   return tex;
+}
+
+export async function loadHalfTexture(path, w, h, mips = false) {
+  const buf = await fetchHalfBuffer(path);
+  return halfTextureFromBuffer(buf, w, h, mips);
 }
 
 export async function saveBaked(renderer, atlasRT, lightmapRT, settings) {

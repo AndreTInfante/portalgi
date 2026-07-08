@@ -1,5 +1,6 @@
 // Procedural surface textures (canvas-generated) + public-domain painting loads.
 import * as THREE from 'three';
+import { tick } from './loadprogress.js';
 
 function hash2(x, y) {
   let h = Math.imul(x, 374761393) + Math.imul(y, 668265263);
@@ -247,7 +248,7 @@ export async function applyRealTextures(textures) {
     const f = filesOf(s);
     const url = file => `./assets/textures/${s.dir || s.slug}/${file}`;
     const parts = f.arm ? [f.diff, f.nor, f.arm] : [f.diff, f.nor, f.ao, f.rough];
-    return Promise.all(parts.map(p => loadImg(url(p))));
+    return Promise.all(parts.map(p => loadImg(url(p)).then(img => { tick(); return img; })));
   }));
   // NOTE each map gets ONLY its own opts: norFlat/roughMul rescale channels
   // and would tint the albedo if spread into the diffuse call
@@ -434,7 +435,7 @@ export function loadPaintingTextures(manager) {
     const nrm = new THREE.CanvasTexture(nc);
     nrm.wrapS = nrm.wrapT = THREE.ClampToEdgeWrapping;
     const tex = loader.load('./assets/paintings/' + p.file,
-      t => fillPaintingNormal(nrm, t.image));
+      t => { fillPaintingNormal(nrm, t.image); tick(); }, undefined, () => tick());
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 8;
     tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;

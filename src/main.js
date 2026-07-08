@@ -4,7 +4,7 @@
 // capture) -> loop. `?bake=1` runs a high-quality bake and PUTs the textures
 // to the dev server under baked/ for distribution.
 import * as THREE from 'three';
-import { buildTextures, applyRealTextures, loadPaintingTextures } from './textures.js';
+import { buildTextures, applyRealTextures, loadPaintingTextures, REAL_SETS, PAINTINGS } from './textures.js';
 import { buildLevel, packLightmapCharts } from './level.js';
 import { buildHullTexture } from './hulldata.js';
 import { Baker } from './bake.js';
@@ -13,8 +13,9 @@ import { createMaterialSystem, buildStaticMeshes } from './materials.js';
 import { Player } from './player.js';
 import { Props } from './props.js';
 import { buildGUI, buildPortalWires, buildPhysicsWires } from './debug.js';
-import { fetchManifest, loadHalfTexture, saveBaked, saveAtlasOnly } from './bakedio.js';
-import { loadModelProps, addStaticModels } from './models.js';
+import { fetchManifest, fetchHalfBuffer, halfTextureFromBuffer, saveBaked, saveAtlasOnly } from './bakedio.js';
+import { loadModelProps, addStaticModels, STATIC_MODEL_DEFS, MODEL_DEFS } from './models.js';
+import { initProgress, tick as tickLoad, progressCounts as loadCounts } from './loadprogress.js';
 import { findCell } from './level.js';
 import { VRButton } from '../libs/webxr-VRButton.js';
 import { PortalCuller } from './culling.js';
@@ -133,6 +134,56 @@ async function boot() {
     lmps: parseInt(params.get('lmps')) || (BAKE ? 32 : 8),
     lmfp: parseInt(params.get('lmfp')) || (BAKE ? 12 : 1),
   };
+
+  // --- load progress + baked-binary prefetch --------------------------------
+  // The two baked binaries (atlas + lightmap, ~120 MB) dominate load time yet
+  // have no dependency on any of the texture/model/CPU work that follows, and
+  // the original boot fetched them dead-last. Kick them off NOW so their
+  // transfer overlaps the texture/model downloads, level build, light-vis BVH,
+  // and shader compile. Same bytes, same textures -- only the schedule changes.
+  // Bytes are streamed so the dominant download shows real progress.
+  const recube = params.has('recube');
+  const bakedBytes = { atlas: [0, 0], lm: [0, 0] };
+  const onBaked = (key) => {
+    let lastMB = -1;
+    return (recv, total) => {
+      bakedBytes[key] = [recv, total];
+      const mb = recv >> 20;               // throttle DOM writes to ~1 per MB
+      if (mb !== lastMB) { lastMB = mb; renderProgress(); }
+    };
+  };
+  const bakedFetch = manifest ? {
+    atlas: recube ? null : fetchHalfBuffer('./baked/atlas.bin', onBaked('atlas')).then(b => (tickLoad(), b)),
+    lm: fetchHalfBuffer('./baked/lightmap.bin', onBaked('lm')).then(b => (tickLoad(), b)),
+  } : null;
+  if (bakedFetch) { // the real await is many phases later; pre-handle rejection
+    if (bakedFetch.atlas) bakedFetch.atlas.catch(() => {});
+    bakedFetch.lm.catch(() => {});
+  }
+
+  function renderProgress() {
+    const { done, total } = loadCounts();
+    let s = total ? `${done} / ${total}` : '';
+    // live byte read-out for the baked binaries while they are still in flight,
+    // so the long pole of the load keeps visible motion at high file counts
+    const live = [bakedBytes.atlas, bakedBytes.lm].filter(x => x[1] && x[0] < x[1]);
+    if (live.length) {
+      const recv = live.reduce((a, x) => a + x[0], 0) / 1048576;
+      const tot = live.reduce((a, x) => a + x[1], 0) / 1048576;
+      s += `${s ? '  ·  ' : ''}baked ${recv.toFixed(0)} / ${tot.toFixed(0)} MB`;
+    }
+    overlaySub.textContent = s;
+  }
+
+  // tracked files: real textures (3 or 4 maps each) + static & dynamic GLTF
+  // exhibits + paintings + sky + the baked binaries
+  const texFiles = params.get('realtex') !== '0'
+    ? Object.values(REAL_SETS).reduce((n, s) => n + (s.files ? 4 : 3), 0) : 0;
+  const bakedFiles = manifest ? (recube ? 1 : 2) : 0;
+  initProgress(
+    texFiles + STATIC_MODEL_DEFS.length + MODEL_DEFS.length + PAINTINGS.length + 1 + bakedFiles,
+    renderProgress,
+  );
 
   const textures = buildTextures();
   // Poly Haven photo sets replace the procedural ones (?realtex=0 keeps the
@@ -263,7 +314,8 @@ async function boot() {
   let dome = null;
   {
     const skyTex = new THREE.TextureLoader(manager)
-      .load('./assets/textures/sky/kloofendal_48d_partly_cloudy_puresky.jpg');
+      .load('./assets/textures/sky/kloofendal_48d_partly_cloudy_puresky.jpg',
+        () => tickLoad(), undefined, () => tickLoad());
     skyTex.colorSpace = THREE.SRGBColorSpace;
     dome = new THREE.Mesh(
       new THREE.SphereGeometry(70, 48, 24),
@@ -690,8 +742,8 @@ void main() {
   if (params.has('recube')) {
     if (!manifest) throw new Error('?recube needs an existing baked/manifest.json to reuse the lightmap');
     overlayMsg.textContent = 'Re-cube: loading master lightmap...';
-    const lmTex = await loadHalfTexture('./baked/lightmap.bin', manifest.lightmap.w, manifest.lightmap.h, true);
-    matsys.globals.uLightmap.value = lmTex;
+    const lmBuf = await bakedFetch.lm;
+    matsys.globals.uLightmap.value = halfTextureFromBuffer(lmBuf, manifest.lightmap.w, manifest.lightmap.h, true);
     await rebake(); // cubemaps only, scene lit by the loaded lightmap
     const mb = await saveAtlasOnly(renderer, baker.atlasA, manifest);
     overlayMsg.textContent = `Atlas re-cubed (${mb.toFixed(1)} MB) at ${baker.atlasA.width}x${baker.atlasA.height}`;
@@ -708,12 +760,9 @@ void main() {
         throw new Error('baked artifact dimensions do not match the current level -- rebake with ?bake=1');
       }
       overlayMsg.textContent = 'Loading baked lighting...';
-      const [atlasTex, lmTex] = await Promise.all([
-        loadHalfTexture('./baked/atlas.bin', manifest.atlas.w, manifest.atlas.h),
-        loadHalfTexture('./baked/lightmap.bin', manifest.lightmap.w, manifest.lightmap.h, true),
-      ]);
-      matsys.globals.uAtlas.value = atlasTex;
-      matsys.globals.uLightmap.value = lmTex;
+      const [atlasBuf, lmBuf] = await Promise.all([bakedFetch.atlas, bakedFetch.lm]);
+      matsys.globals.uAtlas.value = halfTextureFromBuffer(atlasBuf, manifest.atlas.w, manifest.atlas.h);
+      matsys.globals.uLightmap.value = halfTextureFromBuffer(lmBuf, manifest.lightmap.w, manifest.lightmap.h, true);
       usedBaked = true;
     } catch (e) {
       errEl.textContent += `baked load failed (${e.message}); baking live\n`;

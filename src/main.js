@@ -304,7 +304,7 @@ void main() {
 
   const player = new Player(level, renderer.domElement, { headless: SHOT > 0 });
   const physics = new PhysicsWorld(level); // cannon-es: props vs level/furniture/each other
-  const props = new Props(scene, level, matsys, modelProps, physics);
+  const props = new Props(scene, level, matsys, modelProps, physics, textures);
   // collision-shape wireframes (Display > 'show collision shapes'): built
   // AFTER Props so every prop body exists. Ground truth for contact bugs -
   // statue sphere bands and prop hulls both diverge from the visual mesh.

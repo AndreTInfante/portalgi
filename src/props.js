@@ -18,11 +18,14 @@ const PROP_DEFS = [
   { shape: 'sphere', mode: 4, x: -2.5, z: 1.4, tint: [0.85, 0.83, 0.8], roughFactor: 0.8, metalFactor: 0 },
   { shape: 'sphere', mode: 4, x: 0, z: 1.4, tint: [0.95, 0.96, 0.97], roughFactor: 0.04, metalFactor: 1 }, // chrome
   { shape: 'sphere', mode: 2, x: 2.5, z: 1.4 },
-  { shape: 'cube', mode: 4, x: -2.5, z: -1.4, tint: [0.85, 0.4, 0.3], roughFactor: 0.8, metalFactor: 0 },
+  // white marble, matching the hall B floor (roughFactor 0.7, no specBoost).
+  // tex pulls the marble map/nrm/orm; the map's linear avg albedo drives the
+  // occluder blob color, so its proxy re-emits white/gray (occluders.js).
+  { shape: 'cube', mode: 4, x: -2.5, z: -1.4, tex: 'marble', roughFactor: 0.7, metalFactor: 0 },
 ];
 
 export class Props {
-  constructor(scene, level, matsys, modelProps = [], physics = null) {
+  constructor(scene, level, matsys, modelProps = [], physics = null, textures = null) {
     this.level = level;
     this.matsys = matsys;
     this.physics = physics;
@@ -42,12 +45,20 @@ export class Props {
       const r = def.shape === 'sphere' ? 0.22 : 0.18;
       const geo = def.shape === 'sphere' ? new THREE.SphereGeometry(0.22, 48, 32)
         : new THREE.BoxGeometry(0.36, 0.36, 0.36);
+      // textured props (e.g. the marble cube) pull a full PBR set by key; the
+      // shared frag samples uMap/uOrmMap for every mode, so the set's albedo +
+      // roughness read through on mode-4 props exactly as on static floors
+      const set = def.tex && textures ? textures[def.tex] : null;
       const mat = matsys.makeMaterial(0, {
         mode: def.mode,
         tint: def.tint || [1, 1, 1],
         rough: 0.04,
         roughFactor: def.roughFactor,
         metalFactor: def.metalFactor,
+        specBoost: def.specBoost,
+        map: set ? set.map : undefined,
+        nrm: set ? set.normalMap : undefined,
+        orm: set ? set.ormMap : undefined,
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.layers.set(3); // excluded from cubemap captures (layers 1/2 = XR eyes)

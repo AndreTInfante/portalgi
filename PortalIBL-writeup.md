@@ -3,6 +3,7 @@
 ![PortalIBL demo — walkthrough video](https://youtu.be/JvvqEx79a-w)
 
 **[▶ Try the PortalIBL demo in your browser](https://andretinfante.github.io/portalgi/)** — runs on PC, mobile, and VR headsets 
+
 **[Source & full implementation on GitHub](https://github.com/AndreTInfante/portalgi)**
 
 

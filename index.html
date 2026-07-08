@@ -62,7 +62,7 @@
 <div id="hud">
   <div id="crosshair" class="hidden"></div>
   <div id="fps"></div>
-  <div id="err"></div>
+  <div id="err" class="hidden"></div>
   <div id="mute" class="hidden" title="toggle audio"></div>
   <a id="about" class="hidden" target="_blank" rel="noopener"
      href="./writeup.html">what am I looking at?</a>
@@ -81,6 +81,19 @@
 }
 </script>
 <script>
+  // The #err box mirrors console errors/warnings on-screen (headless
+  // screenshots can't see devtools). Ordinary visitors shouldn't be shown a
+  // wall of red text, so it stays hidden unless explicitly requested with
+  // ?errors (alias ?showerrors). Text still accumulates in textContent either
+  // way - the ?mark CI heartbeat uploads it and the real devtools console
+  // still gets everything - so only the on-screen display is gated.
+  {
+    const q = new URLSearchParams(location.search);
+    if (q.has('errors') || q.has('showerrors')) {
+      document.getElementById('err').classList.remove('hidden');
+    }
+  }
+
   // surface console errors on the page (headless screenshots can't see devtools)
   const rawWarn = console.warn.bind(console);
   console.warn = (...a) => {

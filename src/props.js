@@ -72,7 +72,8 @@ export class Props {
         round: false, boxHalf: null,
         cell: mp.cell,
         slug: mp.slug, // authored occluder proxy key (proxies.js)
-        collInflate: mp.collInflate, // per-prop collision-hull inflation (undefined -> 1)
+        boxFit: mp.boxFit, // collide as a fitted box, not the real-mesh hull
+        collInflate: mp.collInflate, // per-prop collider inflation (undefined -> 1)
       };
       if (physics) p.body = physics.addProp(p, this.impactCb);
       this.list.push(p);

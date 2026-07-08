@@ -23,7 +23,7 @@ function hullVertCount(hull) {
 // dedup grid coarsens until the hull fits; kept points are exact surface
 // points (the grid only sparsifies), so resting contact never drifts. Budget
 // scales with object size: a whale at 28 verts is a potato.
-export function convexFromPoints(pts, budget = 28, inflate = 1) {
+export function convexFromPoints(pts, budget = 28) {
   if (pts.length < 8) return null;
   try {
     let hull = new ConvexHull().setFromPoints(pts);
@@ -75,10 +75,7 @@ export function convexFromPoints(pts, budget = 28, inflate = 1) {
     let cx = 0, cy = 0, cz = 0;
     for (const v of verts) { cx += v.x; cy += v.y; cz += v.z; }
     cx /= verts.length; cy /= verts.length; cz /= verts.length;
-    // center on the centroid; `inflate` grows the hull about that centroid
-    // (offset stays the centroid, so the resting pose is unchanged - the body
-    // just settles a hair higher on its now-larger base)
-    for (const v of verts) { v.x = (v.x - cx) * inflate; v.y = (v.y - cy) * inflate; v.z = (v.z - cz) * inflate; }
+    for (const v of verts) { v.x -= cx; v.y -= cy; v.z -= cz; }
     // robust outward winding: slim triangles (dense clouds hulled after
     // sparsification) can fool a cross-product normal - cannon then warns
     // and SAT can pick bogus separating axes. Newell normal per face,
@@ -108,7 +105,7 @@ export function convexFromPoints(pts, budget = 28, inflate = 1) {
 // tuned for reflection blobs, not contact (props wobble on sphere strings),
 // so contact uses a hull instead. Its bottom face spans the leg tips = flat
 // resting base for free.
-export function convexFromMesh(root, budget = 28, inflate = 1) {
+export function convexFromMesh(root, budget = 28) {
   root.updateMatrixWorld(true);
   // body space = root position+rotation WITHOUT scale (cannon shapes carry
   // no scale, but the body tracks mesh position/quaternion only) - any root
@@ -134,7 +131,40 @@ export function convexFromMesh(root, budget = 28, inflate = 1) {
       pts.push(v.clone());
     }
   });
-  return convexFromPoints(pts, budget, inflate);
+  return convexFromPoints(pts, budget);
+}
+
+// axis-aligned box fit to the REAL mesh, in the prop-local frame (position+
+// rotation, no scale - scale bakes into the points, same as convexFromMesh).
+// For flat/thin props (a frying pan), the real-mesh convex hull hugs the disc
+// and handle and reads wrong on contact; a fitted box is the forgiving choice.
+// `inflate` grows the half-extents about the box center (center stays put, so
+// the resting pose holds). Returns { half, offset } or null on an empty mesh.
+export function boxFromMesh(root, inflate = 1) {
+  root.updateMatrixWorld(true);
+  const rootInv = new THREE.Matrix4()
+    .compose(root.position, root.quaternion, new THREE.Vector3(1, 1, 1))
+    .invert();
+  const v = new THREE.Vector3();
+  const box = new THREE.Box3();
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    const pos = o.geometry.getAttribute('position');
+    const m = new THREE.Matrix4().multiplyMatrices(rootInv, o.matrixWorld);
+    for (let i = 0; i < pos.count; i++) {
+      box.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(m));
+    }
+  });
+  if (box.isEmpty()) return null;
+  const size = box.getSize(new THREE.Vector3());
+  const ctr = box.getCenter(new THREE.Vector3());
+  return {
+    half: new CANNON.Vec3(
+      Math.max(size.x * 0.5 * inflate, 0.03),
+      Math.max(size.y * 0.5 * inflate, 0.03),
+      Math.max(size.z * 0.5 * inflate, 0.03)),
+    offset: new CANNON.Vec3(ctr.x, ctr.y, ctr.z),
+  };
 }
 
 const FIXED_DT = 1 / 90;
@@ -217,11 +247,16 @@ export class PhysicsWorld {
   addProp(p, onImpact) {
     const body = new CANNON.Body({ mass: Math.max(0.3, p.radius ** 3 * 40) });
     const proxy = p.slug && OCCLUDER_PROXIES.props[p.slug];
-    const hull = !p.round && !p.boxHalf && p.slug ? convexFromMesh(p.mesh, 28, p.collInflate) : null;
+    // boxFit props (flat/thin exhibits) get a fitted box instead of the real-
+    // mesh hull; collInflate (default 1) grows it for a more forgiving collider
+    const box = !p.round && !p.boxHalf && p.boxFit ? boxFromMesh(p.mesh, p.collInflate) : null;
+    const hull = !p.round && !p.boxHalf && !box && p.slug ? convexFromMesh(p.mesh) : null;
     if (p.round) {
       body.addShape(new CANNON.Sphere(p.radius));
     } else if (p.boxHalf) {
       body.addShape(new CANNON.Box(new CANNON.Vec3(...p.boxHalf)));
+    } else if (box) {
+      body.addShape(new CANNON.Box(box.half), box.offset);
     } else if (hull) {
       body.addShape(hull.shape, hull.offset);
     } else if (proxy) {

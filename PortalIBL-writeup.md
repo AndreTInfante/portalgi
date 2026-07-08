@@ -1,8 +1,9 @@
 # PortalIBL: A Technique for Real-Time Rendering of Baked Reflections of Non-Convex Indoor Spaces
 
-_Video embed here._
+![PortalIBL demo — walkthrough video](https://youtu.be/JvvqEx79a-w)
 
-**[▶ Try the PortalIBL demo in your browser](https://andretinfante.github.io/portalgi/)** — runs on PC, mobile, and VR headsets · **[Source & full implementation on GitHub](https://github.com/AndreTInfante/portalgi)**
+**[▶ Try the PortalIBL demo in your browser](https://andretinfante.github.io/portalgi/)** — runs on PC, mobile, and VR headsets 
+**[Source & full implementation on GitHub](https://github.com/AndreTInfante/portalgi)**
 
 
 ## Background 
@@ -13,13 +14,19 @@ The core idea is to capture a panoramic view of a given space from a central poi
 
 This approach can, in the right circumstances, be both impressive-looking and cheap and is a common technique in mobile VR (and desktop as well: Half-Life: Alyx uses this technique extensively). You also see this as a common low-setting fallback in PC titles with raytraced reflections. The advantages are straightforward: the cost is near-trivial, you get photographic quality data, the projection is stereo-consistent when rendered for both eyes, and there’s no sampling noise that requires temporal accumulation to clean up. 
 
-While this technique is fast and can give great results in some cases, it comes with some major drawbacks. The biggest one is the convexity requirement: as soon as you have any situation where a surface can be in front of another surface, the trick no longer works, and you need to do actual rendering for each pixel (real time cubemaps, ray tracing, or ray marching). These options become very expensive very quickly. This restriction causes nasty artifacting in non-convex rooms, and at apertures like doors. You end up with reflections that flatten concave structures like doors and hallways, or otherwise visibly mismatch with the scene's geometry. Worse, this technology can push you towards boring level design: if boring boxes are the only shapes that have non-busted reflections, there's pressure to make larger fractions of your level boring boxes. Because fixing these issues has generally required moving to a much heavier rendering approach, the general solution to this has largely been to shrug and tolerate it (it helps that on PC this problem is usually somewhat mitigated by screen space reflections). There has been a notable gap in the cost / fidelity pareto frontier.
+While this technique is fast and can give great results in some cases, it comes with some major drawbacks. The biggest one is the convexity requirement: as soon as you have any situation where a surface can be in front of another surface, the trick no longer works, and you need to do actual rendering for each pixel (real time cubemaps, ray tracing, or ray marching). These options become very expensive very quickly. This restriction causes nasty artifacting in non-convex rooms, and at apertures like doors. You end up with reflections that flatten concave structures like doors and hallways, or otherwise visibly mismatch with the scene's geometry. 
+
+![Conventional PCCM breaks down at apertures: because the cubemap is projected onto a single convex hull, the doorway and the room beyond it flatten against the wall, so the reflection no longer matches the scene geometry.](WriteupAssets/pccm_artifact.png)
+
+Worse, this technology can push you towards boring level design: if boring boxes are the only shapes that have non-busted reflections, there's pressure to make larger fractions of your level boring boxes. Because fixing these issues has generally required moving to a much heavier rendering approach, the general solution to this has largely been to shrug and tolerate it (it helps that on PC this problem is usually somewhat mitigated by screen space reflections). There has been a notable gap in the cost / fidelity pareto frontier.
 
 ## PortalIBL 
 
 PortalIBL (PIBL) is a technique for generalizing [PCCM (Parallax-Corrected Cube Maps)](https://seblagarde.wordpress.com/2012/09/29/image-based-lighting-approaches-and-parallax-corrected-cubemap/) to mitigate these issues and competently address non-convex spaces, at least in the common cases (irregularly shaped rooms, and areas connected by doors and hallways). The technique is inspired by the [Build engine](https://en.wikipedia.org/wiki/Build_(game_engine))’s cell-and-portal rendering technique.
 
 The idea here is simple: first, we use the generalization of PCCM to arbitrary convex hulls (a well known technique), with one new conceptual element: each hull can have portals (defined as rectangles on faces for the purposes of the current demo) linking it to other hulls. If a ray intersects a given hull, we fetch the appropriate texel. If it instead hits a portal, we recurse to the linked hull, and so on. This is very similar to how visibility worked in the Build engine back in the day. At the end of the recurse (either hitting the budget or an actual wall), we terminate, sample the last hull’s environment map as usual, and that’s our reflection. And that’s basically it! There’s some nuances to implementing it efficiently and cleaning up artifacts this introduces, but it’s not a complicated idea. Visually, though, it’s a huge improvement over PCCM, while being much cheaper than tracing-based methods. The method enables reflections through doors, and reflections of non-convex rooms (via decomposition into smaller convex sections linked by portals).
+
+![PortalIBL in a non-convex room: the glossy floor reflects the whole perimeter of the room instead of flattening part of it. The space is decomposed into convex cells linked by portals.](WriteupAssets/non-convex-room.png)
 
 Here's the shader inner loop, condensed here from [`src/shaders.js`](https://github.com/AndreTInfante/portalgi/blob/main/src/shaders.js#L366):
 
@@ -60,7 +67,7 @@ for (int i = 0; i <= 8; i++) {
 }
 ```  
 
-_[screenshots go here]_
+![The reflection stays parallax-correct as the viewpoint moves. The reflected geometry tracks the room without sliding, flattening, or distorting.](WriteupAssets/parallax_demo.mp4)
 
 In terms of implementation, we store each cell as a 512x512 octahedral environment map, with pre-filtered radiance stored in the mip chain (standard technique for glossy reflections), atlased together (along with mips and light probe data, which are just little texture patches storing irradiance). We have a live set of loaded hulls (you’d want to stream this in a real application, for the demo it’s small enough that it can jus be static). We also store a per-cell mask indicating which faces are portals, and which cells they connect to. At render time, if we hit a portal, we check the same ray against that portal’s environment map instead (everything is tracked in world space, so this is trivial to do, no transformation needed). 
 
@@ -79,6 +86,8 @@ Row y = cell id. Texels along x:
 That per-cell portal-plane bitmask in texel 1 is an important optimization: a glossy pixel whose exit plane carries no portal skips the entire portal scan, so the common case stays closer to the cost of a plain cubemap tap.
 
 A cool thing about the portal approach is that it ~entirely removes the need for reflection probe blending (which is great because cross-fading high frequency visual information over time universally looks bad). Even on a highly glossy object, the discontinuity when passing between sectors is minimal. On real assets that are not a chrome ball, the transition is invisible, and it gives you a wonderfully smooth and visually plausible change in reflection as you go through doors. In normal PCCM, you often end up needing to sample two environment maps *anyway* for blending in these cases, and the portal transition looks a lot better than just cross-fading.
+
+![Passing through a portal, the reflection changes smoothly - there's no cross-fade pop, even on a highly glossy surface.](WriteupAssets/lighting_transition.gif)
 
 One subtlety around sampling: usually, in non-mirror reflections, you’re sampling pre-blurred images in the mip chain. This is problematic for portals, because while the pixels on both sides of a portal boundary are both valid approximations and represent valid radiance data, they are generated from completely different image data, and will not closely agree. By default, this gives you a hard pixel-perfect portal edge in the reflection, which shows up as a frequency space issue - a sharp line in data that should be blurry. To mitigate this, you need to sample both environment maps at portal boundaries, and cross-fade using a fade width equal to the width of the larger kernel involved. This keeps things smooth and avoids the perceptual artifact, at the cost of an additional texture sample. This also introduces some ghosting of the bad approximation over the good around the edges, but this is not visually obvious in practice, and could be avoided in various ways that I was too lazy to do for this demo. Once you’re past this blend width, it becomes a straight recurse and you don’t need to sample the first environment map at all.
 
@@ -177,6 +186,8 @@ The big downside to PCCM and other shell based methods is that they flatten ever
 
 The reason one ray/point test per effect is enough is that each capsule contributes a *closed-form* occlusion term - Iñigo Quílez’s [analytic sphere occlusion](https://iquilezles.org/articles/sphereao/), evaluated at the closest point on the capsule’s axis ([`src/shaders.js`](https://github.com/AndreTInfante/portalgi/blob/main/src/shaders.js#L122)):
 
+![Capsule-based contact shadows and ambient occlusion: each object is approximated by a handful of capsules, each contributing a closed-form occlusion term evaluated in a single tap.](WriteupAssets/shadows.png)
+
 ```glsl
 // closest point on capsule segment A..B (u = B - A) to shaded point P
 float t  = clamp(dot(P - A, u) / dot(u, u), 0.0, 1.0);
@@ -189,7 +200,9 @@ ao *= 1.0 - occ * strength;   // up to 8 capsules per object, one tap each
 
 This whole system is not very novel - tracing rays against collections of capsules to analytically approximate AO, shadows, and indirect occlusion is nothing new. However, it is *extremely* cool and very performant on mobile if set up properly. In conjunction with the PortalIBL trick, it creates an overall image that looks, to a first glance, like the result of real time raytracing. My internal-to-me codename for this project has been ‘We Have Raytracing At Home.’  
 
-I’m not gonna go into too much detail here about how it works because it’s not a novel contribution ([the Naughty Dog presentation](https://www.youtube.com/watch?v=HL0REQjyp1M) is better than anything I would write), but if you’re interested in seeing a practical implementation, the code is available [on the repo](https://github.com/AndreTInfante/portalgi). 
+![Combined together, PIBL and the capsule imposters can create a cohesive, high quality image on a mobile-friendly budget.](WriteupAssets/reflecting_through_door.png)
+
+I’m not gonna go into too much detail here about how it works because it’s not a novel contribution ([the Naughty Dog presentation](https://www.youtube.com/watch?v=HL0REQjyp1M) covers all the core technical ideas), but if you’re interested in seeing a practical implementation, the code is available [on the repo](https://github.com/AndreTInfante/portalgi). 
 
 ## Is PortalIBL Actually a Novel Technique?
 

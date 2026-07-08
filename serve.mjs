@@ -10,6 +10,7 @@ const port = parseInt(process.argv[2]) || 8123;
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.json': 'application/json', '.jpg': 'image/jpeg', '.png': 'image/png', '.css': 'text/css',
+  '.gif': 'image/gif', '.mp4': 'video/mp4', '.webm': 'video/webm',
   '.md': 'text/markdown; charset=utf-8',
 };
 

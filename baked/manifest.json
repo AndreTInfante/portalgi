@@ -17,5 +17,6 @@
     "lmps": 64,
     "lmfp": 24
   },
-  "recubedFrom": "2026-07-06T04:50:29.582Z"
+  "recubedFrom": "2026-07-06T04:50:29.582Z",
+  "compression": "split16-gzip"
 }

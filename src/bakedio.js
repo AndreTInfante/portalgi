@@ -71,20 +71,15 @@ export async function fetchManifest() {
   }
 }
 
-// Stream the raw half-float bytes of a baked binary, reporting progress as
-// chunks arrive (onBytes(received, total)). Kept separate from texture
-// construction so the (large) download can be kicked off early and overlap
-// the rest of boot; halfTextureFromBuffer() finishes the job once the bytes
-// are in hand.
-export async function fetchHalfBuffer(path, onBytes) {
-  const res = await fetch(path);
-  if (!res.ok) throw new Error(`missing baked texture: ${path}`);
+// Read a response body into a Uint8Array, reporting network bytes as chunks
+// arrive (onBytes(received, total)). Streams when possible so the progress
+// counter tracks the actual download.
+async function streamBytes(res, onBytes) {
   const total = +res.headers.get('content-length') || 0;
-  // no streaming body (very old browsers): fall back to a single buffer read
-  if (!res.body || !res.body.getReader) {
-    const buf = await res.arrayBuffer();
-    if (onBytes) onBytes(buf.byteLength, buf.byteLength || total);
-    return buf;
+  if (!res.body || !res.body.getReader) { // no streaming body (very old browsers)
+    const u8 = new Uint8Array(await res.arrayBuffer());
+    if (onBytes) onBytes(u8.length, u8.length || total);
+    return u8;
   }
   const reader = res.body.getReader();
   const chunks = [];
@@ -99,7 +94,49 @@ export async function fetchHalfBuffer(path, onBytes) {
   const out = new Uint8Array(received);
   let off = 0;
   for (const c of chunks) { out.set(c, off); off += c.length; }
-  return out.buffer;
+  return out;
+}
+
+// Reverse the encoder's hi/lo byte-plane split (scripts/compress-baked.mjs):
+// the first half holds every float16's low byte, the second half its high byte.
+function unsplit16(split) {
+  const n = split.length, half = n >>> 1;
+  const out = new Uint8Array(n);
+  for (let j = 0, i = 0; j < half; j++, i += 2) {
+    out[i] = split[j];
+    out[i + 1] = split[half + j];
+  }
+  return out;
+}
+
+async function gunzip(u8) {
+  const stream = new Response(u8).body.pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+// Fetch the raw half-float bytes of a baked binary, reporting download progress
+// and returning an ArrayBuffer. Kept separate from texture construction so the
+// (large) download can be kicked off early and overlap the rest of boot.
+// With opts.gzip, fetch the pre-compressed `<path>.gz` (byte-split + gzip,
+// ~4x smaller), stream-track the compressed download, then inflate and
+// un-split back to the exact original bytes. Falls back to the raw file if the
+// compressed one is missing.
+export async function fetchHalfBuffer(path, onBytes, opts = {}) {
+  if (opts.gzip) {
+    const res = await fetch(path + '.gz');
+    if (res.ok) {
+      const bytes = await streamBytes(res, onBytes);
+      // magic-byte guard: if a CDN transparently inflated the .gz (served it
+      // with Content-Encoding: gzip), `bytes` is already the split payload
+      const split = (bytes[0] === 0x1f && bytes[1] === 0x8b) ? await gunzip(bytes) : bytes;
+      return unsplit16(split).buffer;
+    }
+    // compressed artifact absent -> fall through to the raw file
+  }
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`missing baked texture: ${path}`);
+  const bytes = await streamBytes(res, onBytes);
+  return bytes.buffer;
 }
 
 export function halfTextureFromBuffer(buf, w, h, mips = false) {

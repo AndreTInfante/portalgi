@@ -136,13 +136,16 @@ async function boot() {
   };
 
   // --- load progress + baked-binary prefetch --------------------------------
-  // The two baked binaries (atlas + lightmap, ~120 MB) dominate load time yet
-  // have no dependency on any of the texture/model/CPU work that follows, and
-  // the original boot fetched them dead-last. Kick them off NOW so their
-  // transfer overlaps the texture/model downloads, level build, light-vis BVH,
-  // and shader compile. Same bytes, same textures -- only the schedule changes.
-  // Bytes are streamed so the dominant download shows real progress.
+  // The two baked binaries dominate load time yet have no dependency on any of
+  // the texture/model/CPU work that follows, and the original boot fetched them
+  // dead-last. Kick them off NOW so their transfer overlaps the texture/model
+  // downloads, level build, light-vis BVH, and shader compile. When the bake
+  // was compressed (scripts/compress-baked.mjs stamps the manifest), fetch the
+  // ~4x-smaller split16+gzip artifacts and inflate them in the browser. Same
+  // final bytes, same textures -- only the schedule + wire format change.
   const recube = params.has('recube');
+  const gzip = !!(manifest && manifest.compression === 'split16-gzip'
+    && typeof DecompressionStream !== 'undefined');
   const bakedBytes = { atlas: [0, 0], lm: [0, 0] };
   const onBaked = (key) => {
     let lastMB = -1;
@@ -153,8 +156,8 @@ async function boot() {
     };
   };
   const bakedFetch = manifest ? {
-    atlas: recube ? null : fetchHalfBuffer('./baked/atlas.bin', onBaked('atlas')).then(b => (tickLoad(), b)),
-    lm: fetchHalfBuffer('./baked/lightmap.bin', onBaked('lm')).then(b => (tickLoad(), b)),
+    atlas: recube ? null : fetchHalfBuffer('./baked/atlas.bin', onBaked('atlas'), { gzip }).then(b => (tickLoad(), b)),
+    lm: fetchHalfBuffer('./baked/lightmap.bin', onBaked('lm'), { gzip }).then(b => (tickLoad(), b)),
   } : null;
   if (bakedFetch) { // the real await is many phases later; pre-handle rejection
     if (bakedFetch.atlas) bakedFetch.atlas.catch(() => {});

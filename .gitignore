@@ -1,4 +1,7 @@
-# offline bake CI debris (the .bin artifacts + manifest ARE committed for GitHub Pages)
+# offline bake artifacts: the COMPRESSED binaries (baked/*.bin.gz) + manifest
+# ARE committed for GitHub Pages. The raw baked/*.bin are gitignored -- kept
+# locally to regenerate the .gz via `node scripts/compress-baked.mjs`.
+baked/*.bin
 baked/shot-*.png
 baked/status-*.txt
 
